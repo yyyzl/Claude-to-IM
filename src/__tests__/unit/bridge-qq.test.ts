@@ -696,6 +696,68 @@ describe('numeric shortcut permission replies', () => {
     assert.equal(store.permLinks.get('perm-ghi').resolved, true);
   });
 
+  it('handles fullwidth digit ２ via NFKC normalization', async () => {
+    const { _testOnly } = await import('../../lib/bridge/bridge-manager');
+
+    store.permLinks.set('perm-fw', {
+      permissionRequestId: 'perm-fw',
+      chatId: 'user-1',
+      messageId: 'msg-1',
+      resolved: false,
+      suggestions: '',
+    });
+
+    const sentMessages: OutboundMessage[] = [];
+    const adapter = createMockQQAdapter({
+      sendFn: async (msg) => {
+        sentMessages.push(msg);
+        return { ok: true, messageId: 'reply-1' };
+      },
+    });
+
+    await _testOnly.handleMessage(adapter, {
+      messageId: 'user-fw-2',
+      address: { channelType: 'qq' as const, chatId: 'user-1', userId: 'user-1' },
+      text: '\uFF12', // fullwidth digit ２
+      timestamp: Date.now(),
+    });
+
+    assert.equal(sentMessages.length, 1, 'Should handle fullwidth digit');
+    assert.ok(sentMessages[0].text.includes('Allow Session'), 'Fullwidth ２ should map to allow_session');
+    assert.equal(store.permLinks.get('perm-fw').resolved, true);
+  });
+
+  it('handles digit with zero-width characters', async () => {
+    const { _testOnly } = await import('../../lib/bridge/bridge-manager');
+
+    store.permLinks.set('perm-zw', {
+      permissionRequestId: 'perm-zw',
+      chatId: 'user-1',
+      messageId: 'msg-1',
+      resolved: false,
+      suggestions: '',
+    });
+
+    const sentMessages: OutboundMessage[] = [];
+    const adapter = createMockQQAdapter({
+      sendFn: async (msg) => {
+        sentMessages.push(msg);
+        return { ok: true, messageId: 'reply-1' };
+      },
+    });
+
+    await _testOnly.handleMessage(adapter, {
+      messageId: 'user-zw-1',
+      address: { channelType: 'qq' as const, chatId: 'user-1', userId: 'user-1' },
+      text: '\u200B1\u200B', // "1" wrapped in zero-width spaces
+      timestamp: Date.now(),
+    });
+
+    assert.equal(sentMessages.length, 1, 'Should handle digit with zero-width chars');
+    assert.ok(sentMessages[0].text.includes('Allow'), 'Should map to allow');
+    assert.equal(store.permLinks.get('perm-zw').resolved, true);
+  });
+
   it('falls through when no pending permissions (condition check)', () => {
     // No permission links in store — numeric shortcut should NOT activate
     const pendingLinks = store.listPendingPermissionLinksByChat('user-1');

@@ -465,49 +465,57 @@ async function handleMessage(
   // On mobile, typing `/perm allow <uuid>` is painful.
   // If the user sends "1", "2", or "3" and there is exactly one pending
   // permission for this chat, map it: 1→allow, 2→allow_session, 3→deny.
-  if (
-    (adapter.channelType === 'feishu' || adapter.channelType === 'qq') &&
-    /^[123]$/.test(rawText)
-  ) {
-    const pendingLinks = store.listPendingPermissionLinksByChat(msg.address.chatId);
-    if (pendingLinks.length === 1) {
-      const actionMap: Record<string, string> = { '1': 'allow', '2': 'allow_session', '3': 'deny' };
-      const action = actionMap[rawText];
-      const permId = pendingLinks[0].permissionRequestId;
-      const callbackData = `perm:${action}:${permId}`;
-      const handled = broker.handlePermissionCallback(callbackData, msg.address.chatId);
-      const label = rawText === '1' ? 'Allow' : rawText === '2' ? 'Allow Session' : 'Deny';
-      if (handled) {
-        await deliver(adapter, {
-          address: msg.address,
-          text: `${label}: recorded.`,
-          parseMode: 'plain',
-          replyToMessageId: msg.messageId,
-        });
-      } else {
-        await deliver(adapter, {
-          address: msg.address,
-          text: `Permission not found or already resolved.`,
-          parseMode: 'plain',
-          replyToMessageId: msg.messageId,
-        });
+  //
+  // Input normalization: mobile keyboards / IM clients may send fullwidth
+  // digits (１２３), digits with zero-width joiners, or other Unicode
+  // variants. NFKC normalization folds them all to ASCII 1/2/3.
+  if (adapter.channelType === 'feishu' || adapter.channelType === 'qq') {
+    // eslint-disable-next-line no-control-regex
+    const normalized = rawText.normalize('NFKC').replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
+    if (/^[123]$/.test(normalized)) {
+      const pendingLinks = store.listPendingPermissionLinksByChat(msg.address.chatId);
+      if (pendingLinks.length === 1) {
+        const actionMap: Record<string, string> = { '1': 'allow', '2': 'allow_session', '3': 'deny' };
+        const action = actionMap[normalized];
+        const permId = pendingLinks[0].permissionRequestId;
+        const callbackData = `perm:${action}:${permId}`;
+        const handled = broker.handlePermissionCallback(callbackData, msg.address.chatId);
+        const label = normalized === '1' ? 'Allow' : normalized === '2' ? 'Allow Session' : 'Deny';
+        if (handled) {
+          await deliver(adapter, {
+            address: msg.address,
+            text: `${label}: recorded.`,
+            parseMode: 'plain',
+            replyToMessageId: msg.messageId,
+          });
+        } else {
+          await deliver(adapter, {
+            address: msg.address,
+            text: `Permission not found or already resolved.`,
+            parseMode: 'plain',
+            replyToMessageId: msg.messageId,
+          });
+        }
+        ack();
+        return;
       }
-      ack();
-      return;
+      if (pendingLinks.length > 1) {
+        // Multiple pending permissions — numeric shortcut is ambiguous.
+        await deliver(adapter, {
+          address: msg.address,
+          text: `Multiple pending permissions (${pendingLinks.length}). Please use the full command:\n/perm allow|allow_session|deny <id>`,
+          parseMode: 'plain',
+          replyToMessageId: msg.messageId,
+        });
+        ack();
+        return;
+      }
+      // pendingLinks.length === 0: no pending permissions, fall through as normal message
+    } else if (rawText !== normalized && /^[123]$/.test(rawText) === false) {
+      // Log when normalization changed the text — helps diagnose encoding issues
+      const codePoints = [...rawText].map(c => 'U+' + c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0'));
+      console.log(`[bridge-manager] Shortcut candidate raw codepoints: ${codePoints.join(' ')} → normalized: "${normalized}"`);
     }
-    if (pendingLinks.length > 1) {
-      // Multiple pending permissions — numeric shortcut is ambiguous.
-      // Tell the user to use the full /perm command instead.
-      await deliver(adapter, {
-        address: msg.address,
-        text: `Multiple pending permissions (${pendingLinks.length}). Please use the full command:\n/perm allow|allow_session|deny <id>`,
-        parseMode: 'plain',
-        replyToMessageId: msg.messageId,
-      });
-      ack();
-      return;
-    }
-    // pendingLinks.length === 0: no pending permissions, fall through as normal message
   }
 
   // Check for IM commands (before sanitization — commands are validated individually)
