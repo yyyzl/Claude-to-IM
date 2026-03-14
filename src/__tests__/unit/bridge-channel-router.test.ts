@@ -37,20 +37,25 @@ function createMockStore(): BridgeStore & { bindings: Map<string, ChannelBinding
       return bindings.get(`${channelType}:${chatId}`) ?? null;
     },
     upsertChannelBinding(data) {
+      const key = `${data.channelType}:${data.chatId}`;
+      const prev = bindings.get(key);
+
+      const now = new Date().toISOString();
       const binding: ChannelBinding = {
-        id: `binding-${nextId++}`,
+        id: prev?.id || `binding-${nextId++}`,
         channelType: data.channelType,
         chatId: data.chatId,
         codepilotSessionId: data.codepilotSessionId,
-        sdkSessionId: '',
+        sdkSessionId: prev?.sdkSessionId || '',
         workingDirectory: data.workingDirectory,
         model: data.model,
-        mode: 'code',
-        active: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        mode: prev?.mode || 'code',
+        active: prev?.active ?? true,
+        createdAt: prev?.createdAt || now,
+        updatedAt: now,
       };
-      bindings.set(`${data.channelType}:${data.chatId}`, binding);
+
+      bindings.set(key, binding);
       return binding;
     },
     updateChannelBinding(id: string, updates: Partial<ChannelBinding>) {
@@ -196,6 +201,30 @@ describe('channel-router', () => {
     assert.equal(allBindings.length, 3);
   });
 
+  it('startNewSession() inherits binding config and clears sdkSessionId', () => {
+    const address = { channelType: "telegram", chatId: "123", displayName: "Test User" };
+    const first = router.resolve(address);
+
+    // Simulate an existing conversation with custom config + a resumable SDK session
+    router.updateBinding(first.id, { workingDirectory: '/custom/path', model: 'claude-3.5', mode: 'plan', sdkSessionId: 'sdk_old' });
+
+    const second = router.startNewSession(address);
+    assert.notEqual(first.codepilotSessionId, second.codepilotSessionId);
+    assert.equal(second.workingDirectory, '/custom/path');
+    assert.equal(second.model, 'claude-3.5');
+    assert.equal(second.mode, 'plan');
+    assert.equal(second.sdkSessionId, '');
+  });
+
+  it('startNewSession() overrides working directory when provided', () => {
+    const address = { channelType: "telegram", chatId: "999" };
+    const first = router.resolve(address);
+    router.updateBinding(first.id, { workingDirectory: '/keep', mode: 'code', sdkSessionId: 'sdk_old' });
+
+    const second = router.startNewSession(address, { workingDirectory: '/override' });
+    assert.equal(second.workingDirectory, '/override');
+    assert.equal(second.sdkSessionId, '');
+  });
   it('updateBinding() updates binding properties', () => {
     const binding = router.createBinding({ channelType: 'telegram', chatId: '1' });
     router.updateBinding(binding.id, { mode: 'plan' });

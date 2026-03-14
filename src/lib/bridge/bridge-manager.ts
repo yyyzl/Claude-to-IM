@@ -768,8 +768,30 @@ async function handleCommand(
         }
         workDir = validated;
       }
-      const binding = router.createBinding(msg.address, workDir);
-      response = `New session created.\nSession: <code>${binding.codepilotSessionId.slice(0, 8)}...</code>\nCWD: <code>${escapeHtml(binding.workingDirectory || '~')}</code>`;
+
+      // If there is a running task for the current binding, stop it before switching sessions.
+      let stopped = false;
+      const existing = store.getChannelBinding(msg.address.channelType, msg.address.chatId);
+      if (existing) {
+        const st = getState();
+        const taskAbort = st.activeTasks.get(existing.codepilotSessionId);
+        if (taskAbort) {
+          taskAbort.abort();
+          st.activeTasks.delete(existing.codepilotSessionId);
+          stopped = true;
+        }
+      }
+
+      const binding = router.startNewSession(msg.address, workDir ? { workingDirectory: workDir } : {});
+      const lines = [
+        'New session created.',
+        `Session: <code>${binding.codepilotSessionId.slice(0, 8)}...</code>`,
+        `CWD: <code>${escapeHtml(binding.workingDirectory || '~')}</code>`,
+        `Mode: <b>${binding.mode}</b>`,
+        `Model: <code>${escapeHtml(binding.model || 'default')}</code>`,
+        stopped ? '<i>Stopped previous running task.</i>' : '',
+      ].filter(Boolean);
+      response = lines.join('\n');
       break;
     }
 
