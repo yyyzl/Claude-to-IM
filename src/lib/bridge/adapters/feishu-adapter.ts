@@ -745,6 +745,19 @@ export class FeishuAdapter extends BaseChannelAdapter {
       return { ok: false, error: 'Feishu client not initialized' };
     }
 
+    // Convert HTML text from permission-broker to Feishu markdown.
+    // permission-broker sends HTML (<b>, <code>, <pre>, &amp; entities)
+    // but Feishu card markdown elements don't understand HTML.
+    const mdText = text
+      .replace(/<b>(.*?)<\/b>/gi, '**$1**')
+      .replace(/<code>(.*?)<\/code>/gi, '`$1`')
+      .replace(/<pre>([\s\S]*?)<\/pre>/gi, '```\n$1\n```')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&amp;/g, '&')
+      .replace(/&quot;/g, '"');
+
     // Extract permissionRequestId from the first button's callback data
     const firstBtn = inlineButtons.flat()[0];
     const permId = firstBtn?.callbackData?.startsWith('perm:')
@@ -753,7 +766,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
     if (permId) {
       // Use real card action buttons
-      const cardJson = buildPermissionButtonCard(text, permId);
+      const cardJson = buildPermissionButtonCard(mdText, permId);
 
       try {
         const res = await this.restClient.im.message.create({
@@ -785,7 +798,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     });
 
     const cardContent = [
-      text,
+      mdText,
       '',
       '---',
       '**Reply:**',
@@ -830,7 +843,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
     // Last resort: plain text message (works even without card permissions)
     const plainText = [
-      text,
+      mdText,
       '',
       '---',
       'Reply: 1 = Allow once | 2 = Allow session | 3 = Deny',
