@@ -44,13 +44,24 @@ class InMemoryStore implements BridgeStore {
     return this.bindings.get(`${channelType}:${chatId}`) ?? null;
   }
 
-  upsertChannelBinding(data: { channelType: string; chatId: string; codepilotSessionId: string; workingDirectory: string; model: string }) {
-    const id = `binding-${this.nextId++}`;
+  upsertChannelBinding(data: { channelType: string; chatId: string; codepilotSessionId: string; sdkSessionId?: string; workingDirectory: string; model: string; mode?: string }) {
+    const key = `${data.channelType}:${data.chatId}`;
+    const existing = this.bindings.get(key);
+    const id = existing?.id || `binding-${this.nextId++}`;
     const binding: ChannelBinding = {
-      id, ...data, sdkSessionId: '', mode: 'code', active: true,
-      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      id,
+      channelType: data.channelType,
+      chatId: data.chatId,
+      codepilotSessionId: data.codepilotSessionId,
+      sdkSessionId: data.sdkSessionId ?? existing?.sdkSessionId ?? '',
+      workingDirectory: data.workingDirectory ?? existing?.workingDirectory ?? '',
+      model: data.model ?? existing?.model ?? '',
+      mode: (data.mode as ChannelBinding['mode']) ?? existing?.mode ?? 'code',
+      active: existing?.active ?? true,
+      createdAt: existing?.createdAt ?? new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
-    this.bindings.set(`${data.channelType}:${data.chatId}`, binding);
+    this.bindings.set(key, binding);
     return binding;
   }
 

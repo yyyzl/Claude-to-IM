@@ -7,7 +7,7 @@
  * Uses globalThis to survive Next.js HMR in development.
  */
 
-import type { BridgeStatus, InboundMessage, OutboundMessage, StreamingPreviewState } from './types.js';
+import type { BridgeStatus, InboundMessage, OutboundMessage, StreamingPreviewState, ToolCallInfo } from './types.js';
 import { createAdapter, getRegisteredTypes } from './channel-adapter.js';
 import type { BaseChannelAdapter } from './channel-adapter.js';
 // Side-effect import: triggers self-registration of all adapter factories
@@ -826,8 +826,8 @@ async function handleMessage(
 
   const streamCfg = previewState ? getStreamConfig(adapter.channelType) : null;
 
-  // Build the onPartialText callback (or undefined if preview not supported)
-  const onPartialText = (previewState && streamCfg) ? (fullText: string) => {
+  // Build the preview onPartialText callback (or undefined if preview not supported)
+  const previewOnPartialText = (previewState && streamCfg) ? (fullText: string) => {
     const ps = previewState!;
     const cfg = streamCfg!;
     if (ps.degraded) return;
@@ -870,6 +870,37 @@ async function handleMessage(
     flushPreview(adapter, ps, cfg);
   } : undefined;
 
+  // ── Streaming card setup (Feishu CardKit v2) ──────────────────
+  // If the adapter supports streaming cards (e.g. Feishu), wire up
+  // onStreamText, onToolEvent, and onStreamEnd callbacks.
+  // These run in parallel with the existing preview system — Feishu
+  // uses cards instead of message edit for streaming.
+  const hasStreamingCards = typeof adapter.onStreamText === 'function';
+  const toolCallTracker = new Map<string, ToolCallInfo>();
+
+  const onStreamCardText = hasStreamingCards ? (fullText: string) => {
+    try { adapter.onStreamText!(msg.address.chatId, fullText); } catch { /* non-critical */ }
+  } : undefined;
+
+  const onToolEvent = hasStreamingCards ? (toolId: string, toolName: string, status: 'running' | 'complete' | 'error') => {
+    if (toolName) {
+      toolCallTracker.set(toolId, { id: toolId, name: toolName, status });
+    } else {
+      // tool_result doesn't carry name — update existing entry's status
+      const existing = toolCallTracker.get(toolId);
+      if (existing) existing.status = status;
+    }
+    try {
+      adapter.onToolEvent!(msg.address.chatId, Array.from(toolCallTracker.values()));
+    } catch { /* non-critical */ }
+  } : undefined;
+
+  // Combined partial text callback: streaming preview + streaming cards
+  const onPartialText = (previewOnPartialText || onStreamCardText) ? (fullText: string) => {
+    if (previewOnPartialText) previewOnPartialText(fullText);
+    if (onStreamCardText) onStreamCardText(fullText);
+  } : undefined;
+
   try {
     // Pass permission callback so requests are forwarded to IM immediately
     // during streaming (the stream blocks until permission is resolved).
@@ -887,11 +918,27 @@ async function handleMessage(
         perm.suggestions,
         msg.messageId,
       );
-    }, taskAbort.signal, hasAttachments ? msg.attachments : undefined, onPartialText);
+    }, taskAbort.signal, hasAttachments ? msg.attachments : undefined, onPartialText, onToolEvent);
 
-    // Send response text — render via channel-appropriate format
+    // Finalize streaming card if adapter supports it.
+    // onStreamEnd awaits any in-flight card creation and returns true if a card
+    // was actually finalized (meaning content is already visible to the user).
+    let cardFinalized = false;
+    if (hasStreamingCards && adapter.onStreamEnd) {
+      try {
+        const status = result.hasError ? 'error' : 'completed';
+        cardFinalized = await adapter.onStreamEnd(msg.address.chatId, status, result.responseText);
+      } catch (err) {
+        console.warn('[bridge-manager] Card finalize failed:', err instanceof Error ? err.message : err);
+      }
+    }
+
+    // Send response text — render via channel-appropriate format.
+    // Skip if streaming card was finalized (content already in card).
     if (result.responseText) {
-      await deliverResponse(adapter, msg.address, result.responseText, binding.codepilotSessionId, msg.messageId);
+      if (!cardFinalized) {
+        await deliverResponse(adapter, msg.address, result.responseText, binding.codepilotSessionId, msg.messageId);
+      }
     } else if (result.hasError) {
       if (result.errorCode === 'timeout') {
         const timeoutMs = parsePositiveInt(store.getSetting('bridge_codex_turn_timeout_ms')) ?? 30 * 60_000;
@@ -933,6 +980,13 @@ async function handleMessage(
         previewState.throttleTimer = null;
       }
       adapter.endPreview?.(msg.address.chatId, previewState.draftId);
+    }
+
+    // If task was aborted and streaming card is still active, finalize as interrupted
+    if (hasStreamingCards && adapter.onStreamEnd && taskAbort.signal.aborted) {
+      try {
+        await adapter.onStreamEnd(msg.address.chatId, 'interrupted', '');
+      } catch { /* best effort */ }
     }
 
     state.activeTasks.delete(binding.codepilotSessionId);
@@ -1001,6 +1055,15 @@ async function handleCommand(
       break;
 
     case '/new': {
+      // Abort any running task on the current session before creating a new one
+      const oldBinding = router.resolve(msg.address);
+      const st = getState();
+      const oldTask = st.activeTasks.get(oldBinding.codepilotSessionId);
+      if (oldTask) {
+        oldTask.abort();
+        st.activeTasks.delete(oldBinding.codepilotSessionId);
+      }
+
       let workDir: string | undefined;
       if (args) {
         const validated = validateWorkingDirectory(args);

@@ -126,8 +126,10 @@ export function createBinding(
     channelType: address.channelType,
     chatId: address.chatId,
     codepilotSessionId: session.id,
+    sdkSessionId: '',
     workingDirectory: defaultCwd,
     model: defaultModel,
+    mode: 'code',
   });
 
   // 新建绑定时务必清空 sdkSessionId，避免恢复到历史 SDK 会话。
