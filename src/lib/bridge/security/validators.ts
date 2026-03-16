@@ -54,7 +54,9 @@ export function validateWorkingDirectory(rawPath: string): string | null {
   if (trimmed.length > MAX_PATH_LENGTH) return null;
 
   // Reject shell metacharacters that have no place in a directory path
-  if (/[$`;|&><(){}\x00-\x1f]/.test(trimmed)) return null;
+  // 说明：这里不走 shell（只是目录路径），因此允许括号等常见文件夹名字符，
+  // 只拒绝高风险的 shell 元字符与控制字符。
+  if (/[$`;|&><\x00-\x1f]/.test(trimmed)) return null;
 
   // Normalize the path (resolves redundant slashes, etc.)
   return path.normalize(trimmed);

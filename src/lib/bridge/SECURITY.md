@@ -23,10 +23,10 @@ Unauthorized messages are silently dropped (no response leak).
 
 ### Input Validation (`security/validators.ts`)
 
-- `validateWorkingDirectory()`: Rejects relative paths, `..` traversal, shell metacharacters (`|;&$`)
+- `validateWorkingDirectory()`: Rejects relative paths, `..` traversal, and high-risk shell metacharacters (`$`, `` ` ``, `;`, `|`, `&`, `>`, `<`)
 - `validateSessionId()`: Hex/UUID format, 32-64 chars
 - `isDangerousInput()`: Detects path traversal, command injection, null bytes, control characters
-- `sanitizeInput()`: Strips control characters (except `\n`, `\t`), enforces max length (10,000 chars)
+- `sanitizeInput()`: Strips control characters (except `\n`, `\t`), enforces max length (32,000 chars)
 - `validateMode()`: Whitelist (`plan`, `code`, `ask`)
 
 ### Rate Limiting (`security/rate-limiter.ts`)

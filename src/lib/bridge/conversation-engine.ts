@@ -18,6 +18,23 @@ import type {
 import { getBridgeContext } from './context.js';
 import crypto from 'crypto';
 
+class BridgeTurnTimeoutError extends Error {
+  timeoutMs: number;
+
+  constructor(timeoutMs: number) {
+    super(`Turn timed out after ${timeoutMs}ms`);
+    this.name = 'BridgeTurnTimeoutError';
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+function parsePositiveInt(raw: string | null): number | null {
+  if (raw == null) return null;
+  const n = parseInt(raw.trim(), 10);
+  if (!Number.isFinite(n)) return null;
+  return n > 0 ? n : 0;
+}
+
 export interface PermissionRequestInfo {
   permissionRequestId: string;
   toolName: string;
@@ -43,6 +60,7 @@ export interface ConversationResult {
   responseText: string;
   tokenUsage: TokenUsage | null;
   hasError: boolean;
+  errorCode?: 'timeout' | 'abort' | 'busy' | 'error';
   errorMessage: string;
   /** Permission request events that were forwarded during streaming */
   permissionRequests: PermissionRequestInfo[];
@@ -73,6 +91,7 @@ export async function processMessage(
       responseText: '',
       tokenUsage: null,
       hasError: true,
+      errorCode: 'busy',
       errorMessage: 'Session is busy processing another request',
       permissionRequests: [],
       sdkSessionId: null,
@@ -157,27 +176,41 @@ export async function processMessage(
       }
     }
 
-    const stream = llm.streamChat({
-      prompt: text,
-      sessionId,
-      sdkSessionId: binding.sdkSessionId || undefined,
-      model: effectiveModel,
-      systemPrompt: session?.system_prompt || undefined,
-      workingDirectory: binding.workingDirectory || session?.working_directory || undefined,
-      abortController,
-      permissionMode,
-      provider: resolvedProvider,
-      conversationHistory: historyMsgs,
-      files,
-      onRuntimeStatusChange: (status: string) => {
-        try { store.setSessionRuntimeStatus(sessionId, status); } catch { /* best effort */ }
-      },
-    });
+    const timeoutMs = parsePositiveInt(store.getSetting('bridge_codex_turn_timeout_ms')) ?? 30 * 60_000;
+    let timeoutTimer: NodeJS.Timeout | null = null;
+    let timeoutError: BridgeTurnTimeoutError | null = null;
+    if (timeoutMs > 0) {
+      timeoutError = new BridgeTurnTimeoutError(timeoutMs);
+      timeoutTimer = setTimeout(() => {
+        try { abortController.abort(timeoutError!); } catch { /* ignore */ }
+      }, timeoutMs);
+    }
 
-    // Consume the stream server-side (replicate collectStreamResponse pattern).
-    // Permission requests are forwarded immediately via the callback during streaming
-    // because the stream blocks until permission is resolved — we can't wait until after.
-    return await consumeStream(stream, sessionId, onPermissionRequest, onPartialText);
+    try {
+      const stream = llm.streamChat({
+        prompt: text,
+        sessionId,
+        sdkSessionId: binding.sdkSessionId || undefined,
+        model: effectiveModel,
+        systemPrompt: session?.system_prompt || undefined,
+        workingDirectory: binding.workingDirectory || session?.working_directory || undefined,
+        abortController,
+        permissionMode,
+        provider: resolvedProvider,
+        conversationHistory: historyMsgs,
+        files,
+        onRuntimeStatusChange: (status: string) => {
+          try { store.setSessionRuntimeStatus(sessionId, status); } catch { /* best effort */ }
+        },
+      });
+
+      // Consume the stream server-side (replicate collectStreamResponse pattern).
+      // Permission requests are forwarded immediately via the callback during streaming
+      // because the stream blocks until permission is resolved — we can't wait until after.
+      return await consumeStream(stream, sessionId, onPermissionRequest, onPartialText, abortController.signal);
+    } finally {
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+    }
   } finally {
     clearInterval(renewalInterval);
     store.releaseSessionLock(sessionId, lockId);
@@ -194,6 +227,7 @@ async function consumeStream(
   sessionId: string,
   onPermissionRequest?: OnPermissionRequest,
   onPartialText?: OnPartialText,
+  abortSignal?: AbortSignal,
 ): Promise<ConversationResult> {
   const { store } = getBridgeContext();
   const reader = stream.getReader();
@@ -399,14 +433,22 @@ async function consumeStream(
       }
     }
 
-    const isAbort = e instanceof DOMException && e.name === 'AbortError'
+    const reason = abortSignal?.reason;
+    const timeoutReason = (e instanceof BridgeTurnTimeoutError)
+      ? e
+      : (reason instanceof BridgeTurnTimeoutError ? reason : null);
+    const isAbort = abortSignal?.aborted
+      || e instanceof DOMException && e.name === 'AbortError'
       || e instanceof Error && e.name === 'AbortError';
 
     return {
       responseText: '',
       tokenUsage,
       hasError: true,
-      errorMessage: isAbort ? 'Task stopped by user' : (e instanceof Error ? e.message : 'Stream consumption error'),
+      errorCode: timeoutReason ? 'timeout' : (isAbort ? 'abort' : 'error'),
+      errorMessage: timeoutReason
+        ? timeoutReason.message
+        : (isAbort ? 'Task stopped by user' : (e instanceof Error ? e.message : 'Stream consumption error')),
       permissionRequests,
       sdkSessionId: capturedSdkSessionId,
     };

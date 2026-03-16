@@ -160,6 +160,13 @@ interface AdapterMeta {
   lastError: string | null;
 }
 
+interface InputDebounceBuffer {
+  /** 该 buffer 所属的最后一个 userId（用于避免群聊里把不同人的消息合并） */
+  userId: string | undefined;
+  messages: InboundMessage[];
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
 interface BridgeManagerState {
   adapters: Map<string, BaseChannelAdapter>;
   adapterMeta: Map<string, AdapterMeta>;
@@ -169,6 +176,8 @@ interface BridgeManagerState {
   activeTasks: Map<string, AbortController>;
   /** Per-session processing chains for concurrency control */
   sessionLocks: Map<string, Promise<void>>;
+  /** 普通消息的输入合并（debounce）缓冲：key = `${channelType}:${chatId}` */
+  inputDebounceBuffers: Map<string, InputDebounceBuffer>;
   autoStartChecked: boolean;
 }
 
@@ -183,6 +192,7 @@ function getState(): BridgeManagerState {
       loopAborts: new Map(),
       activeTasks: new Map(),
       sessionLocks: new Map(),
+      inputDebounceBuffers: new Map(),
       autoStartChecked: false,
     };
   }
@@ -190,26 +200,241 @@ function getState(): BridgeManagerState {
   if (!g[GLOBAL_KEY].sessionLocks) {
     g[GLOBAL_KEY].sessionLocks = new Map();
   }
+  // Backfill debounce buffers for states created before this field existed
+  if (!g[GLOBAL_KEY].inputDebounceBuffers) {
+    g[GLOBAL_KEY].inputDebounceBuffers = new Map();
+  }
   return g[GLOBAL_KEY];
+}
+
+class SessionQueueTimeoutError extends Error {
+  timeoutMs: number;
+
+  constructor(sessionId: string, timeoutMs: number) {
+    super(`Session ${sessionId} is busy, queue timeout`);
+    this.name = 'SessionQueueTimeoutError';
+    this.timeoutMs = timeoutMs;
+  }
 }
 
 /**
  * Process a function with per-session serialization.
  * Different sessions run concurrently; same-session requests are serialized.
+ * If queueing takes too long, rejects with SessionQueueTimeoutError.
  */
 function processWithSessionLock(sessionId: string, fn: () => Promise<void>): Promise<void> {
   const state = getState();
   const prev = state.sessionLocks.get(sessionId) || Promise.resolve();
-  const current = prev.then(fn, fn);
-  state.sessionLocks.set(sessionId, current);
-  // Cleanup when the chain completes.
-  // Suppress rejection on the cleanup chain — callers handle errors on `current` directly.
+  const { store } = getBridgeContext();
+  const queueTimeoutMs = parsePositiveInt(store.getSetting('bridge_session_queue_timeout_ms')) ?? 5 * 60_000;
+
+  let cancelled = false;
+
+  const current = prev.catch(() => {}).then(async () => {
+    if (cancelled) return;
+    await fn();
+  });
+
+  state.sessionLocks.set(sessionId, current.then(() => {}, () => {}));
   current.finally(() => {
     if (state.sessionLocks.get(sessionId) === current) {
       state.sessionLocks.delete(sessionId);
     }
   }).catch(() => {});
-  return current;
+
+  if (queueTimeoutMs <= 0) return current;
+
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cancelled = true;
+      reject(new SessionQueueTimeoutError(sessionId, queueTimeoutMs));
+    }, queueTimeoutMs);
+
+    current.then(
+      () => { clearTimeout(timer); resolve(); },
+      (err) => { clearTimeout(timer); reject(err); },
+    );
+  });
+}
+
+function parsePositiveInt(raw: string | null): number | null {
+  if (raw == null) return null;
+  const n = parseInt(raw.trim(), 10);
+  if (!Number.isFinite(n)) return null;
+  return n > 0 ? n : 0;
+}
+
+/**
+ * 输入合并窗口（毫秒）。
+ *
+ * 典型诉求：用户在 IM 里连续发两条短消息（补充说明），希望合并成一次 LLM 请求，
+ * 而不是第一条跑完再跑第二条。
+ *
+ * 配置：
+ * - 全局：bridge_input_debounce_ms
+ * - 按渠道：bridge_${channelType}_input_debounce_ms
+ *
+ * 约定：<=0 视为关闭（不合并）。
+ */
+function getInputDebounceMs(channelType: string): number {
+  const { store } = getBridgeContext();
+  const scoped = parsePositiveInt(store.getSetting(`bridge_${channelType}_input_debounce_ms`));
+  if (scoped != null) return scoped;
+  const global = parsePositiveInt(store.getSetting('bridge_input_debounce_ms'));
+  if (global != null) return global;
+  return 0;
+}
+
+function getDebounceKey(msg: InboundMessage): string {
+  return `${msg.address.channelType}:${msg.address.chatId}`;
+}
+
+function mergeInboundMessages(messages: InboundMessage[]): InboundMessage {
+  if (messages.length === 1) return messages[0];
+  const last = messages[messages.length - 1];
+
+  const textParts: string[] = [];
+  const attachments: NonNullable<InboundMessage['attachments']> = [];
+
+  for (const m of messages) {
+    const t = m.text?.trim();
+    if (t) textParts.push(t);
+    if (m.attachments && m.attachments.length > 0) {
+      attachments.push(...m.attachments);
+    }
+  }
+
+  return {
+    ...last,
+    text: textParts.join('\n'),
+    attachments: attachments.length > 0 ? attachments : undefined,
+  };
+}
+
+function createAckForMergedMessages(adapter: BaseChannelAdapter, messages: InboundMessage[]): () => void {
+  const updateIds = messages
+    .map(m => m.updateId)
+    .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+
+  if (updateIds.length === 0 || !adapter.acknowledgeUpdate) return () => {};
+
+  // 去重 + 升序，避免某些 adapter 的 watermark 推进依赖顺序/重复
+  const uniqueSorted = Array.from(new Set(updateIds)).sort((a, b) => a - b);
+  return () => {
+    for (const id of uniqueSorted) {
+      try { adapter.acknowledgeUpdate!(id); } catch { /* best effort */ }
+    }
+  };
+}
+
+function flushDebouncedMessages(
+  adapter: BaseChannelAdapter,
+  key: string,
+): void {
+  const state = getState();
+  const entry = state.inputDebounceBuffers.get(key);
+  if (!entry || entry.messages.length === 0) return;
+
+  state.inputDebounceBuffers.delete(key);
+  if (entry.timer) {
+    clearTimeout(entry.timer);
+    entry.timer = null;
+  }
+
+  if (!state.running || !adapter.isRunning()) {
+    // Bridge/adapter 已停止：丢弃（此时即使不 debounce 也很可能丢）。
+    return;
+  }
+
+  const messages = entry.messages;
+  const merged = mergeInboundMessages(messages);
+  const ack = createAckForMergedMessages(adapter, messages);
+  const binding = router.resolve(merged.address);
+
+  processWithSessionLock(binding.codepilotSessionId, () =>
+    handleMessage(adapter, merged, { ack }),
+  ).catch(err => {
+    if (err instanceof SessionQueueTimeoutError) {
+      const mins = Math.max(1, Math.ceil(err.timeoutMs / 60_000));
+      void deliver(adapter, {
+        address: merged.address,
+        text: [
+          `当前会话正在处理其他请求，本条消息排队已超时（超过 ${mins} 分钟），已自动取消。`,
+          `如需调整：bridge_session_queue_timeout_ms=${err.timeoutMs}`,
+        ].join('\n'),
+        parseMode: 'plain',
+        replyToMessageId: merged.messageId,
+      }).catch(() => {});
+      try { ack(); } catch { /* best effort */ }
+      return;
+    }
+    console.error(`[bridge-manager] Session ${binding.codepilotSessionId.slice(0, 8)} error:`, err);
+  });
+}
+
+function enqueueRegularMessage(
+  adapter: BaseChannelAdapter,
+  msg: InboundMessage,
+): void {
+  const debounceMs = getInputDebounceMs(adapter.channelType);
+  if (debounceMs <= 0) {
+    const binding = router.resolve(msg.address);
+    processWithSessionLock(binding.codepilotSessionId, () =>
+      handleMessage(adapter, msg),
+    ).catch(err => {
+      if (err instanceof SessionQueueTimeoutError) {
+        const mins = Math.max(1, Math.ceil(err.timeoutMs / 60_000));
+        void deliver(adapter, {
+          address: msg.address,
+          text: [
+            `当前会话正在处理其他请求，本条消息排队已超时（超过 ${mins} 分钟），已自动取消。`,
+            `如需调整：bridge_session_queue_timeout_ms=${err.timeoutMs}`,
+          ].join('\n'),
+          parseMode: 'plain',
+          replyToMessageId: msg.messageId,
+        }).catch(() => {});
+
+        if (msg.updateId != null && adapter.acknowledgeUpdate) {
+          try { adapter.acknowledgeUpdate(msg.updateId); } catch { /* best effort */ }
+        }
+        return;
+      }
+      console.error(`[bridge-manager] Session ${binding.codepilotSessionId.slice(0, 8)} error:`, err);
+    });
+    return;
+  }
+
+  const state = getState();
+  const key = getDebounceKey(msg);
+  const existing = state.inputDebounceBuffers.get(key);
+
+  // 群聊里避免合并不同 user 的消息：遇到不同 userId 时先 flush 旧 buffer，再开新 buffer。
+  if (existing && existing.messages.length > 0) {
+    const prevUserId = existing.userId || '';
+    const nextUserId = msg.address.userId || '';
+    if (prevUserId && nextUserId && prevUserId !== nextUserId) {
+      flushDebouncedMessages(adapter, key);
+    }
+  }
+
+  const entry = state.inputDebounceBuffers.get(key)
+    || { userId: msg.address.userId, messages: [], timer: null };
+
+  if (!state.inputDebounceBuffers.has(key)) {
+    state.inputDebounceBuffers.set(key, entry);
+  }
+
+  entry.userId = msg.address.userId || entry.userId;
+  entry.messages.push(msg);
+
+  if (entry.timer) {
+    clearTimeout(entry.timer);
+    entry.timer = null;
+  }
+
+  entry.timer = setTimeout(() => {
+    flushDebouncedMessages(adapter, key);
+  }, debounceMs);
 }
 
 /**
@@ -292,6 +517,15 @@ export async function stop(): Promise<void> {
   const { lifecycle } = getBridgeContext();
 
   state.running = false;
+
+  // Clear pending debounce timers
+  for (const [, entry] of state.inputDebounceBuffers) {
+    if (entry.timer) {
+      clearTimeout(entry.timer);
+      entry.timer = null;
+    }
+  }
+  state.inputDebounceBuffers.clear();
 
   // Abort all event loops
   for (const [, abort] of state.loopAborts) {
@@ -399,14 +633,8 @@ function runAdapterLoop(adapter: BaseChannelAdapter): void {
         ) {
           await handleMessage(adapter, msg);
         } else {
-          const binding = router.resolve(msg.address);
-          // Fire-and-forget into session lock — loop continues to accept
-          // messages for other sessions immediately.
-          processWithSessionLock(binding.codepilotSessionId, () =>
-            handleMessage(adapter, msg),
-          ).catch(err => {
-            console.error(`[bridge-manager] Session ${binding.codepilotSessionId.slice(0, 8)} error:`, err);
-          });
+          // 普通消息：可选 debounce 合并（避免”连发两句”触发两次完整请求）
+          enqueueRegularMessage(adapter, msg);
         }
       } catch (err) {
         if (abort.signal.aborted) break;
@@ -437,6 +665,7 @@ function runAdapterLoop(adapter: BaseChannelAdapter): void {
 async function handleMessage(
   adapter: BaseChannelAdapter,
   msg: InboundMessage,
+  opts?: { ack?: () => void },
 ): Promise<void> {
   const { store } = getBridgeContext();
 
@@ -449,11 +678,12 @@ async function handleMessage(
   // Acknowledge the update offset after processing completes (or fails).
   // This ensures the adapter only advances its committed offset once the
   // message has been fully handled, preventing message loss on crash.
-  const ack = () => {
+  const defaultAck = () => {
     if (msg.updateId != null && adapter.acknowledgeUpdate) {
       adapter.acknowledgeUpdate(msg.updateId);
     }
   };
+  const ack = opts?.ack || defaultAck;
 
   // Handle callback queries (permission buttons)
   if (msg.callbackData) {
@@ -663,13 +893,25 @@ async function handleMessage(
     if (result.responseText) {
       await deliverResponse(adapter, msg.address, result.responseText, binding.codepilotSessionId, msg.messageId);
     } else if (result.hasError) {
-      const errorResponse: OutboundMessage = {
-        address: msg.address,
-        text: `<b>Error:</b> ${escapeHtml(result.errorMessage)}`,
-        parseMode: 'HTML',
-        replyToMessageId: msg.messageId,
-      };
-      await deliver(adapter, errorResponse);
+      if (result.errorCode === 'timeout') {
+        const timeoutMs = parsePositiveInt(store.getSetting('bridge_codex_turn_timeout_ms')) ?? 30 * 60_000;
+        const mins = timeoutMs > 0 ? Math.max(1, Math.ceil(timeoutMs / 60_000)) : 0;
+        const hint = timeoutMs > 0 ? `（超过 ${mins} 分钟，可通过 bridge_codex_turn_timeout_ms 调整）` : '';
+        await deliver(adapter, {
+          address: msg.address,
+          text: `任务执行超时${hint}，已自动取消。`,
+          parseMode: 'plain',
+          replyToMessageId: msg.messageId,
+        });
+      } else {
+        const errorResponse: OutboundMessage = {
+          address: msg.address,
+          text: `<b>Error:</b> ${escapeHtml(result.errorMessage)}`,
+          parseMode: 'HTML',
+          replyToMessageId: msg.messageId,
+        };
+        await deliver(adapter, errorResponse);
+      }
     }
 
     // Persist the actual SDK session ID for future resume.

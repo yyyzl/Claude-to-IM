@@ -1,0 +1,150 @@
+import crypto from "node:crypto";
+
+import type { InMemoryPermissionGateway } from "./permissions.ts";
+
+export interface StreamChatParams {
+  prompt: string;
+  sessionId: string;
+  sdkSessionId?: string;
+  model?: string;
+  systemPrompt?: string;
+  workingDirectory?: string;
+  abortController?: AbortController;
+  permissionMode?: string;
+  conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>;
+  files?: unknown[];
+  onRuntimeStatusChange?: (status: string) => void;
+}
+
+export interface LLMProvider {
+  streamChat(params: StreamChatParams): ReadableStream<string>;
+}
+
+type SDKQuery = (args: { prompt: string; options: Record<string, unknown> }) => AsyncGenerator<any, void> & {
+  close?: () => void;
+};
+
+function emit(controller: ReadableStreamDefaultController<string>, type: string, data: unknown): void {
+  const payload = {
+    type,
+    data: typeof data === "string" ? data : JSON.stringify(data),
+  };
+  controller.enqueue(`data: ${JSON.stringify(payload)}\n`);
+}
+
+function normalizePermissionMode(mode?: string): string {
+  if (!mode) return "default";
+  if (mode === "plan" || mode === "default" || mode === "acceptEdits" || mode === "dontAsk") return mode;
+  return "default";
+}
+
+export class ClaudeCodeLLMProvider implements LLMProvider {
+  private query: SDKQuery;
+  private permissions: InMemoryPermissionGateway;
+
+  constructor(opts: { query: SDKQuery; permissions: InMemoryPermissionGateway }) {
+    this.query = opts.query;
+    this.permissions = opts.permissions;
+  }
+
+  streamChat(params: StreamChatParams): ReadableStream<string> {
+    const abortController = params.abortController ?? new AbortController();
+    const permissionMode = normalizePermissionMode(params.permissionMode);
+    const resume = params.sdkSessionId && params.sdkSessionId.trim() ? params.sdkSessionId.trim() : undefined;
+
+    return new ReadableStream<string>({
+      start: async (controller) => {
+        let resultMsg: any = null;
+        let capturedSdkSessionId: string | null = null;
+
+        const q = this.query({
+          prompt: params.prompt,
+          options: {
+            cwd: params.workingDirectory,
+            model: params.model,
+            resume,
+            systemPrompt: params.systemPrompt,
+            abortController,
+            permissionMode,
+            canUseTool: async (
+              toolName: string,
+              input: Record<string, unknown>,
+              options: { signal: AbortSignal; suggestions?: unknown[]; toolUseID?: string },
+            ) => {
+              const permissionRequestId = options.toolUseID || crypto.randomUUID();
+
+              emit(controller, "permission_request", {
+                permissionRequestId,
+                toolName,
+                toolInput: input,
+                suggestions: options.suggestions || [],
+              });
+
+              const resolution = await this.permissions.waitFor(permissionRequestId, options.signal);
+              if (resolution.behavior === "allow") {
+                return {
+                  behavior: "allow",
+                  ...(resolution.updatedPermissions ? { updatedPermissions: resolution.updatedPermissions as any } : {}),
+                  ...(options.toolUseID ? { toolUseID: options.toolUseID } : {}),
+                };
+              }
+              return {
+                behavior: "deny",
+                message: resolution.message || "Denied via IM bridge",
+                ...(options.toolUseID ? { toolUseID: options.toolUseID } : {}),
+              };
+            },
+          },
+        });
+
+        try {
+          for await (const msg of q) {
+            if (msg?.session_id && !capturedSdkSessionId) {
+              capturedSdkSessionId = msg.session_id;
+              emit(controller, "status", { session_id: msg.session_id });
+            }
+            if (msg?.type === "result") {
+              resultMsg = msg;
+              // 不 break：SDK 可能在 result 后还有 prompt_suggestion 等
+            }
+          }
+
+          if (resultMsg?.session_id) capturedSdkSessionId = resultMsg.session_id;
+
+          if (resultMsg?.type === "result") {
+            if (resultMsg.subtype === "success") {
+              emit(controller, "text", resultMsg.result || "");
+              emit(controller, "result", {
+                usage: resultMsg.usage || null,
+                is_error: false,
+                session_id: capturedSdkSessionId,
+              });
+            } else {
+              const errText = Array.isArray(resultMsg.errors) && resultMsg.errors.length > 0
+                ? resultMsg.errors.join("\n")
+                : "Unknown error";
+              emit(controller, "error", errText);
+              emit(controller, "result", {
+                usage: resultMsg.usage || null,
+                is_error: true,
+                session_id: capturedSdkSessionId,
+              });
+            }
+          } else {
+            emit(controller, "error", "Session ended without result message");
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          emit(controller, "error", msg);
+          emit(controller, "result", { usage: null, is_error: true, session_id: capturedSdkSessionId });
+        } finally {
+          try { (q as any).close?.(); } catch { /* ignore */ }
+          controller.close();
+        }
+      },
+      cancel: () => {
+        abortController.abort();
+      },
+    });
+  }
+}

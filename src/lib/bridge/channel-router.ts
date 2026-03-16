@@ -5,6 +5,7 @@
  * the corresponding ChannelBinding (and underlying chat_session).
  */
 
+import { homedir } from 'node:os';
 import type { ChannelAddress, ChannelBinding, ChannelType } from './types.js';
 import { getBridgeContext } from './context.js';
 
@@ -30,7 +31,7 @@ export function startNewSession(
   const effectiveCwd = opts.workingDirectory
     || existing?.workingDirectory
     || store.getSetting('bridge_default_work_dir')
-    || process.env.HOME
+    || homedir()
     || '';
   const effectiveModel = opts.model
     || existing?.model
@@ -103,7 +104,7 @@ export function createBinding(
   const { store } = getBridgeContext();
   const defaultCwd = workingDirectory
     || store.getSetting('bridge_default_work_dir')
-    || process.env.HOME
+    || homedir()
     || '';
   const defaultModel = store.getSetting('bridge_default_model') || '';
   const defaultProviderId = store.getSetting('bridge_default_provider_id') || '';
