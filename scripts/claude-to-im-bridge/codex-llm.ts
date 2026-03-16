@@ -52,6 +52,24 @@ function toErrorMessage(err: unknown): string {
   return String(err);
 }
 
+function isThreadNotFoundError(err: unknown): boolean {
+  const msg = toErrorMessage(err);
+  // Fast path
+  if (/thread not found/i.test(msg)) return true;
+
+  // Try parse trailing JSON-RPC error object from our JsonRpcAppServerClient message:
+  // "请求失败: turn/start: {\"code\":-32600,\"message\":\"thread not found: ...\"}"
+  const m = msg.match(/\{.*\}\s*$/);
+  if (!m) return false;
+  try {
+    const obj = JSON.parse(m[0]) as any;
+    const inner = typeof obj?.message === "string" ? obj.message : "";
+    return /thread not found/i.test(inner);
+  } catch {
+    return false;
+  }
+}
+
 function abortError(message = "Task stopped by user"): Error {
   const e = new Error(message);
   (e as any).name = "AbortError";
@@ -269,11 +287,50 @@ export class CodexAppServerLLMProvider implements LLMProvider {
 
           const prompt = this.buildTurnPrompt(params.prompt, params.workingDirectory);
 
-          const turnId = await this.startTurn({
-            threadId,
-            prompt,
-            cwd: params.workingDirectory,
-          });
+          let turnId: string;
+          try {
+            turnId = await this.startTurn({
+              threadId,
+              prompt,
+              cwd: params.workingDirectory,
+            });
+          } catch (e) {
+            // 常见场景：runner 重启导致 Codex app-server 内存态丢失，旧 threadId 无效。
+            // 这时 turn/start 会返回 "thread not found"，需要自动回退到新 thread。
+            if (isThreadNotFoundError(e)) {
+              console.warn("[codex-llm] thread not found, starting a new thread and retrying turn/start...");
+              const freshThreadId = await this.startThread({
+                systemPrompt: params.systemPrompt,
+                cwd: params.workingDirectory,
+              });
+
+              emit(controller, "status", {
+                session_id: freshThreadId,
+                model: this.selectedModelLabel || this.selectedModelId || "",
+              });
+
+              turnId = await this.startTurn({
+                threadId: freshThreadId,
+                prompt,
+                cwd: params.workingDirectory,
+              });
+
+              const text = await this.collectTurnText({
+                threadId: freshThreadId,
+                turnId,
+                onDelta: (delta) => emit(controller, "text", delta),
+                signal,
+              });
+
+              if (text) {
+                // 已通过 delta 发过的情况下，text 可能等于已发送内容；这里不再重复发送
+              }
+
+              emit(controller, "result", { usage: null, is_error: false, session_id: freshThreadId });
+              return;
+            }
+            throw e;
+          }
 
           const text = await this.collectTurnText({
             threadId,
