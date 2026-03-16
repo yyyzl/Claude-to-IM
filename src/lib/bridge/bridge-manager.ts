@@ -941,7 +941,7 @@ async function handleMessage(
       }
     } else if (result.hasError) {
       if (result.errorCode === 'timeout') {
-        const timeoutMs = parsePositiveInt(store.getSetting('bridge_codex_turn_timeout_ms')) ?? 30 * 60_000;
+        const timeoutMs = parsePositiveInt(store.getSetting('bridge_codex_turn_timeout_ms')) ?? 90 * 60_000;
         const mins = timeoutMs > 0 ? Math.max(1, Math.ceil(timeoutMs / 60_000)) : 0;
         const hint = timeoutMs > 0 ? `（超过 ${mins} 分钟，可通过 bridge_codex_turn_timeout_ms 调整）` : '';
         await deliver(adapter, {

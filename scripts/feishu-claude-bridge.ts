@@ -17,7 +17,8 @@
  *   bridge_default_work_dir=G:\\RustProject\\push-2-talk
  *   bridge_default_model=claude-sonnet-4-20250514
  *   bridge_codex_cli_config=model_provider=openai   # 覆盖 ~/.codex/config.toml（每行一条或用 ; 分隔）
- *   bridge_codex_turn_timeout_ms=1800000           # turn 超时（毫秒），默认 30 分钟
+ *   bridge_codex_turn_timeout_ms=5400000           # turn 超时（毫秒），默认 90 分钟
+ *   bridge_sse_keep_alive_ms=15000                 # 可选：SSE 心跳间隔（毫秒），默认 15 秒
  *   CLAUDE_TO_IM_ROOT=G:\\project\\Claude-to-IM
  */
 
@@ -103,6 +104,7 @@ async function main() {
   const permissions = new InMemoryPermissionGateway();
 
   const backend = (store.getSetting("bridge_llm_backend") || "claude").trim().toLowerCase();
+  const keepAliveMs = parseIntSetting(store.getSetting("bridge_sse_keep_alive_ms"));
 
   // Codex app-server 的工作目录（cwd）会影响其读取本地配置（如 .env）以及默认工作区。
   // 默认与 bridge_default_work_dir 对齐；若未配置/无效则回退到 runnerRoot。
@@ -132,6 +134,7 @@ async function main() {
         sandboxMode: store.getSetting("bridge_codex_sandbox_mode") || "danger-full-access",
         approvalPolicy: store.getSetting("bridge_codex_approval_policy") || "never",
         turnTimeoutMs: parseIntSetting(store.getSetting("bridge_codex_turn_timeout_ms")),
+        keepAliveMs,
         debug: store.getSetting("bridge_codex_debug") === "true",
       })
     : (() => {
@@ -155,7 +158,7 @@ async function main() {
       pathToFileURL(path.join(claudeToImRoot, "node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs")).href
     );
     const query = (sdk as any).query as any;
-    llmFinal = new ClaudeCodeLLMProvider({ query, permissions });
+    llmFinal = new ClaudeCodeLLMProvider({ query, permissions, keepAliveMs });
   }
 
   const appId = store.getSetting("bridge_feishu_app_id") || "";

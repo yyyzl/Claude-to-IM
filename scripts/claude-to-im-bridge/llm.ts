@@ -41,19 +41,24 @@ function normalizePermissionMode(mode?: string): string {
 export class ClaudeCodeLLMProvider implements LLMProvider {
   private query: SDKQuery;
   private permissions: InMemoryPermissionGateway;
+  private keepAliveMs: number;
 
-  constructor(opts: { query: SDKQuery; permissions: InMemoryPermissionGateway }) {
+  constructor(opts: { query: SDKQuery; permissions: InMemoryPermissionGateway; keepAliveMs?: number }) {
     this.query = opts.query;
     this.permissions = opts.permissions;
+    const ka = Number.isFinite(opts.keepAliveMs as number) ? (opts.keepAliveMs as number) : 15_000;
+    this.keepAliveMs = ka > 0 ? ka : 0;
   }
 
   streamChat(params: StreamChatParams): ReadableStream<string> {
     const abortController = params.abortController ?? new AbortController();
+    const signal = abortController.signal;
     const permissionMode = normalizePermissionMode(params.permissionMode);
     const resume = params.sdkSessionId && params.sdkSessionId.trim() ? params.sdkSessionId.trim() : undefined;
 
     return new ReadableStream<string>({
       start: async (controller) => {
+        let keepAliveTimer: NodeJS.Timeout | null = null;
         let resultMsg: any = null;
         let capturedSdkSessionId: string | null = null;
 
@@ -98,6 +103,14 @@ export class ClaudeCodeLLMProvider implements LLMProvider {
         });
 
         try {
+          if (this.keepAliveMs > 0) {
+            // 避免部分 SSE/反代链路因“长时间无输出”触发 idle timeout。
+            keepAliveTimer = setInterval(() => {
+              if (signal.aborted) return;
+              try { emit(controller, "keep_alive", ""); } catch { /* ignore */ }
+            }, this.keepAliveMs);
+          }
+
           for await (const msg of q) {
             if (msg?.session_id && !capturedSdkSessionId) {
               capturedSdkSessionId = msg.session_id;
@@ -138,6 +151,7 @@ export class ClaudeCodeLLMProvider implements LLMProvider {
           emit(controller, "error", msg);
           emit(controller, "result", { usage: null, is_error: true, session_id: capturedSdkSessionId });
         } finally {
+          if (keepAliveTimer) clearInterval(keepAliveTimer);
           try { (q as any).close?.(); } catch { /* ignore */ }
           controller.close();
         }

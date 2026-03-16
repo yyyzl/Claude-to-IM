@@ -183,7 +183,7 @@ export async function processMessage(
       }
     }
 
-    const timeoutMs = parsePositiveInt(store.getSetting('bridge_codex_turn_timeout_ms')) ?? 30 * 60_000;
+    const timeoutMs = parsePositiveInt(store.getSetting('bridge_codex_turn_timeout_ms')) ?? 90 * 60_000;
     let timeoutTimer: NodeJS.Timeout | null = null;
     let timeoutError: BridgeTurnTimeoutError | null = null;
     if (timeoutMs > 0) {

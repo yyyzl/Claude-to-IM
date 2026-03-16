@@ -44,9 +44,12 @@ bridge_feishu_input_debounce_ms=1200
 # 同一 session 正在跑 turn 时，后续消息会进入队列；排队超过该时间会提示并自动取消。
 # bridge_session_queue_timeout_ms=300000
 
-# 可选：turn 超时（毫秒）。默认 30 分钟。
-# 执行会跑很久（构建/安装依赖）时建议调大，例如 60 分钟：
-# bridge_codex_turn_timeout_ms=3600000
+# 可选：turn 超时（毫秒）。默认 90 分钟。
+# 执行会跑很久（构建/安装依赖）时建议调大，例如 120 分钟：
+# bridge_codex_turn_timeout_ms=7200000
+
+# 可选：SSE keep_alive 心跳间隔（毫秒）。默认 15 秒；设为 0 可禁用。
+# bridge_sse_keep_alive_ms=15000
 ```
 
 说明：

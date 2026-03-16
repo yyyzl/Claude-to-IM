@@ -80,6 +80,14 @@ function pickString(v: unknown): string | null {
   return typeof v === "string" && v.trim() ? v.trim() : null;
 }
 
+function isTransientReconnectNotification(errObj: unknown): boolean {
+  const msg = pickString((errObj as any)?.message);
+  if (!msg) return false;
+  // Codex app-server 在自动重连 responses SSE 时会抛出类似：
+  // "Reconnecting... 1/5"。这通常是“可恢复的中间状态”，不应直接判定 turn 失败。
+  return /^Reconnecting\.\.\.\s*\d+\s*\/\s*\d+$/i.test(msg);
+}
+
 function parseCodexCliConfigOverrides(raw: string | undefined): string[] {
   const text = (raw || "").trim();
   if (!text) return [];
@@ -202,10 +210,17 @@ export type CodexAppServerLLMProviderOptions = {
   /**
    * turn 等待超时（毫秒）。
    *
-   * - 默认 30 分钟（适配长时间工具执行/构建）
+   * - 默认 90 分钟（适配长时间工具执行/构建）
    * - 设为 0 或负数：不做超时（不推荐，除非你明确需要）
    */
   turnTimeoutMs?: number;
+  /**
+   * SSE keep_alive 间隔（毫秒）。
+   *
+   * - 默认 15 秒
+   * - 设为 0 或负数：禁用 keep_alive
+   */
+  keepAliveMs?: number;
   debug?: boolean;
 };
 
@@ -231,6 +246,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
   private sandboxMode: string;
   private approvalPolicy: string;
   private turnTimeoutMs: number;
+  private keepAliveMs: number;
 
   constructor(opts: CodexAppServerLLMProviderOptions) {
     this.projectRoot = opts.projectRoot;
@@ -239,7 +255,11 @@ export class CodexAppServerLLMProvider implements LLMProvider {
     this.modelHint = opts.modelHint;
     this.sandboxMode = opts.sandboxMode || "danger-full-access";
     this.approvalPolicy = opts.approvalPolicy || "never";
-    this.turnTimeoutMs = Number.isFinite(opts.turnTimeoutMs as number) ? (opts.turnTimeoutMs as number) : 30 * 60_000;
+    this.turnTimeoutMs = Number.isFinite(opts.turnTimeoutMs as number) ? (opts.turnTimeoutMs as number) : 90 * 60_000;
+    {
+      const ka = Number.isFinite(opts.keepAliveMs as number) ? (opts.keepAliveMs as number) : 15_000;
+      this.keepAliveMs = ka > 0 ? ka : 0;
+    }
 
     const codexBin = resolveCodexBinary(opts.codexBin);
     const cmd = [codexBin, "app-server"];
@@ -268,7 +288,16 @@ export class CodexAppServerLLMProvider implements LLMProvider {
 
     return new ReadableStream<string>({
       start: async (controller) => {
+        let keepAliveTimer: NodeJS.Timeout | null = null;
         try {
+          if (this.keepAliveMs > 0) {
+            // 避免部分 SSE/反代链路因“长时间无输出”触发 idle timeout。
+            keepAliveTimer = setInterval(() => {
+              if (signal.aborted) return;
+              try { emit(controller, "keep_alive", ""); } catch { /* ignore */ }
+            }, this.keepAliveMs);
+          }
+
           await this.ensureInitialized();
 
           const resumedThreadId = params.sdkSessionId && params.sdkSessionId.trim()
@@ -351,6 +380,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
           emit(controller, "error", msg);
           emit(controller, "result", { usage: null, is_error: true, session_id: null });
         } finally {
+          if (keepAliveTimer) clearInterval(keepAliveTimer);
           controller.close();
         }
       },
@@ -533,6 +563,11 @@ export class CodexAppServerLLMProvider implements LLMProvider {
 
       if (method === "error") {
         const errObj = params.error;
+        if (isTransientReconnectNotification(errObj)) {
+          const msg = pickString((errObj as any)?.message);
+          if (msg) console.warn(`[codex-llm] ${msg}`);
+          return;
+        }
         throw new Error(formatTurnErrorForHumans(errObj));
       }
 
