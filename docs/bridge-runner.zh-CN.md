@@ -74,6 +74,66 @@ npx tsx scripts/feishu-claude-bridge.ts
 
 运行数据会落到本仓库根目录的 `.ccg/`（已建议加入忽略）。
 
+## 3.1) 推荐：用 `scripts/bridge.ps1` 管理（更适合远程/无人值守）
+
+Runner 已内置优雅退出逻辑（`SIGINT/SIGTERM`），但在 Windows 上远程“发信号”不太方便。
+因此 runner 额外支持 **stop-file**：外部创建一个文件即可触发优雅退出；同时写入 **heartbeat**
+便于 watchdog 判断“是否卡死”。
+
+在本仓库根目录执行：
+
+```powershell
+# 启动（后台）
+powershell -ExecutionPolicy Bypass -File scripts/bridge.ps1 start
+
+# 状态（pid + 心跳 + 日志位置）
+powershell -ExecutionPolicy Bypass -File scripts/bridge.ps1 status
+
+# 优雅停止（推荐）
+powershell -ExecutionPolicy Bypass -File scripts/bridge.ps1 stop
+
+# 卡死才用强制结束（结束进程树）
+powershell -ExecutionPolicy Bypass -File scripts/bridge.ps1 stop -Force
+```
+
+运行时文件默认落到：`.ccg/bridge-runner/`
+
+- `pid`：runner PID
+- `heartbeat.json`：心跳（默认每 15s 更新一次）
+- `stop`：触发优雅退出（由 stop 命令创建）
+- `stdout.log` / `stderr.log`：runner 输出日志
+
+可选环境变量：
+
+- `BRIDGE_CONTROL_DIR`：覆盖控制目录（相对路径会相对仓库根目录解析）
+- `BRIDGE_RUNNER_HEARTBEAT_MS`：心跳间隔（毫秒），默认 15000；设为 0 可关闭
+- `BRIDGE_RUNNER_STOP_POLL_MS`：stop-file 轮询间隔（毫秒），默认 1000；设为 0 可关闭
+
+## 3.2) 无人值守自愈：定时跑 watchdog（推荐配合 Windows 任务计划程序）
+
+watchdog 会在“未运行”或“心跳超时（默认 120s）”时自动拉起/重启：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/bridge.ps1 watchdog
+```
+
+建议在 Windows「任务计划程序」里创建一个任务：
+
+- 触发器：登录时 + 每 1 分钟重复
+- 操作：运行 `powershell.exe`，参数为 `-ExecutionPolicy Bypass -File scripts/bridge.ps1 watchdog`
+- 起始于：本仓库根目录（确保能找到 `package.json` / `node_modules`）
+
+## 3.3) 不用远程桌面也能控：远程执行命令（可选）
+
+如果你不想“远程桌面进去手动 Ctrl+C / 杀进程”，最稳的方式是让这台 Windows 支持
+远程执行 PowerShell（例如 OpenSSH Server / WinRM / 内网 VPN + 远程命令），然后直接
+远程运行：
+
+- `scripts/bridge.ps1 status`
+- `scripts/bridge.ps1 stop`（优雅）
+- `scripts/bridge.ps1 stop -Force`（卡死才用）
+- `scripts/bridge.ps1 start`
+
 ## 4) 经验教训（这次折腾最关键的几条）
 
 ### 4.1 502 / Reconnecting 不一定是网络问题，常见根因是“模型选错了”

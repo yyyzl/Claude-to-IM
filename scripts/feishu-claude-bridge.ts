@@ -44,12 +44,134 @@ type BridgeManagerModule = {
   getStatus: () => unknown;
 };
 
+type RunnerControlFiles = {
+  controlDir: string;
+  pidFile: string;
+  heartbeatFile: string;
+  stopFile: string;
+};
+
+function redactSensitive(text: string): string {
+  let out = text;
+  out = out.replace(/sk-[A-Za-z0-9_-]{10,}/g, "sk-***");
+  out = out.replace(/\bBearer\s+\S+/gi, "Bearer ***");
+  out = out.replace(
+    /(api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|token|secret)\s*[:=]\s*([^\s,;]+)/gi,
+    "$1=***",
+  );
+  return out;
+}
+
+function pickEnv(name: string): string | null {
+  const v = process.env[name];
+  if (!v) return null;
+  const t = v.trim();
+  return t ? redactSensitive(t) : null;
+}
+
+function detectPotentialSignalSourceHints(): string[] {
+  const hints: string[] = [];
+
+  // 常见“看似自动中断”的根因：watch/restart 工具会向子进程发 SIGINT/SIGTERM 来重启。
+  const lifecycle = pickEnv("npm_lifecycle_script");
+  if (lifecycle && /(tsx\s+watch|nodemon|concurrently|turbo|vite|webpack|rollup|watch)/i.test(lifecycle)) {
+    hints.push(`npm_lifecycle_script=${lifecycle}`);
+  }
+
+  const event = pickEnv("npm_lifecycle_event");
+  if (event && /(dev|watch|start)/i.test(event)) {
+    hints.push(`npm_lifecycle_event=${event}`);
+  }
+
+  if (pickEnv("NODEMON")) hints.push("NODEMON=1");
+  if (pickEnv("VSCODE_PID")) hints.push("VSCODE_PID=1");
+  if (pickEnv("TSX_WATCH")) hints.push("TSX_WATCH=1");
+
+  return hints;
+}
+
+function getParentProcessDiagnostics(ppid: number): string | null {
+  if (!Number.isFinite(ppid) || ppid <= 0) return null;
+
+  // Linux: /proc/<ppid>/cmdline
+  if (process.platform !== "win32") {
+    try {
+      const cmdline = fs.readFileSync(`/proc/${ppid}/cmdline`, "utf8")
+        .split("\u0000")
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+      if (cmdline) return `ppid=${ppid} cmd=${redactSensitive(cmdline)}`;
+    } catch {
+      // ignore
+    }
+    return `ppid=${ppid}`;
+  }
+
+  // Windows: use PowerShell CIM (wmic 已逐步弃用且在部分环境不可用)
+  try {
+    const ps = process.env.SystemRoot
+      ? path.join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+      : "powershell.exe";
+
+    const script = [
+      `$p = Get-CimInstance Win32_Process -Filter \"ProcessId=${ppid}\";`,
+      `if ($null -eq $p) { exit 0 }`,
+      `$obj = [pscustomobject]@{`,
+      `  ProcessId = $p.ProcessId;`,
+      `  ParentProcessId = $p.ParentProcessId;`,
+      `  Name = $p.Name;`,
+      `  CommandLine = $p.CommandLine;`,
+      `};`,
+      `$obj | ConvertTo-Json -Compress;`,
+    ].join(" ");
+
+    const res = spawnSync(ps, ["-NoProfile", "-NonInteractive", "-Command", script], {
+      encoding: "utf8",
+      timeout: 1500,
+      windowsHide: true,
+    });
+
+    const stdout = (res.stdout || "").trim();
+    if (!stdout) return `ppid=${ppid}`;
+    return redactSensitive(stdout);
+  } catch {
+    return `ppid=${ppid}`;
+  }
+}
+
 function parseIntSetting(raw: string | null): number | undefined {
   if (raw === null) return undefined;
   const t = raw.trim();
   if (!t) return undefined;
   const n = parseInt(t, 10);
   return Number.isFinite(n) ? n : undefined;
+}
+
+function resolveRunnerControlFiles(runnerRoot: string): RunnerControlFiles {
+  const raw = (process.env.BRIDGE_CONTROL_DIR || "").trim();
+  const controlDir = raw
+    ? (path.isAbsolute(raw) ? raw : path.resolve(runnerRoot, raw))
+    : path.join(runnerRoot, ".ccg", "bridge-runner");
+
+  return {
+    controlDir,
+    pidFile: path.join(controlDir, "pid"),
+    heartbeatFile: path.join(controlDir, "heartbeat.json"),
+    stopFile: path.join(controlDir, "stop"),
+  };
+}
+
+function safeMkdirp(dir: string): void {
+  try { fs.mkdirSync(dir, { recursive: true }); } catch { /* ignore */ }
+}
+
+function safeWriteFile(filePath: string, text: string): void {
+  try { fs.writeFileSync(filePath, text, "utf8"); } catch { /* ignore */ }
+}
+
+function safeUnlink(filePath: string): void {
+  try { fs.unlinkSync(filePath); } catch { /* ignore */ }
 }
 
 function pickExistingPath(candidates: Array<string | undefined>, mustContainRelative: string): string | null {
@@ -109,9 +231,12 @@ function ensureClaudeToImBuild(claudeToImRoot: string): void {
 }
 
 async function main() {
+  const bootAt = Date.now();
   const scriptPath = fileURLToPath(import.meta.url);
   const scriptDir = path.dirname(scriptPath);
   const runnerRoot = path.resolve(scriptDir, "..");
+  const control = resolveRunnerControlFiles(runnerRoot);
+  safeMkdirp(control.controlDir);
 
   // Load local env file (no override)
   // 约定：仅使用“中央 runner 目录”的 .env.bridge.local，避免多项目间互相覆盖/漂移。
@@ -254,16 +379,97 @@ async function main() {
   await bridgeManager.start();
   console.log("[bridge-runner] Status:", bridgeManager.getStatus());
   console.log("[bridge-runner] LLM backend:", backend);
+  console.log(`[bridge-runner] PID=${process.pid} PPID=${process.ppid} platform=${process.platform}`);
+  console.log(`[bridge-runner] Control dir: ${control.controlDir}`);
+
+  safeWriteFile(control.pidFile, String(process.pid));
+
+  const heartbeatMsRaw = parseIntSetting(process.env.BRIDGE_RUNNER_HEARTBEAT_MS || null);
+  const heartbeatMs = heartbeatMsRaw === undefined ? 15_000 : heartbeatMsRaw;
+
+  const stopPollMsRaw = parseIntSetting(process.env.BRIDGE_RUNNER_STOP_POLL_MS || null);
+  const stopPollMs = stopPollMsRaw === undefined ? 1_000 : stopPollMsRaw;
+
+  let shuttingDown = false;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let stopPollTimer: ReturnType<typeof setInterval> | null = null;
+
+  const writeHeartbeat = (status: "running" | "stopping" | "stopped") => {
+    const upSec = Math.round((Date.now() - bootAt) / 1000);
+    safeWriteFile(
+      control.heartbeatFile,
+      JSON.stringify({ ts: new Date().toISOString(), pid: process.pid, uptimeSec: upSec, status, backend }),
+    );
+  };
+
+  writeHeartbeat("running");
 
   const shutdown = async (signal: string) => {
-    console.log(`[bridge-runner] Received ${signal}, stopping...`);
+    if (shuttingDown) return;
+    shuttingDown = true;
+
+    const upSec = Math.round((Date.now() - bootAt) / 1000);
+    console.log(`[bridge-runner] Received ${signal}, stopping... (uptime=${upSec}s)`);
+    writeHeartbeat("stopping");
+
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+    if (stopPollTimer) {
+      clearInterval(stopPollTimer);
+      stopPollTimer = null;
+    }
+    safeUnlink(control.stopFile);
+
+    // 诊断信息：SIGINT 多数情况下来自 Ctrl+C 或父进程（watch/restart 工具）发出的终止信号。
+    // 这里尽量在不泄漏敏感信息的前提下，打印一些线索，方便定位“自动中断”的真实来源。
+    const hints = detectPotentialSignalSourceHints();
+    if (hints.length) {
+      console.log("[bridge-runner] 诊断：检测到可能的信号来源线索：");
+      for (const h of hints) console.log(`  - ${h}`);
+      console.log("[bridge-runner] 建议：避免用 watch 模式启动，直接运行：");
+      console.log("  npx tsx scripts/feishu-claude-bridge.ts");
+    }
+
+    const parentDiag = getParentProcessDiagnostics(process.ppid);
+    if (parentDiag) {
+      console.log(`[bridge-runner] 诊断：父进程信息：${parentDiag}`);
+    }
+
     try { await bridgeManager.stop(); } catch { /* ignore */ }
     try { (llmFinal as any).stop?.(); } catch { /* ignore */ }
+    safeUnlink(control.pidFile);
+    writeHeartbeat("stopped");
     process.exit(0);
   };
 
   process.on("SIGINT", () => { void shutdown("SIGINT"); });
   process.on("SIGTERM", () => { void shutdown("SIGTERM"); });
+
+  if (heartbeatMs > 0) {
+    heartbeatTimer = setInterval(() => writeHeartbeat("running"), heartbeatMs);
+  }
+
+  if (stopPollMs > 0) {
+    stopPollTimer = setInterval(() => {
+      if (!fs.existsSync(control.stopFile)) return;
+
+      // 防误触发：若 stop 文件早于本次启动，则视为“残留文件”，直接清理。
+      try {
+        const st = fs.statSync(control.stopFile);
+        if (st.mtimeMs + 500 < bootAt) {
+          safeUnlink(control.stopFile);
+          return;
+        }
+      } catch {
+        // ignore
+      }
+
+      safeUnlink(control.stopFile);
+      void shutdown("STOP_FILE");
+    }, stopPollMs);
+  }
 
   const exitAfterMs = parseInt(process.env.BRIDGE_EXIT_AFTER_MS || "", 10);
   if (Number.isFinite(exitAfterMs) && exitAfterMs > 0) {
