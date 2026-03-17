@@ -7,6 +7,8 @@
  * Uses globalThis to survive Next.js HMR in development.
  */
 
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import type { BridgeStatus, InboundMessage, OutboundMessage, StreamingPreviewState, ToolCallInfo } from './types.js';
 import { createAdapter, getRegisteredTypes } from './channel-adapter.js';
 import type { BaseChannelAdapter } from './channel-adapter.js';
@@ -26,6 +28,11 @@ import {
 } from './internal/session-lock.js';
 import { computeSessionQueueTimeoutMs } from './internal/timeouts.js';
 import {
+  getGitCommitMessageExamples,
+  parseGitSlashCommandArgs,
+  validateAndNormalizeConventionalCommitMessage,
+} from './internal/git-command.js';
+import {
   validateWorkingDirectory,
   validateSessionId,
   isDangerousInput,
@@ -34,6 +41,7 @@ import {
 } from './security/validators.js';
 
 const GLOBAL_KEY = '__bridge_manager__';
+const execFileAsync = promisify(execFile);
 
 // ── Streaming preview helpers ──────────────────────────────────
 
@@ -1019,6 +1027,8 @@ async function handleCommand(
         '/status - Show current status',
         '/sessions - List recent sessions',
         '/stop - Stop current session',
+        '/git <type>(<scope>): <subject> - Commit all changes',
+        '/git push - Push current branch',
         '/perm allow|allow_session|deny &lt;id&gt; - Respond to permission',
         '/help - Show this help',
       ].join('\n');
@@ -1157,6 +1167,142 @@ async function handleCommand(
       break;
     }
 
+    case '/git': {
+      const binding = router.resolve(msg.address);
+      const cwd = binding.workingDirectory || process.cwd();
+
+      store.insertAuditLog({
+        channelType: adapter.channelType,
+        chatId: msg.address.chatId,
+        direction: 'inbound',
+        messageId: msg.messageId,
+        summary: `[CMD] /git ${args ? args.slice(0, 200) : ''}`.trim(),
+      });
+
+      const parsed = parseGitSlashCommandArgs(args);
+      const examples = getGitCommitMessageExamples();
+
+      const runGit = async (gitArgs: string[]) => {
+        try {
+          const { stdout, stderr } = await execFileAsync('git', gitArgs, {
+            cwd,
+            windowsHide: true,
+            timeout: 120_000,
+            maxBuffer: 2 * 1024 * 1024,
+            encoding: 'utf8',
+            env: { ...process.env, GIT_PAGER: 'cat', PAGER: 'cat' },
+          });
+          return { stdout: String(stdout || ''), stderr: String(stderr || '') };
+        } catch (err) {
+          const e = err as any;
+          const stderr = typeof e?.stderr === 'string' && e.stderr.trim()
+            ? e.stderr.trim()
+            : typeof e?.message === 'string'
+              ? e.message
+              : String(err);
+          const stdout = typeof e?.stdout === 'string' ? e.stdout.trim() : '';
+          const code = typeof e?.code === 'number' ? e.code : undefined;
+          const codeHint = typeof code === 'number' ? ` (exit ${code})` : '';
+          throw new Error([
+            `git ${gitArgs.join(' ')} 执行失败${codeHint}`,
+            stdout ? `stdout: ${stdout}` : '',
+            stderr ? `stderr: ${stderr}` : '',
+          ].filter(Boolean).join('\n'));
+        }
+      };
+
+      // 确保在 git 仓库内
+      try {
+        await runGit(['rev-parse', '--is-inside-work-tree']);
+      } catch {
+        response = [
+          '当前工作目录不是 git 仓库，无法执行 /git。',
+          `CWD: <code>${escapeHtml(cwd)}</code>`,
+          '可先用 /cwd 切换到项目目录。',
+        ].join('\n');
+        break;
+      }
+
+      if (parsed.kind === 'help') {
+        response = [
+          '<b>/git 用法</b>',
+          '',
+          '提交（包含暂存区 + 工作区）：',
+          '<code>/git type(scope): subject</code>',
+          '',
+          '推送当前分支：',
+          '<code>/git push</code>',
+          '',
+          '提交信息示例：',
+          ...examples.map(e => `- <code>${escapeHtml(e)}</code>`),
+        ].join('\n');
+        break;
+      }
+
+      if (parsed.kind === 'push') {
+        try {
+          const result = await runGit(['push']);
+          const out = (result.stdout || result.stderr || '').trim();
+          response = [
+            '<b>已推送到远端。</b>',
+            out ? `\n<code>${escapeHtml(out).slice(0, 1800)}</code>` : '',
+          ].join('').trim();
+        } catch (err) {
+          response = [
+            '<b>推送失败：</b>',
+            `<code>${escapeHtml(err instanceof Error ? err.message : String(err)).slice(0, 1800)}</code>`,
+          ].join('\n');
+        }
+        break;
+      }
+
+      const validated = validateAndNormalizeConventionalCommitMessage(parsed.message);
+      if (!validated.ok) {
+        response = [
+          `<b>提交信息不符合规范：</b> ${escapeHtml(validated.error)}`,
+          validated.hint ? `\n<code>${escapeHtml(validated.hint)}</code>` : '',
+        ].join('').trim();
+        break;
+      }
+
+      try {
+        const status = await runGit(['status', '--porcelain']);
+        if (!status.stdout.trim()) {
+          response = '没有可提交的改动。';
+          break;
+        }
+
+        await runGit(['add', '-A']);
+
+        const staged = await runGit(['diff', '--cached', '--name-only']);
+        if (!staged.stdout.trim()) {
+          response = '暂存区为空，没有可提交的改动。';
+          break;
+        }
+
+        await runGit(['commit', '-m', validated.normalized]);
+
+        const hash = (await runGit(['rev-parse', '--short', 'HEAD'])).stdout.trim();
+        const branch = (await runGit(['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim();
+
+        response = [
+          '<b>提交完成。</b>',
+          `Branch: <code>${escapeHtml(branch || 'unknown')}</code>`,
+          `Commit: <code>${escapeHtml(hash || '')}</code>`,
+          '',
+          '是否需要推送到远端？如需推送请执行：',
+          '<code>/git push</code>',
+        ].join('\n');
+      } catch (err) {
+        response = [
+          '<b>提交失败：</b>',
+          `<code>${escapeHtml(err instanceof Error ? err.message : String(err)).slice(0, 1800)}</code>`,
+        ].join('\n');
+      }
+
+      break;
+    }
+
     case '/perm': {
       // Text-based permission approval fallback (for channels without inline buttons)
       // Usage: /perm allow <id> | /perm allow_session <id> | /perm deny <id>
@@ -1188,6 +1334,8 @@ async function handleCommand(
         '/status - Show current status',
         '/sessions - List recent sessions',
         '/stop - Stop current session',
+        '/git <type>(<scope>): <subject> - Commit all changes',
+        '/git push - Push current branch',
         '/perm allow|allow_session|deny &lt;id&gt; - Respond to permission request',
         '1/2/3 - Quick permission reply (Feishu/QQ, single pending)',
         '/help - Show this help',

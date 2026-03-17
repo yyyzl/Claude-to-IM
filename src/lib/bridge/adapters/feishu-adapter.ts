@@ -780,9 +780,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
         error: '❌ Error',
       };
       const elapsedMs = Date.now() - state.startTime;
+      const elapsed = formatElapsed(elapsedMs);
       const footer = {
         status: statusLabels[status] || status,
-        elapsed: formatElapsed(elapsedMs),
+        elapsed,
       };
 
       const finalCardJson = buildFinalCardJson(responseText, state.toolCalls, footer);
@@ -793,7 +794,35 @@ export class FeishuAdapter extends BaseChannelAdapter {
         data: { card: { type: 'card_json', data: finalCardJson }, sequence: state.sequence },
       });
 
-      console.log(`[feishu-adapter] Card finalized: cardId=${state.cardId}, status=${status}, elapsed=${formatElapsed(elapsedMs)}`);
+      // 完成态额外发一条新消息，用于触发未读/推送提醒（卡片更新本身通常不会提醒）。
+      // 可通过 bridge_feishu_stream_card_notify_on_complete=false 禁用。
+      try {
+        const { store } = getBridgeContext();
+        const notifyEnabled = store.getSetting('bridge_feishu_stream_card_notify_on_complete') !== 'false';
+        const shouldNotify = notifyEnabled && (status === 'completed' || (status === 'error' && responseText.trim()));
+
+        if (shouldNotify) {
+          const noticeLabels: Record<string, string> = {
+            completed: '任务已完成',
+            error: '任务执行出错',
+            interrupted: '任务已中断',
+          };
+          const noticeText = `${noticeLabels[status] || status}（耗时 ${elapsed}）`;
+
+          await this.restClient.im.message.create({
+            params: { receive_id_type: 'chat_id' },
+            data: {
+              receive_id: chatId,
+              msg_type: 'text',
+              content: JSON.stringify({ text: noticeText }),
+            },
+          });
+        }
+      } catch (err) {
+        console.warn('[feishu-adapter] Completion notice failed:', err instanceof Error ? err.message : err);
+      }
+
+      console.log(`[feishu-adapter] Card finalized: cardId=${state.cardId}, status=${status}, elapsed=${elapsed}`);
       return true;
     } catch (err) {
       console.warn('[feishu-adapter] Card finalize failed:', err instanceof Error ? err.message : err);
