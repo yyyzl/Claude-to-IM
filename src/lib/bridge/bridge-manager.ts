@@ -1129,13 +1129,20 @@ async function handleCommand(
 
     case '/status': {
       const binding = router.resolve(msg.address);
+      const session = store.getSession(binding.codepilotSessionId);
+      const effectiveModel = (session?.model || binding.model || 'default').trim() || 'default';
+      const backend = (store.getSetting('bridge_llm_backend') || '').trim().toLowerCase();
+      const thinking = backend === 'codex'
+        ? (inferReasoningEffortForStatus(store, effectiveModel) || 'default')
+        : null;
       response = [
         '<b>Bridge Status</b>',
         '',
         `Session: <code>${binding.codepilotSessionId.slice(0, 8)}...</code>`,
         `CWD: <code>${escapeHtml(binding.workingDirectory || '~')}</code>`,
         `Mode: <b>${binding.mode}</b>`,
-        `Model: <code>${binding.model || 'default'}</code>`,
+        `Model: <code>${escapeHtml(effectiveModel)}</code>`,
+        ...(thinking ? [`Thinking: <code>${escapeHtml(thinking)}</code>`] : []),
       ].join('\n');
       break;
     }
@@ -1377,6 +1384,63 @@ async function handleCommand(
       replyToMessageId: msg.messageId,
     });
   }
+}
+
+// ── Status helpers ────────────────────────────────────────────
+
+type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+
+function parseReasoningEffortToken(text: string): ReasoningEffort | null {
+  const m = text.toLowerCase().match(/\b(xhigh|high|medium|low|minimal)\b/);
+  if (!m) return null;
+  return m[1] as ReasoningEffort;
+}
+
+/**
+ * 从 bridge_codex_cli_config（`key=value`，支持换行或 `;` 分隔）中提取 model_reasoning_effort。
+ * 仅用于 /status 展示，不参与实际运行逻辑（实际生效由 runner 传给 codex app-server）。
+ */
+function extractModelReasoningEffortFromCliConfig(raw: string | null): ReasoningEffort | null {
+  const text = (raw || '').trim();
+  if (!text) return null;
+
+  const splitByNewline = text.includes('\n') || text.includes('\r');
+  const parts = splitByNewline ? text.split(/\r?\n/) : text.split(';');
+
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq <= 0) continue;
+
+    const key = trimmed.slice(0, eq).trim();
+    const valueRaw = trimmed.slice(eq + 1).trim();
+    if (key !== 'model_reasoning_effort') continue;
+
+    const value = valueRaw.replace(/^['"]|['"]$/g, '').trim();
+    return parseReasoningEffortToken(value);
+  }
+
+  return null;
+}
+
+function inferReasoningEffortForStatus(
+  store: { getSetting(key: string): string | null },
+  modelLabel: string,
+): ReasoningEffort | null {
+  // 1) 显式覆盖：bridge_codex_cli_config 的 model_reasoning_effort
+  const fromCliConfig = extractModelReasoningEffortFromCliConfig(store.getSetting('bridge_codex_cli_config'));
+  if (fromCliConfig) return fromCliConfig;
+
+  // 2) 次优：bridge_codex_model_hint（常见：`gpt-5.2 xhigh`）
+  const hint = store.getSetting('bridge_codex_model_hint');
+  if (hint) {
+    const fromHint = parseReasoningEffortToken(hint);
+    if (fromHint) return fromHint;
+  }
+
+  // 3) 兜底：部分 Codex model displayName/description 可能自带强度
+  return parseReasoningEffortToken(modelLabel);
 }
 
 // ── SDK Session Update Logic ─────────────────────────────────
