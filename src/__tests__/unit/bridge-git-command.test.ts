@@ -2,14 +2,21 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   getGitCommitMessageExamples,
+  generateAutoConventionalCommitMessage,
   parseGitSlashCommandArgs,
   validateAndNormalizeConventionalCommitMessage,
 } from '../../lib/bridge/internal/git-command';
 
 describe('internal/git-command', () => {
-  it('parseGitSlashCommandArgs returns help when empty', () => {
-    assert.deepStrictEqual(parseGitSlashCommandArgs(''), { kind: 'help' });
-    assert.deepStrictEqual(parseGitSlashCommandArgs('   '), { kind: 'help' });
+  it('parseGitSlashCommandArgs returns auto when empty', () => {
+    assert.deepStrictEqual(parseGitSlashCommandArgs(''), { kind: 'auto' });
+    assert.deepStrictEqual(parseGitSlashCommandArgs('   '), { kind: 'auto' });
+  });
+
+  it('parseGitSlashCommandArgs returns help when args is help', () => {
+    assert.deepStrictEqual(parseGitSlashCommandArgs('help'), { kind: 'help' });
+    assert.deepStrictEqual(parseGitSlashCommandArgs('--help'), { kind: 'help' });
+    assert.deepStrictEqual(parseGitSlashCommandArgs('-h'), { kind: 'help' });
   });
 
   it('parseGitSlashCommandArgs returns push when args is push', () => {
@@ -76,5 +83,20 @@ describe('internal/git-command', () => {
     const v = validateAndNormalizeConventionalCommitMessage('feat(bridge ui): 增加命令');
     assert.equal(v.ok, false);
   });
-});
 
+  it('generateAutoConventionalCommitMessage returns a valid message', () => {
+    const msg = generateAutoConventionalCommitMessage(['src/lib/bridge/bridge-manager.ts']);
+    const v = validateAndNormalizeConventionalCommitMessage(msg);
+    assert.equal(v.ok, true);
+  });
+
+  it('generateAutoConventionalCommitMessage infers docs type for markdown-only changes', () => {
+    const msg = generateAutoConventionalCommitMessage(['README.md', 'docs/development.zh-CN.md']);
+    assert.ok(msg.startsWith('docs'));
+  });
+
+  it('generateAutoConventionalCommitMessage infers test type for test-only changes', () => {
+    const msg = generateAutoConventionalCommitMessage(['src/__tests__/unit/bridge-manager.test.ts']);
+    assert.ok(msg.startsWith('test'));
+  });
+});

@@ -29,6 +29,7 @@ import {
 import { computeSessionQueueTimeoutMs } from './internal/timeouts.js';
 import {
   getGitCommitMessageExamples,
+  generateAutoConventionalCommitMessage,
   parseGitSlashCommandArgs,
   validateAndNormalizeConventionalCommitMessage,
 } from './internal/git-command.js';
@@ -1027,7 +1028,8 @@ async function handleCommand(
         '/status - Show current status',
         '/sessions - List recent sessions',
         '/stop - Stop current session',
-        '/git <type>(<scope>): <subject> - Commit all changes',
+        '/git - Auto commit all changes',
+        '/git help - Show /git usage',
         '/git push - Push current branch',
         '/perm allow|allow_session|deny &lt;id&gt; - Respond to permission',
         '/help - Show this help',
@@ -1227,7 +1229,10 @@ async function handleCommand(
         response = [
           '<b>/git 用法</b>',
           '',
-          '提交（包含暂存区 + 工作区）：',
+          '自动提交（包含暂存区 + 工作区，自动生成 message）：',
+          '<code>/git</code>',
+          '',
+          '自定义提交 message：',
           '<code>/git type(scope): subject</code>',
           '',
           '推送当前分支：',
@@ -1256,13 +1261,18 @@ async function handleCommand(
         break;
       }
 
-      const validated = validateAndNormalizeConventionalCommitMessage(parsed.message);
-      if (!validated.ok) {
-        response = [
-          `<b>提交信息不符合规范：</b> ${escapeHtml(validated.error)}`,
-          validated.hint ? `\n<code>${escapeHtml(validated.hint)}</code>` : '',
-        ].join('').trim();
-        break;
+      // 手动 message：先校验，避免 message 不合规时产生 `git add -A` 的副作用
+      let manualCommitMessage: string | null = null;
+      if (parsed.kind === 'commit') {
+        const validated = validateAndNormalizeConventionalCommitMessage(parsed.message);
+        if (!validated.ok) {
+          response = [
+            `<b>提交信息不符合规范：</b> ${escapeHtml(validated.error)}`,
+            validated.hint ? `\n<code>${escapeHtml(validated.hint)}</code>` : '',
+          ].join('').trim();
+          break;
+        }
+        manualCommitMessage = validated.normalized;
       }
 
       try {
@@ -1275,12 +1285,23 @@ async function handleCommand(
         await runGit(['add', '-A']);
 
         const staged = await runGit(['diff', '--cached', '--name-only']);
-        if (!staged.stdout.trim()) {
+        const stagedFiles = staged.stdout
+          .split('\n')
+          .map((s) => s.trim())
+          .filter(Boolean);
+        if (stagedFiles.length === 0) {
           response = '暂存区为空，没有可提交的改动。';
           break;
         }
 
-        await runGit(['commit', '-m', validated.normalized]);
+        let commitMessage = '';
+        if (parsed.kind === 'auto') {
+          commitMessage = generateAutoConventionalCommitMessage(stagedFiles);
+        } else {
+          commitMessage = manualCommitMessage || '';
+        }
+
+        await runGit(['commit', '-m', commitMessage]);
 
         const hash = (await runGit(['rev-parse', '--short', 'HEAD'])).stdout.trim();
         const branch = (await runGit(['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim();
@@ -1289,6 +1310,7 @@ async function handleCommand(
           '<b>提交完成。</b>',
           `Branch: <code>${escapeHtml(branch || 'unknown')}</code>`,
           `Commit: <code>${escapeHtml(hash || '')}</code>`,
+          `Message: <code>${escapeHtml(commitMessage).slice(0, 300)}</code>`,
           '',
           '是否需要推送到远端？如需推送请执行：',
           '<code>/git push</code>',
@@ -1334,7 +1356,8 @@ async function handleCommand(
         '/status - Show current status',
         '/sessions - List recent sessions',
         '/stop - Stop current session',
-        '/git <type>(<scope>): <subject> - Commit all changes',
+        '/git - Auto commit all changes',
+        '/git help - Show /git usage',
         '/git push - Push current branch',
         '/perm allow|allow_session|deny &lt;id&gt; - Respond to permission request',
         '1/2/3 - Quick permission reply (Feishu/QQ, single pending)',

@@ -10,6 +10,7 @@
 export type GitSlashCommand =
   | { kind: 'help' }
   | { kind: 'push' }
+  | { kind: 'auto' }
   | { kind: 'commit'; message: string };
 
 const ALLOWED_TYPES = [
@@ -73,9 +74,92 @@ export function getGitCommitMessageExamples(): string[] {
 
 export function parseGitSlashCommandArgs(argsRaw: string): GitSlashCommand {
   const args = argsRaw.trim();
-  if (!args) return { kind: 'help' };
+  if (!args) return { kind: 'auto' };
+  if (args === 'help' || args === '--help' || args === '-h') return { kind: 'help' };
   if (args === 'push') return { kind: 'push' };
   return { kind: 'commit', message: args };
+}
+
+export function generateAutoConventionalCommitMessage(stagedFiles: string[]): string {
+  const files = stagedFiles
+    .map(f => f.replaceAll('\\', '/').trim())
+    .filter(Boolean);
+
+  // 兜底：确保永远能生成一个可通过校验的 message
+  if (files.length === 0) return 'chore: 更新代码';
+
+  const type = inferTypeFromFiles(files);
+  const scope = inferScopeFromFiles(files);
+  const subject = inferSubjectFromContext(type, scope);
+
+  const candidate = `${type}${scope ? `(${scope})` : ''}: ${subject}`;
+  const validated = validateAndNormalizeConventionalCommitMessage(candidate);
+  if (validated.ok) return validated.normalized;
+
+  const fallback = 'chore: 更新代码';
+  const fallbackValidated = validateAndNormalizeConventionalCommitMessage(fallback);
+  return fallbackValidated.ok ? fallbackValidated.normalized : fallback;
+}
+
+function inferTypeFromFiles(files: string[]): ConventionalCommitType {
+  const lowered = files.map(f => f.toLowerCase());
+
+  const isDocFile = (p: string) => p.endsWith('.md') || p.startsWith('docs/');
+  if (lowered.every(isDocFile)) return 'docs';
+
+  const isTestFile = (p: string) =>
+    p.includes('/__tests__/')
+    || p.startsWith('src/__tests__/')
+    || p.endsWith('.test.ts');
+  if (lowered.every(isTestFile)) return 'test';
+
+  const isCiFile = (p: string) => p.startsWith('.github/') || p.startsWith('.gitlab/') || p.startsWith('.circleci/');
+  if (lowered.some(isCiFile)) return 'ci';
+
+  const isBuildFile = (p: string) =>
+    p === 'package.json'
+    || p === 'package-lock.json'
+    || p === 'tsconfig.json'
+    || p === 'tsconfig.build.json';
+  if (lowered.some(isBuildFile)) return 'build';
+
+  return 'chore';
+}
+
+function inferScopeFromFiles(files: string[]): string | undefined {
+  const lowered = files.map(f => f.toLowerCase());
+  const scopes = new Set<string>();
+
+  for (const f of lowered) {
+    if (f.includes('src/lib/bridge/adapters/feishu')) scopes.add('feishu');
+    else if (f.includes('src/lib/bridge/adapters/telegram')) scopes.add('telegram');
+    else if (f.includes('src/lib/bridge/adapters/discord')) scopes.add('discord');
+    else if (f.includes('src/lib/bridge/adapters/qq')) scopes.add('qq');
+    else if (f.includes('src/lib/bridge/markdown/')) scopes.add('markdown');
+    else if (f.includes('src/lib/bridge/security/')) scopes.add('security');
+    else if (f.includes('src/lib/bridge/')) scopes.add('bridge');
+  }
+
+  if (scopes.size === 1) return [...scopes][0];
+  return undefined;
+}
+
+function inferSubjectFromContext(type: ConventionalCommitType, scope?: string): string {
+  if (type === 'docs') return '更新文档';
+  if (type === 'test') return '补充单元测试';
+  if (type === 'ci') return '更新 CI 配置';
+  if (type === 'build') return '更新构建配置';
+
+  switch (scope) {
+    case 'feishu': return '更新飞书适配器';
+    case 'telegram': return '更新 Telegram 适配器';
+    case 'discord': return '更新 Discord 适配器';
+    case 'qq': return '更新 QQ 适配器';
+    case 'markdown': return '更新 Markdown 渲染';
+    case 'security': return '更新安全校验';
+    case 'bridge': return '更新桥接逻辑';
+    default: return '更新代码';
+  }
 }
 
 export type ConventionalCommitValidation =
