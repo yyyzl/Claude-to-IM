@@ -48,7 +48,7 @@ const MAX_FILE_SIZE = 20 * 1024 * 1024;
 /** Feishu emoji type for typing indicator (same as Openclaw). */
 const TYPING_EMOJI = 'Typing';
 
-/** State for an active CardKit v2 streaming card. */
+/** State for an active CardKit v1 streaming card. */
 interface FeishuCardState {
   cardId: string;
   messageId: string;
@@ -351,7 +351,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     }
   }
 
-  // ── Streaming Card (CardKit v2) ────────────────────────────────
+  // ── Streaming Card (CardKit v1) ────────────────────────────────
 
   /**
    * Create a new streaming card and send it as a message.
@@ -374,7 +374,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (!this.restClient) return false;
 
     try {
-      // Step 1: Create card via CardKit v2
+      // Step 1: Create card via CardKit v1
       const cardBody = {
         schema: '2.0',
         config: {
@@ -393,7 +393,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         },
       };
 
-      const createResp = await (this.restClient as any).cardkit.v2.card.create({
+      const createResp = await (this.restClient as any).cardkit.v1.card.create({
         data: { type: 'card_json', data: JSON.stringify(cardBody) },
       });
       const cardId = createResp?.data?.card_id;
@@ -495,13 +495,13 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const cardId = state.cardId;
 
     // Fire-and-forget — streaming updates are non-critical
-    (this.restClient as any).cardkit.v2.card.streamContent({
-      path: { card_id: cardId },
+    (this.restClient as any).cardkit.v1.cardElement.content({
+      path: { card_id: cardId, element_id: 'streaming_content' },
       data: { content, sequence: seq },
     }).then(() => {
       state.lastUpdateAt = Date.now();
     }).catch((err: unknown) => {
-      console.warn('[feishu-adapter] streamContent failed:', err instanceof Error ? err.message : err);
+      console.warn('[feishu-adapter] cardElement.content failed:', err instanceof Error ? err.message : err);
     });
   }
 
@@ -540,14 +540,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     }
 
     try {
-      // Step 1: Close streaming mode
-      state.sequence++;
-      await (this.restClient as any).cardkit.v2.card.settings.streamingMode.set({
-        path: { card_id: state.cardId },
-        data: { streaming_mode: false, sequence: state.sequence },
-      });
-
-      // Step 2: Build and apply final card
+      // Build and apply final card
       const statusLabels: Record<string, string> = {
         completed: '✅ Completed',
         interrupted: '⚠️ Interrupted',
@@ -562,9 +555,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
       const finalCardJson = buildFinalCardJson(responseText, state.toolCalls, footer);
 
       state.sequence++;
-      await (this.restClient as any).cardkit.v2.card.update({
+      await (this.restClient as any).cardkit.v1.card.update({
         path: { card_id: state.cardId },
-        data: { type: 'card_json', data: finalCardJson, sequence: state.sequence },
+        data: { card: { type: 'card_json', data: finalCardJson }, sequence: state.sequence },
       });
 
       console.log(`[feishu-adapter] Card finalized: cardId=${state.cardId}, status=${status}, elapsed=${formatElapsed(elapsedMs)}`);

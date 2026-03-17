@@ -100,7 +100,7 @@ export abstract class BaseChannelAdapter {
   /**
    * Called on each text SSE event during streaming. Adapter can use this
    * to update a streaming card in real-time. Only called for adapters
-   * that support streaming cards (e.g. Feishu CardKit v2).
+   * that support streaming cards (e.g. Feishu CardKit).
    */
   onStreamText?(_chatId: string, _fullText: string): void;
 

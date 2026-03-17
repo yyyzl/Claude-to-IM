@@ -870,7 +870,7 @@ async function handleMessage(
     flushPreview(adapter, ps, cfg);
   } : undefined;
 
-  // ── Streaming card setup (Feishu CardKit v2) ──────────────────
+  // ── Streaming card setup (Feishu CardKit) ──────────────────
   // If the adapter supports streaming cards (e.g. Feishu), wire up
   // onStreamText, onToolEvent, and onStreamEnd callbacks.
   // These run in parallel with the existing preview system — Feishu
@@ -1245,20 +1245,18 @@ async function handleCommand(
  * Returns the new value to write, or null if no update is needed.
  *
  * Rules:
- * - If result has sdkSessionId AND no error → save the new ID
- * - If result has error (regardless of sdkSessionId) → clear to empty string
- * - Otherwise → no update needed
+ * - 如果 result 返回了 sdkSessionId（非空）→ 始终保存（即使本次 turn 失败）
+ * - 否则 → 不更新（保留现有 sdkSessionId）
+ *
+ * 说明：
+ * - “失败也保留 sdkSessionId”可让用户在失败后继续沿用同一上游上下文对话
+ * - 如需强制清空上下文，请用 /new 创建新会话（会清空 sdkSessionId）
  */
 export function computeSdkSessionUpdate(
   sdkSessionId: string | null | undefined,
-  hasError: boolean,
+  _hasError: boolean,
 ): string | null {
-  if (sdkSessionId && !hasError) {
-    return sdkSessionId;
-  }
-  if (hasError) {
-    return '';
-  }
+  if (typeof sdkSessionId === 'string' && sdkSessionId.trim()) return sdkSessionId.trim();
   return null;
 }
 
