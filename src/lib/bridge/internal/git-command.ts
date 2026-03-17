@@ -10,6 +10,9 @@
 export type GitSlashCommand =
   | { kind: 'help' }
   | { kind: 'push' }
+  | { kind: 'draft'; hint?: string }
+  | { kind: 'draft_commit' }
+  | { kind: 'draft_clear' }
   | { kind: 'auto' }
   | { kind: 'commit'; message: string };
 
@@ -77,6 +80,13 @@ export function parseGitSlashCommandArgs(argsRaw: string): GitSlashCommand {
   if (!args) return { kind: 'auto' };
   if (args === 'help' || args === '--help' || args === '-h') return { kind: 'help' };
   if (args === 'push') return { kind: 'push' };
+  if (args === 'draft') return { kind: 'draft' };
+  if (args === 'draft commit') return { kind: 'draft_commit' };
+  if (args === 'draft clear') return { kind: 'draft_clear' };
+  if (args.startsWith('draft ')) {
+    const hint = args.slice('draft '.length).trim();
+    return { kind: 'draft', hint: hint || undefined };
+  }
   return { kind: 'commit', message: args };
 }
 
@@ -89,8 +99,8 @@ export function generateAutoConventionalCommitMessage(stagedFiles: string[]): st
   if (files.length === 0) return 'chore: 更新代码';
 
   const type = inferTypeFromFiles(files);
-  const scope = inferScopeFromFiles(files);
-  const subject = inferSubjectFromContext(type, scope);
+  const scope = inferScopeFromFiles(files) || inferFallbackScopeFromTopLevel(files);
+  const subject = inferSubjectFromContext(type, scope, files.length);
 
   const candidate = `${type}${scope ? `(${scope})` : ''}: ${subject}`;
   const validated = validateAndNormalizeConventionalCommitMessage(candidate);
@@ -144,21 +154,50 @@ function inferScopeFromFiles(files: string[]): string | undefined {
   return undefined;
 }
 
-function inferSubjectFromContext(type: ConventionalCommitType, scope?: string): string {
-  if (type === 'docs') return '更新文档';
-  if (type === 'test') return '补充单元测试';
-  if (type === 'ci') return '更新 CI 配置';
-  if (type === 'build') return '更新构建配置';
+function inferFallbackScopeFromTopLevel(files: string[]): string | undefined {
+  const topLevels = new Set<string>();
+  let hasNonRoot = false;
+
+  for (const f of files) {
+    const parts = f.split('/').filter(Boolean);
+    if (parts.length >= 2) {
+      topLevels.add(parts[0]);
+      hasNonRoot = true;
+    }
+  }
+
+  if (!hasNonRoot) return 'root';
+  if (topLevels.size !== 1) return undefined;
+
+  const raw = [...topLevels][0] || '';
+  // Keep scope conservative: only allow ASCII path-like segments (validator enforces this too).
+  const cleaned = raw
+    .trim()
+    .replace(/[^a-z0-9._/-]+/gi, '-') // replace weird chars
+    .replace(/^-+/, '') // avoid invalid leading char
+    .slice(0, 40);
+
+  return cleaned || undefined;
+}
+
+function inferSubjectFromContext(type: ConventionalCommitType, scope: string | undefined, fileCount: number): string {
+  const countSuffix = fileCount >= 2 ? `（${fileCount} 个文件）` : '';
+
+  if (type === 'docs') return `更新文档${countSuffix}`;
+  if (type === 'test') return `补充单元测试${countSuffix}`;
+  if (type === 'ci') return `更新 CI 配置${countSuffix}`;
+  if (type === 'build') return `更新构建配置${countSuffix}`;
 
   switch (scope) {
-    case 'feishu': return '更新飞书适配器';
-    case 'telegram': return '更新 Telegram 适配器';
-    case 'discord': return '更新 Discord 适配器';
-    case 'qq': return '更新 QQ 适配器';
-    case 'markdown': return '更新 Markdown 渲染';
-    case 'security': return '更新安全校验';
-    case 'bridge': return '更新桥接逻辑';
-    default: return '更新代码';
+    case 'feishu': return `更新飞书适配器${countSuffix}`;
+    case 'telegram': return `更新 Telegram 适配器${countSuffix}`;
+    case 'discord': return `更新 Discord 适配器${countSuffix}`;
+    case 'qq': return `更新 QQ 适配器${countSuffix}`;
+    case 'markdown': return `更新 Markdown 渲染${countSuffix}`;
+    case 'security': return `更新安全校验${countSuffix}`;
+    case 'bridge': return `更新桥接逻辑${countSuffix}`;
+    case 'root': return `更新根目录文件${countSuffix}`;
+    default: return scope ? `更新 ${scope} 相关代码${countSuffix}` : `更新代码${countSuffix}`;
   }
 }
 

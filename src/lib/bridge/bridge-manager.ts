@@ -26,13 +26,14 @@ import {
   processWithSessionLock as processWithSessionLockInternal,
   SessionQueueTimeoutError,
 } from './internal/session-lock.js';
-import { computeSessionQueueTimeoutMs } from './internal/timeouts.js';
+import { computeSessionQueueTimeoutMs, DEFAULT_CODEX_TURN_TIMEOUT_MS } from './internal/timeouts.js';
 import {
   getGitCommitMessageExamples,
   generateAutoConventionalCommitMessage,
   parseGitSlashCommandArgs,
   validateAndNormalizeConventionalCommitMessage,
 } from './internal/git-command.js';
+import { generateGitCommitMessageWithLLM } from './internal/git-llm.js';
 import {
   validateWorkingDirectory,
   validateSessionId,
@@ -181,6 +182,15 @@ interface InputDebounceBuffer {
   timer: ReturnType<typeof setTimeout> | null;
 }
 
+interface GitDraftRecord {
+  createdAt: number;
+  cwd: string;
+  stagedFiles: string[];
+  diffStatText: string;
+  commitMessage: string;
+  summaryLines: string[];
+}
+
 interface BridgeManagerState {
   adapters: Map<string, BaseChannelAdapter>;
   adapterMeta: Map<string, AdapterMeta>;
@@ -188,10 +198,13 @@ interface BridgeManagerState {
   startedAt: string | null;
   loopAborts: Map<string, AbortController>;
   activeTasks: Map<string, AbortController>;
+  activeTaskStartedAt: Map<string, number>;
   /** Per-session processing chains for concurrency control */
   sessionLocks: Map<string, Promise<void>>;
   /** 普通消息的输入合并（debounce）缓冲：key = `${channelType}:${chatId}` */
   inputDebounceBuffers: Map<string, InputDebounceBuffer>;
+  /** /git draft 缓存：key = codepilotSessionId */
+  gitDrafts: Map<string, GitDraftRecord>;
   autoStartChecked: boolean;
 }
 
@@ -205,8 +218,10 @@ function getState(): BridgeManagerState {
       startedAt: null,
       loopAborts: new Map(),
       activeTasks: new Map(),
+      activeTaskStartedAt: new Map(),
       sessionLocks: new Map(),
       inputDebounceBuffers: new Map(),
+      gitDrafts: new Map(),
       autoStartChecked: false,
     };
   }
@@ -214,9 +229,17 @@ function getState(): BridgeManagerState {
   if (!g[GLOBAL_KEY].sessionLocks) {
     g[GLOBAL_KEY].sessionLocks = new Map();
   }
+  // Backfill activeTaskStartedAt for states created before this field existed
+  if (!g[GLOBAL_KEY].activeTaskStartedAt) {
+    g[GLOBAL_KEY].activeTaskStartedAt = new Map();
+  }
   // Backfill debounce buffers for states created before this field existed
   if (!g[GLOBAL_KEY].inputDebounceBuffers) {
     g[GLOBAL_KEY].inputDebounceBuffers = new Map();
+  }
+  // Backfill gitDrafts for states created before this field existed
+  if (!g[GLOBAL_KEY].gitDrafts) {
+    g[GLOBAL_KEY].gitDrafts = new Map();
   }
   return g[GLOBAL_KEY];
 }
@@ -241,6 +264,22 @@ function parsePositiveInt(raw: string | null): number | null {
   const n = parseInt(raw.trim(), 10);
   if (!Number.isFinite(n)) return null;
   return n > 0 ? n : 0;
+}
+
+function parseBooleanSetting(raw: string | null, defaultValue: boolean): boolean {
+  if (raw == null) return defaultValue;
+  const v = raw.trim().toLowerCase();
+  if (!v) return defaultValue;
+  if (v === '1' || v === 'true' || v === 'yes' || v === 'on') return true;
+  if (v === '0' || v === 'false' || v === 'no' || v === 'off') return false;
+  return defaultValue;
+}
+
+function formatTimeoutMs(ms: number): string {
+  if (ms <= 0) return 'disabled';
+  const mins = Math.max(1, Math.ceil(ms / 60_000));
+  if (mins >= 120) return `${Math.ceil(mins / 60)}h`;
+  return `${mins}min`;
 }
 
 /**
@@ -787,6 +826,7 @@ async function handleMessage(
   const taskAbort = new AbortController();
   const state = getState();
   state.activeTasks.set(binding.codepilotSessionId, taskAbort);
+  state.activeTaskStartedAt.set(binding.codepilotSessionId, Date.now());
 
   // ── Streaming preview setup ──────────────────────────────────
   let previewState: StreamingPreviewState | null = null;
@@ -969,6 +1009,7 @@ async function handleMessage(
     }
 
     state.activeTasks.delete(binding.codepilotSessionId);
+    state.activeTaskStartedAt.delete(binding.codepilotSessionId);
     // Notify adapter that message processing ended
     adapter.onMessageEnd?.(msg.address.chatId);
     // Commit the offset only after full processing (success or failure)
@@ -984,7 +1025,7 @@ async function handleCommand(
   msg: InboundMessage,
   text: string,
 ): Promise<void> {
-  const { store } = getBridgeContext();
+  const { store, llm } = getBridgeContext();
 
   // Extract command and args (handle /command@botname format)
   const parts = text.split(/\s+/);
@@ -1030,6 +1071,7 @@ async function handleCommand(
         '/stop - Stop current session',
         '/git - Auto commit all changes',
         '/git help - Show /git usage',
+        '/git draft - Generate commit draft (LLM)',
         '/git push - Push current branch',
         '/perm allow|allow_session|deny &lt;id&gt; - Respond to permission',
         '/help - Show this help',
@@ -1039,11 +1081,12 @@ async function handleCommand(
     case '/new': {
       // Abort any running task on the current session before creating a new one
       const oldBinding = router.resolve(msg.address);
-      const st = getState();
-      const oldTask = st.activeTasks.get(oldBinding.codepilotSessionId);
+      const state = getState();
+      const oldTask = state.activeTasks.get(oldBinding.codepilotSessionId);
       if (oldTask) {
         oldTask.abort();
-        st.activeTasks.delete(oldBinding.codepilotSessionId);
+        state.activeTasks.delete(oldBinding.codepilotSessionId);
+        state.activeTaskStartedAt.delete(oldBinding.codepilotSessionId);
       }
 
       let workDir: string | undefined;
@@ -1065,20 +1108,49 @@ async function handleCommand(
         if (taskAbort) {
           taskAbort.abort();
           st.activeTasks.delete(existing.codepilotSessionId);
+          st.activeTaskStartedAt.delete(existing.codepilotSessionId);
           stopped = true;
         }
       }
 
       const binding = router.startNewSession(msg.address, workDir ? { workingDirectory: workDir } : {});
-      const lines = [
-        'New session created.',
+
+      const session = store.getSession(binding.codepilotSessionId);
+      const effectiveModel = (session?.model || binding.model || 'default').trim() || 'default';
+      const backend = (store.getSetting('bridge_llm_backend') || '').trim().toLowerCase();
+      const thinking = backend === 'codex'
+        ? (inferReasoningEffortForStatus(store, effectiveModel) || 'default')
+        : null;
+
+      const st = getState();
+      const isRunningTask = st.activeTasks.has(binding.codepilotSessionId);
+      const startedAtMs = st.activeTaskStartedAt.get(binding.codepilotSessionId) ?? null;
+      const runningForMs = (isRunningTask && startedAtMs) ? (Date.now() - startedAtMs) : null;
+      const hasSessionLock = st.sessionLocks.has(binding.codepilotSessionId);
+
+      const turnTimeoutSetting = parsePositiveInt(store.getSetting('bridge_codex_turn_timeout_ms'));
+      const idleTimeoutSetting = parsePositiveInt(store.getSetting('bridge_codex_turn_idle_timeout_ms'));
+      const queueTimeoutSetting = parsePositiveInt(store.getSetting('bridge_session_queue_timeout_ms'));
+      const effectiveTurnTimeoutMs = (turnTimeoutSetting != null) ? turnTimeoutSetting : DEFAULT_CODEX_TURN_TIMEOUT_MS;
+      const effectiveIdleTimeoutMs = (idleTimeoutSetting != null) ? idleTimeoutSetting : 0;
+      const effectiveQueueTimeoutMs = computeSessionQueueTimeoutMs(queueTimeoutSetting, turnTimeoutSetting);
+
+      response = [
+        '<b>New session created.</b>',
+        '',
         `Session: <code>${binding.codepilotSessionId.slice(0, 8)}...</code>`,
         `CWD: <code>${escapeHtml(binding.workingDirectory || '~')}</code>`,
         `Mode: <b>${binding.mode}</b>`,
-        `Model: <code>${escapeHtml(binding.model || 'default')}</code>`,
+        `Model: <code>${escapeHtml(effectiveModel)}</code>`,
+        ...(thinking ? [`Thinking: <code>${escapeHtml(thinking)}</code>`] : []),
+        `Backend: <code>${escapeHtml(backend || 'default')}</code>`,
+        `Task: ${isRunningTask ? '<b>running</b>' : '<b>idle</b>'}${runningForMs != null ? ` (<code>${formatTimeoutMs(runningForMs)}</code>)` : ''}`,
+        `Session lock: ${hasSessionLock ? '<b>busy</b>' : '<b>free</b>'}`,
+        `Turn timeout: <code>${formatTimeoutMs(effectiveTurnTimeoutMs)}</code>`,
+        `Turn idle timeout: <code>${formatTimeoutMs(effectiveIdleTimeoutMs)}</code>`,
+        `Queue timeout: <code>${formatTimeoutMs(effectiveQueueTimeoutMs)}</code>`,
         stopped ? '<i>Stopped previous running task.</i>' : '',
-      ].filter(Boolean);
-      response = lines.join('\n');
+      ].filter(Boolean).join('\n');
       break;
     }
 
@@ -1135,6 +1207,20 @@ async function handleCommand(
       const thinking = backend === 'codex'
         ? (inferReasoningEffortForStatus(store, effectiveModel) || 'default')
         : null;
+
+      const st = getState();
+      const isRunningTask = st.activeTasks.has(binding.codepilotSessionId);
+      const startedAtMs = st.activeTaskStartedAt.get(binding.codepilotSessionId) ?? null;
+      const runningForMs = (isRunningTask && startedAtMs) ? (Date.now() - startedAtMs) : null;
+      const hasSessionLock = st.sessionLocks.has(binding.codepilotSessionId);
+
+      const turnTimeoutSetting = parsePositiveInt(store.getSetting('bridge_codex_turn_timeout_ms'));
+      const idleTimeoutSetting = parsePositiveInt(store.getSetting('bridge_codex_turn_idle_timeout_ms'));
+      const queueTimeoutSetting = parsePositiveInt(store.getSetting('bridge_session_queue_timeout_ms'));
+      const effectiveTurnTimeoutMs = (turnTimeoutSetting != null) ? turnTimeoutSetting : DEFAULT_CODEX_TURN_TIMEOUT_MS;
+      const effectiveIdleTimeoutMs = (idleTimeoutSetting != null) ? idleTimeoutSetting : 0;
+      const effectiveQueueTimeoutMs = computeSessionQueueTimeoutMs(queueTimeoutSetting, turnTimeoutSetting);
+
       response = [
         '<b>Bridge Status</b>',
         '',
@@ -1143,6 +1229,12 @@ async function handleCommand(
         `Mode: <b>${binding.mode}</b>`,
         `Model: <code>${escapeHtml(effectiveModel)}</code>`,
         ...(thinking ? [`Thinking: <code>${escapeHtml(thinking)}</code>`] : []),
+        `Backend: <code>${escapeHtml(backend || 'default')}</code>`,
+        `Task: ${isRunningTask ? '<b>running</b>' : '<b>idle</b>'}${runningForMs != null ? ` (<code>${formatTimeoutMs(runningForMs)}</code>)` : ''}`,
+        `Session lock: ${hasSessionLock ? '<b>busy</b>' : '<b>free</b>'}`,
+        `Turn timeout: <code>${formatTimeoutMs(effectiveTurnTimeoutMs)}</code>`,
+        `Turn idle timeout: <code>${formatTimeoutMs(effectiveIdleTimeoutMs)}</code>`,
+        `Queue timeout: <code>${formatTimeoutMs(effectiveQueueTimeoutMs)}</code>`,
       ].join('\n');
       break;
     }
@@ -1169,6 +1261,7 @@ async function handleCommand(
       if (taskAbort) {
         taskAbort.abort();
         st.activeTasks.delete(binding.codepilotSessionId);
+        st.activeTaskStartedAt.delete(binding.codepilotSessionId);
         response = 'Stopping current task...';
       } else {
         response = 'No task is currently running.';
@@ -1242,11 +1335,25 @@ async function handleCommand(
           '自定义提交 message：',
           '<code>/git type(scope): subject</code>',
           '',
+          '生成 draft（LLM 生成 message+摘要，不提交，可选附带提示）：',
+          '<code>/git draft [提示]</code>',
+          '',
+          '确认提交上一次 draft：',
+          '<code>/git draft commit</code>',
+          '',
+          '清除 draft：',
+          '<code>/git draft clear</code>',
+          '',
           '推送当前分支：',
           '<code>/git push</code>',
           '',
           '提交信息示例：',
           ...examples.map(e => `- <code>${escapeHtml(e)}</code>`),
+          '',
+          '可选配置（.env.bridge.local）：',
+          '- <code>bridge_git_llm_enabled=true/false</code>（默认 true，生成提交信息与语义摘要）',
+          '- <code>bridge_git_llm_include_patch=true/false</code>（默认 false，让模型参考 diff 片段）',
+          '- <code>bridge_git_llm_required=true/false</code>（默认 true，开启后：LLM 必须生成提交信息/语义摘要，否则不提交）',
         ].join('\n');
         break;
       }
@@ -1265,6 +1372,313 @@ async function handleCommand(
             `<code>${escapeHtml(err instanceof Error ? err.message : String(err)).slice(0, 1800)}</code>`,
           ].join('\n');
         }
+        break;
+      }
+
+      if (parsed.kind === 'draft_clear') {
+        const st = getState();
+        st.gitDrafts.delete(binding.codepilotSessionId);
+        response = '<b>Draft 已清除。</b>';
+        break;
+      }
+
+      if (parsed.kind === 'draft_commit') {
+        const st = getState();
+        const draft = st.gitDrafts.get(binding.codepilotSessionId);
+        if (!draft) {
+          response = [
+            '<b>没有可提交的 draft。</b>',
+            '请先执行 <code>/git draft</code> 生成提交草稿。',
+          ].join('\n');
+          break;
+        }
+
+        try {
+          const stagedNow = await runGit(['diff', '--cached', '--name-only']);
+          const stagedFilesNow = stagedNow.stdout
+            .split('\n')
+            .map((s) => s.trim())
+            .filter(Boolean);
+
+          if (stagedFilesNow.length === 0) {
+            st.gitDrafts.delete(binding.codepilotSessionId);
+            response = [
+              '<b>draft 已失效。</b>',
+              '原因：当前暂存区为空。',
+              '请重新执行 <code>/git draft</code>。',
+            ].join('\n');
+            break;
+          }
+
+          let diffStatNow = '';
+          try {
+            diffStatNow = (await runGit(['diff', '--cached', '--stat'])).stdout.trim();
+          } catch {
+            diffStatNow = '';
+          }
+
+          const normalizeList = (arr: string[]) => arr.map((s) => s.replaceAll('\\', '/').trim()).filter(Boolean).sort();
+          const sameFiles = normalizeList(stagedFilesNow).join('\n') === normalizeList(draft.stagedFiles).join('\n');
+          const sameStat = (diffStatNow || '').trim() === (draft.diffStatText || '').trim();
+          if (!sameFiles || !sameStat) {
+            response = [
+              '<b>提交已取消。</b>',
+              '原因：暂存区内容与 draft 不一致（可能你又改/又暂存了其他内容）。',
+              '',
+              '可选：',
+              '- 重新执行 <code>/git draft</code> 生成新的草稿',
+              '- 或执行 <code>/git draft clear</code> 清除草稿',
+            ].join('\n');
+            break;
+          }
+
+          await runGit(['commit', '-m', draft.commitMessage]);
+          st.gitDrafts.delete(binding.codepilotSessionId);
+
+          const hash = (await runGit(['rev-parse', '--short', 'HEAD'])).stdout.trim();
+          const branch = (await runGit(['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim();
+
+          const changeSummary = (() => {
+            const diffStatText = (draft.diffStatText || '').trim();
+            if (diffStatText) {
+              const allLines = diffStatText.split('\n').map(l => l.trimEnd()).filter(Boolean);
+              const maxLines = 12;
+              let shownLines = allLines;
+              if (allLines.length > maxLines) {
+                const headCount = Math.max(1, maxLines - 2);
+                const omitted = allLines.length - headCount - 1;
+                const tail = allLines[allLines.length - 1];
+                shownLines = [
+                  ...allLines.slice(0, headCount),
+                  `...（已省略 ${omitted} 行）`,
+                  tail,
+                ];
+              }
+              const raw = shownLines.join('\n');
+              const clipped = raw.length > 1800 ? raw.slice(0, 1800) + '…' : raw;
+              return [
+                `<b>变更摘要</b>`,
+                `Files: <code>${draft.stagedFiles.length}</code>`,
+                `<code>${escapeHtml(clipped)}</code>`,
+              ].join('\n');
+            }
+
+            const maxFiles = 20;
+            const shown = draft.stagedFiles.slice(0, maxFiles);
+            const omitted = draft.stagedFiles.length - shown.length;
+            const raw = shown.join('\n') + (omitted > 0 ? `\n...（已省略 ${omitted} 个文件）` : '');
+            const clipped = raw.length > 1800 ? raw.slice(0, 1800) + '…' : raw;
+            return [
+              `<b>变更摘要</b>`,
+              `Files: <code>${draft.stagedFiles.length}</code>`,
+              `<code>${escapeHtml(clipped)}</code>`,
+            ].join('\n');
+          })();
+
+          const semanticSummaryBlock = (() => {
+            const lines = (draft.summaryLines || [])
+              .map((l) => l.replace(/^\s*[-*]\s*/, '').trim())
+              .filter(Boolean)
+              .slice(0, 5)
+              .map((l) => `- ${escapeHtml(l).slice(0, 200)}`);
+            if (lines.length === 0) return null;
+            return ['<b>语义摘要</b>', ...lines].join('\n');
+          })();
+
+          response = [
+            '<b>提交完成。</b>',
+            `Branch: <code>${escapeHtml(branch || 'unknown')}</code>`,
+            `Commit: <code>${escapeHtml(hash || '')}</code>`,
+            `Message: <code>${escapeHtml(draft.commitMessage).slice(0, 300)}</code>`,
+            '<i>LLM：提交信息/语义摘要来自 draft（已确认后提交）</i>',
+            '',
+            changeSummary,
+            ...(semanticSummaryBlock ? ['', semanticSummaryBlock] : []),
+            '',
+            '是否需要推送到远端？如需推送请执行：',
+            '<code>/git push</code>',
+          ].join('\n');
+        } catch (err) {
+          response = [
+            '<b>提交失败：</b>',
+            `<code>${escapeHtml(err instanceof Error ? err.message : String(err)).slice(0, 1800)}</code>`,
+          ].join('\n');
+        }
+
+        break;
+      }
+
+      if (parsed.kind === 'draft') {
+        const gitLlmEnabled = parseBooleanSetting(store.getSetting('bridge_git_llm_enabled'), true);
+        const gitLlmIncludePatch = parseBooleanSetting(store.getSetting('bridge_git_llm_include_patch'), false);
+        const timeoutSetting = parsePositiveInt(store.getSetting('bridge_git_llm_timeout_ms'));
+        const gitLlmTimeoutMs = timeoutSetting && timeoutSetting > 0 ? timeoutSetting : 45_000;
+        const maxPatchSetting = parsePositiveInt(store.getSetting('bridge_git_llm_max_patch_chars'));
+        const gitLlmMaxPatchChars = maxPatchSetting != null ? Math.max(0, maxPatchSetting) : 12_000;
+
+        if (!gitLlmEnabled) {
+          response = [
+            '<b>Draft 生成失败。</b>',
+            '原因：当前已关闭 LLM 生成（bridge_git_llm_enabled=false）。',
+            '请在 .env.bridge.local 打开后重试：<code>bridge_git_llm_enabled=true</code>',
+          ].join('\n');
+          break;
+        }
+
+        try {
+          const status = await runGit(['status', '--porcelain']);
+          if (!status.stdout.trim()) {
+            response = '没有可提交的改动。';
+            break;
+          }
+
+          // draft 的目标就是“先看草稿再确认提交”，因此这里会暂存全部改动（与 /git 行为一致）。
+          await runGit(['add', '-A']);
+
+          const staged = await runGit(['diff', '--cached', '--name-only']);
+          const stagedFiles = staged.stdout
+            .split('\n')
+            .map((s) => s.trim())
+            .filter(Boolean);
+          if (stagedFiles.length === 0) {
+            response = '暂存区为空，没有可提交的改动。';
+            break;
+          }
+
+          let diffStatText = '';
+          let changeSummary: string | null = null;
+          try {
+            const stat = (await runGit(['diff', '--cached', '--stat'])).stdout.trim();
+            diffStatText = stat;
+            if (stat) {
+              const allLines = stat.split('\n').map(l => l.trimEnd()).filter(Boolean);
+              const maxLines = 12;
+              let shownLines = allLines;
+              if (allLines.length > maxLines) {
+                const headCount = Math.max(1, maxLines - 2);
+                const omitted = allLines.length - headCount - 1;
+                const tail = allLines[allLines.length - 1];
+                shownLines = [
+                  ...allLines.slice(0, headCount),
+                  `...（已省略 ${omitted} 行）`,
+                  tail,
+                ];
+              }
+              const raw = shownLines.join('\n');
+              const clipped = raw.length > 1800 ? raw.slice(0, 1800) + '…' : raw;
+              changeSummary = [
+                `<b>变更摘要</b>`,
+                `Files: <code>${stagedFiles.length}</code>`,
+                `<code>${escapeHtml(clipped)}</code>`,
+              ].join('\n');
+            } else {
+              const maxFiles = 20;
+              const shown = stagedFiles.slice(0, maxFiles);
+              const omitted = stagedFiles.length - shown.length;
+              const raw = shown.join('\n') + (omitted > 0 ? `\n...（已省略 ${omitted} 个文件）` : '');
+              const clipped = raw.length > 1800 ? raw.slice(0, 1800) + '…' : raw;
+              changeSummary = [
+                `<b>变更摘要</b>`,
+                `Files: <code>${stagedFiles.length}</code>`,
+                `<code>${escapeHtml(clipped)}</code>`,
+              ].join('\n');
+            }
+          } catch {
+            changeSummary = null;
+          }
+
+          // Resolve model for draft LLM
+          const sessionForModel = store.getSession(binding.codepilotSessionId);
+          const effectiveModelForGit = (sessionForModel?.model || binding.model || store.getSetting('default_model') || 'default').trim() || 'default';
+
+          let diffPatchText: string | undefined;
+          if (gitLlmIncludePatch && gitLlmMaxPatchChars > 0) {
+            const rawPatch = (await runGit(['diff', '--cached', '--patch', '--unified=1', '--no-color'])).stdout;
+            const trimmed = (rawPatch || '').trim();
+            if (trimmed) {
+              diffPatchText = trimmed.length > gitLlmMaxPatchChars ? trimmed.slice(0, gitLlmMaxPatchChars) + '\n…(truncated)…' : trimmed;
+            }
+          }
+
+          const llmOut = await generateGitCommitMessageWithLLM({
+            llm,
+            sessionId: `${binding.codepilotSessionId}:git-draft`,
+            model: effectiveModelForGit,
+            workingDirectory: cwd,
+            stagedFiles,
+            diffStat: diffStatText,
+            diffPatch: diffPatchText,
+            timeoutMs: gitLlmTimeoutMs,
+            userHint: parsed.hint,
+          });
+
+          const v = llmOut.commitMessage ? validateAndNormalizeConventionalCommitMessage(llmOut.commitMessage) : null;
+          if (!v || !v.ok) {
+            response = [
+              '<b>Draft 生成失败。</b>',
+              '原因：LLM 未生成合规的 Conventional Commit 提交信息。',
+              llmOut.commitMessage ? `<code>${escapeHtml(String(llmOut.commitMessage)).slice(0, 300)}</code>` : '<code>(empty)</code>',
+              '',
+              '可选：',
+              '- 重新执行 <code>/git draft</code> 再试一次',
+              '- 或手动提交：<code>/git feat(scope): 增加xxx</code>',
+            ].join('\n');
+            break;
+          }
+
+          const summaryLines = (llmOut.summaryLines || []).map((s) => s.trim()).filter(Boolean);
+          if (summaryLines.length === 0) {
+            response = [
+              '<b>Draft 生成失败。</b>',
+              '原因：LLM 未返回语义摘要。',
+              '',
+              '可选：',
+              '- 重新执行 <code>/git draft</code> 再试一次',
+            ].join('\n');
+            break;
+          }
+
+          const commitMessage = v.normalized;
+          const st = getState();
+          st.gitDrafts.set(binding.codepilotSessionId, {
+            createdAt: Date.now(),
+            cwd,
+            stagedFiles,
+            diffStatText,
+            commitMessage,
+            summaryLines,
+          });
+
+          const semanticSummaryBlock = (() => {
+            const lines = summaryLines
+              .map((l) => l.replace(/^\s*[-*]\s*/, '').trim())
+              .filter(Boolean)
+              .slice(0, 5)
+              .map((l) => `- ${escapeHtml(l).slice(0, 200)}`);
+            if (lines.length === 0) return null;
+            return ['<b>语义摘要</b>', ...lines].join('\n');
+          })();
+
+          response = [
+            '<b>Draft 已生成（未提交）。</b>',
+            `Message: <code>${escapeHtml(commitMessage).slice(0, 300)}</code>`,
+            ...(parsed.hint ? [`Hint: <code>${escapeHtml(parsed.hint).slice(0, 200)}</code>`] : []),
+            ...(changeSummary ? ['', changeSummary] : []),
+            ...(semanticSummaryBlock ? ['', semanticSummaryBlock] : []),
+            '',
+            '确认提交请执行：',
+            '<code>/git draft commit</code>',
+            '',
+            '不想用了可执行：',
+            '<code>/git draft clear</code>',
+          ].join('\n');
+        } catch (err) {
+          response = [
+            '<b>Draft 生成失败：</b>',
+            `<code>${escapeHtml(err instanceof Error ? err.message : String(err)).slice(0, 1800)}</code>`,
+          ].join('\n');
+        }
+
         break;
       }
 
@@ -1301,26 +1715,189 @@ async function handleCommand(
           break;
         }
 
+        // Best-effort build a human-friendly summary before commit (after commit, --cached diff is empty).
+        let diffStatText = '';
+        let changeSummary: string | null = null;
+        try {
+          const stat = (await runGit(['diff', '--cached', '--stat'])).stdout.trim();
+          diffStatText = stat;
+          if (stat) {
+            const allLines = stat.split('\n').map(l => l.trimEnd()).filter(Boolean);
+            const maxLines = 12; // keep IM message compact
+            let shownLines = allLines;
+            if (allLines.length > maxLines) {
+              const headCount = Math.max(1, maxLines - 2);
+              const omitted = allLines.length - headCount - 1;
+              const tail = allLines[allLines.length - 1];
+              shownLines = [
+                ...allLines.slice(0, headCount),
+                `...（已省略 ${omitted} 行）`,
+                tail,
+              ];
+            }
+            const raw = shownLines.join('\n');
+            const clipped = raw.length > 1800 ? raw.slice(0, 1800) + '…' : raw;
+            changeSummary = [
+              `<b>变更摘要</b>`,
+              `Files: <code>${stagedFiles.length}</code>`,
+              `<code>${escapeHtml(clipped)}</code>`,
+            ].join('\n');
+          } else {
+            const maxFiles = 20;
+            const shown = stagedFiles.slice(0, maxFiles);
+            const omitted = stagedFiles.length - shown.length;
+            const raw = shown.join('\n') + (omitted > 0 ? `\n...（已省略 ${omitted} 个文件）` : '');
+            const clipped = raw.length > 1800 ? raw.slice(0, 1800) + '…' : raw;
+            changeSummary = [
+              `<b>变更摘要</b>`,
+              `Files: <code>${stagedFiles.length}</code>`,
+              `<code>${escapeHtml(clipped)}</code>`,
+            ].join('\n');
+          }
+        } catch {
+          // ignore (do not block commit)
+          changeSummary = null;
+        }
+
+        // Optional: ask LLM to generate a better Conventional Commit message + semantic summary.
+        const gitLlmEnabled = parseBooleanSetting(store.getSetting('bridge_git_llm_enabled'), true);
+        const gitLlmRequired = parseBooleanSetting(store.getSetting('bridge_git_llm_required'), true);
+        const gitLlmIncludePatch = parseBooleanSetting(store.getSetting('bridge_git_llm_include_patch'), false);
+        const timeoutSetting = parsePositiveInt(store.getSetting('bridge_git_llm_timeout_ms'));
+        const gitLlmTimeoutMs = timeoutSetting && timeoutSetting > 0 ? timeoutSetting : 45_000;
+        const maxPatchSetting = parsePositiveInt(store.getSetting('bridge_git_llm_max_patch_chars'));
+        const gitLlmMaxPatchChars = maxPatchSetting != null ? Math.max(0, maxPatchSetting) : 12_000;
+
+        // Resolve a model for the LLM helper (isolated, does not resume chat context).
+        const sessionForModel = store.getSession(binding.codepilotSessionId);
+        const effectiveModelForGit = (sessionForModel?.model || binding.model || store.getSetting('default_model') || 'default').trim() || 'default';
+
+        let llmSummaryLines: string[] = [];
+        let llmCommitMessageCandidate: string | null = null;
+        let llmError: string | null = null;
+        if (gitLlmEnabled) {
+          try {
+            // Fetch patch lazily only when enabled.
+            let diffPatchText: string | undefined;
+            if (gitLlmIncludePatch && gitLlmMaxPatchChars > 0) {
+              const rawPatch = (await runGit(['diff', '--cached', '--patch', '--unified=1', '--no-color'])).stdout;
+              const trimmed = (rawPatch || '').trim();
+              if (trimmed) {
+                diffPatchText = trimmed.length > gitLlmMaxPatchChars ? trimmed.slice(0, gitLlmMaxPatchChars) + '\n…(truncated)…' : trimmed;
+              }
+            }
+
+            const llmOut = await generateGitCommitMessageWithLLM({
+              llm,
+              sessionId: `${binding.codepilotSessionId}:git`,
+              model: effectiveModelForGit,
+              workingDirectory: cwd,
+              stagedFiles,
+              diffStat: diffStatText,
+              diffPatch: diffPatchText,
+              timeoutMs: gitLlmTimeoutMs,
+            });
+
+            llmSummaryLines = llmOut.summaryLines || [];
+            llmCommitMessageCandidate = llmOut.commitMessage;
+          } catch (e) {
+            llmError = e instanceof Error ? e.message : String(e);
+          }
+        }
+
         let commitMessage = '';
+        let usedLlmCommitMessage = false;
         if (parsed.kind === 'auto') {
-          commitMessage = generateAutoConventionalCommitMessage(stagedFiles);
+          let normalizedFromLlm: string | null = null;
+          if (llmCommitMessageCandidate) {
+            const v = validateAndNormalizeConventionalCommitMessage(llmCommitMessageCandidate);
+            if (v.ok) normalizedFromLlm = v.normalized;
+          }
+
+          if (normalizedFromLlm) {
+            commitMessage = normalizedFromLlm;
+            usedLlmCommitMessage = true;
+          } else if (gitLlmEnabled && gitLlmRequired) {
+            const reason = llmError
+              ? `LLM 生成失败：${llmError}`
+              : (llmCommitMessageCandidate ? `LLM 提议的提交信息不合规：${llmCommitMessageCandidate}` : 'LLM 未返回提交信息');
+            response = [
+              '<b>提交已取消。</b>',
+              '原因：已启用 LLM 且要求必须生成合规提交信息，但本次未满足。',
+              `<code>${escapeHtml(reason).slice(0, 1800)}</code>`,
+              '',
+              '可选：',
+              '- 重新执行 <code>/git</code> 再试一次',
+              '- 或在 .env.bridge.local 设置 <code>bridge_git_llm_required=false</code> 允许回退',
+              '- 或设置 <code>bridge_git_llm_enabled=false</code> 关闭 LLM 生成',
+            ].join('\n');
+            break;
+          } else {
+            commitMessage = generateAutoConventionalCommitMessage(stagedFiles);
+          }
         } else {
           commitMessage = manualCommitMessage || '';
         }
 
+        // 当要求“必须 LLM 参与”时，也要求给出至少 1 条语义摘要（避免仅靠工程兜底，满足用户强诉求）。
+        if (gitLlmEnabled && gitLlmRequired) {
+          const hasSemanticSummary = (llmSummaryLines || []).some((l) => String(l || '').trim());
+          if (!hasSemanticSummary) {
+            const reason = llmError ? `LLM 生成失败：${llmError}` : 'LLM 未返回语义摘要';
+            response = [
+              '<b>提交已取消。</b>',
+              '原因：已启用 LLM 且要求必须生成语义摘要，但本次未满足。',
+              `<code>${escapeHtml(reason).slice(0, 1800)}</code>`,
+              '',
+              '可选：',
+              '- 重新执行 <code>/git</code> 再试一次',
+              '- 或在 .env.bridge.local 设置 <code>bridge_git_llm_required=false</code> 允许回退',
+              '- 或设置 <code>bridge_git_llm_enabled=false</code> 关闭 LLM 生成',
+            ].join('\n');
+            break;
+          }
+        }
+
         await runGit(['commit', '-m', commitMessage]);
+        // 提交完成后清理 draft，避免误用过期草稿。
+        try { getState().gitDrafts.delete(binding.codepilotSessionId); } catch { /* 忽略 */ }
 
         const hash = (await runGit(['rev-parse', '--short', 'HEAD'])).stdout.trim();
         const branch = (await runGit(['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim();
+
+        const semanticSummaryBlock = (() => {
+          const lines = (llmSummaryLines || [])
+            .map((l) => l.replace(/^\s*[-*]\s*/, '').trim())
+            .filter(Boolean)
+            .slice(0, 5)
+            .map((l) => `- ${escapeHtml(l).slice(0, 200)}`);
+          if (lines.length === 0) return null;
+          return ['<b>语义摘要</b>', ...lines].join('\n');
+        })();
+
+        const llmParticipationLine = (() => {
+          if (!gitLlmEnabled) return null;
+          const messageSource = parsed.kind === 'auto'
+            ? (usedLlmCommitMessage ? '提交信息由 LLM 生成' : '提交信息回退为本地推断')
+            : '提交信息为手动输入';
+          const summarySource = semanticSummaryBlock ? '语义摘要由 LLM 生成' : '语义摘要未生成';
+          return `<i>LLM：${escapeHtml(messageSource)}；${escapeHtml(summarySource)}</i>`;
+        })();
 
         response = [
           '<b>提交完成。</b>',
           `Branch: <code>${escapeHtml(branch || 'unknown')}</code>`,
           `Commit: <code>${escapeHtml(hash || '')}</code>`,
           `Message: <code>${escapeHtml(commitMessage).slice(0, 300)}</code>`,
+          ...(llmParticipationLine ? [llmParticipationLine] : []),
+          ...(changeSummary ? ['', changeSummary] : []),
+          ...(semanticSummaryBlock ? ['', semanticSummaryBlock] : []),
+          ...(gitLlmEnabled && llmError ? ['', `<i>LLM 生成摘要失败，已忽略：${escapeHtml(llmError).slice(0, 300)}</i>`] : []),
           '',
           '是否需要推送到远端？如需推送请执行：',
           '<code>/git push</code>',
+          '',
+          '提示：想写更具体的提交信息可用 <code>/git feat(scope): 更新xxx</code>（见 <code>/git help</code>）。',
         ].join('\n');
       } catch (err) {
         response = [
@@ -1365,6 +1942,7 @@ async function handleCommand(
         '/stop - Stop current session',
         '/git - Auto commit all changes',
         '/git help - Show /git usage',
+        '/git draft - Generate commit draft (LLM)',
         '/git push - Push current branch',
         '/perm allow|allow_session|deny &lt;id&gt; - Respond to permission request',
         '1/2/3 - Quick permission reply (Feishu/QQ, single pending)',

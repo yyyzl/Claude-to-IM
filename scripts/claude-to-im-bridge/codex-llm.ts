@@ -215,6 +215,18 @@ export type CodexAppServerLLMProviderOptions = {
    */
   turnTimeoutMs?: number;
   /**
+   * turn “无事件”超时（毫秒）。
+   *
+   * 用于处理一种常见卡死形态：turn 已启动，但长时间收不到任何与该 turn 相关的通知
+   * （例如网络/代理阻塞、后端挂起、流式连接断了但未触发错误等）。
+   *
+   * 说明：
+   * - 这是“静默超时”，与 turnTimeoutMs（总超时）不同；
+   * - 默认 0：关闭（保持历史行为）。建议在 IM 远程驱动场景配置一个更小值，
+   *   例如 10-20 分钟，以便更快失败并提示用户重试。
+   */
+  turnIdleTimeoutMs?: number;
+  /**
    * SSE keep_alive 间隔（毫秒）。
    *
    * - 默认 15 秒
@@ -246,6 +258,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
   private sandboxMode: string;
   private approvalPolicy: string;
   private turnTimeoutMs: number;
+  private turnIdleTimeoutMs: number;
   private keepAliveMs: number;
 
   constructor(opts: CodexAppServerLLMProviderOptions) {
@@ -256,6 +269,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
     this.sandboxMode = opts.sandboxMode || "danger-full-access";
     this.approvalPolicy = opts.approvalPolicy || "never";
     this.turnTimeoutMs = Number.isFinite(opts.turnTimeoutMs as number) ? (opts.turnTimeoutMs as number) : 90 * 60_000;
+    this.turnIdleTimeoutMs = Number.isFinite(opts.turnIdleTimeoutMs as number) ? (opts.turnIdleTimeoutMs as number) : 0;
     {
       const ka = Number.isFinite(opts.keepAliveMs as number) ? (opts.keepAliveMs as number) : 15_000;
       this.keepAliveMs = ka > 0 ? ka : 0;
@@ -531,14 +545,17 @@ export class CodexAppServerLLMProvider implements LLMProvider {
   }): Promise<string> {
     const timeoutMs = this.turnTimeoutMs;
     const deadlineMs = timeoutMs > 0 ? Date.now() + timeoutMs : Number.POSITIVE_INFINITY;
+    const idleTimeoutMs = this.turnIdleTimeoutMs;
     let merged = "";
     let itemCompletedText: string | null = null;
     let turnCompleted = false;
+    let lastRelevantEventMs = Date.now();
 
     const handle = (msg: JsonRpcMessage): void => {
       const msgThreadId = getNotifThreadId(msg);
       const msgTurnId = getNotifTurnId(msg);
       if (msgThreadId !== opts.threadId || msgTurnId !== opts.turnId) return;
+      lastRelevantEventMs = Date.now();
 
       const method = msg.method || "";
       const params = (msg.params || {}) as Record<string, unknown>;
@@ -608,6 +625,15 @@ export class CodexAppServerLLMProvider implements LLMProvider {
             opts.onDelta(itemCompletedText);
           }
           return merged.trim();
+        }
+
+        // “无事件”超时：只统计本 turn 的相关通知（其它 turn 的噪声不算进展）。用于尽快发现卡死/网络阻塞。
+        if (idleTimeoutMs > 0 && Date.now() - lastRelevantEventMs > idleTimeoutMs) {
+          const mins = Math.max(1, Math.ceil(idleTimeoutMs / 60_000));
+          throw new Error(
+            `等待 turn 输出超过 ${mins} 分钟无任何进展（可能网络/代理阻塞或后端挂起），已中断：${opts.turnId}\n` +
+            `可通过 bridge_codex_turn_idle_timeout_ms 调整（设为 0 关闭）。`,
+          );
         }
 
         if (Date.now() > deadlineMs) {

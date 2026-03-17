@@ -18,6 +18,7 @@
  *   bridge_default_model=claude-sonnet-4-20250514
  *   bridge_codex_cli_config=model_provider=openai   # 覆盖 ~/.codex/config.toml（每行一条或用 ; 分隔）
  *   bridge_codex_turn_timeout_ms=5400000           # turn 超时（毫秒），默认 90 分钟
+ *   bridge_codex_turn_idle_timeout_ms=0            # turn 无事件超时（毫秒），默认关闭；建议 10-20 分钟用于更快发现卡死
  *   bridge_sse_keep_alive_ms=15000                 # 可选：SSE 心跳间隔（毫秒），默认 15 秒
  *   CLAUDE_TO_IM_ROOT=G:\\project\\Claude-to-IM
  */
@@ -184,6 +185,7 @@ async function main() {
         sandboxMode: store.getSetting("bridge_codex_sandbox_mode") || "danger-full-access",
         approvalPolicy: store.getSetting("bridge_codex_approval_policy") || "never",
         turnTimeoutMs: parseIntSetting(store.getSetting("bridge_codex_turn_timeout_ms")),
+        turnIdleTimeoutMs: parseIntSetting(store.getSetting("bridge_codex_turn_idle_timeout_ms")),
         keepAliveMs,
         debug: store.getSetting("bridge_codex_debug") === "true",
       })

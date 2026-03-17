@@ -23,6 +23,14 @@ describe('internal/git-command', () => {
     assert.deepStrictEqual(parseGitSlashCommandArgs('push'), { kind: 'push' });
   });
 
+  it('parseGitSlashCommandArgs returns draft when args is draft', () => {
+    assert.deepStrictEqual(parseGitSlashCommandArgs('draft'), { kind: 'draft' });
+    assert.deepStrictEqual(parseGitSlashCommandArgs('draft   '), { kind: 'draft' });
+    assert.deepStrictEqual(parseGitSlashCommandArgs('draft commit'), { kind: 'draft_commit' });
+    assert.deepStrictEqual(parseGitSlashCommandArgs('draft clear'), { kind: 'draft_clear' });
+    assert.deepStrictEqual(parseGitSlashCommandArgs('draft 优化提交信息'), { kind: 'draft', hint: '优化提交信息' });
+  });
+
   it('parseGitSlashCommandArgs returns commit otherwise', () => {
     assert.deepStrictEqual(parseGitSlashCommandArgs('feat: 增加测试'), { kind: 'commit', message: 'feat: 增加测试' });
   });
