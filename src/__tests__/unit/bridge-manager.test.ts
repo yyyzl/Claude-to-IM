@@ -11,25 +11,21 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { initBridgeContext } from '../../lib/bridge/context';
+import {
+  processWithSessionLock as processWithSessionLockInternal,
+  SessionQueueTimeoutError,
+} from '../../lib/bridge/internal/session-lock';
+import { computeSessionQueueTimeoutMs } from '../../lib/bridge/internal/timeouts';
 import type { BridgeStore, LifecycleHooks } from '../../lib/bridge/host';
 
 // ── Test the session lock mechanism directly ────────────────
-// We test the processWithSessionLock pattern by extracting its logic.
+// We test the real session lock implementation (including queue timeout semantics).
 
-function createSessionLocks() {
+function createSessionLocks(queueTimeoutMs = 0) {
   const locks = new Map<string, Promise<void>>();
 
   function processWithSessionLock(sessionId: string, fn: () => Promise<void>): Promise<void> {
-    const prev = locks.get(sessionId) || Promise.resolve();
-    const current = prev.then(fn, fn);
-    locks.set(sessionId, current);
-    // Suppress unhandled rejection on the cleanup chain — callers handle the error on `current` directly
-    current.finally(() => {
-      if (locks.get(sessionId) === current) {
-        locks.delete(sessionId);
-      }
-    }).catch(() => {});
-    return current;
+    return processWithSessionLockInternal(locks, sessionId, fn, queueTimeoutMs);
   }
 
   return { locks, processWithSessionLock };
@@ -104,6 +100,53 @@ describe('bridge-manager session locks', () => {
     // Allow microtask to complete for finally() cleanup
     await new Promise(r => setTimeout(r, 0));
     assert.equal(locks.size, 0, 'Lock should be cleaned up after completion');
+  });
+
+  it('does not treat long-running execution as queue timeout', async () => {
+    const { processWithSessionLock } = createSessionLocks(20);
+    const p = processWithSessionLock('session-1', async () => {
+      await new Promise(r => setTimeout(r, 60));
+    });
+    await assert.doesNotReject(p);
+  });
+
+  it('times out queued operations and skips execution', async () => {
+    const { processWithSessionLock } = createSessionLocks(20);
+    let ran = false;
+
+    const p1 = processWithSessionLock('session-1', async () => {
+      await new Promise(r => setTimeout(r, 60));
+    });
+
+    const p2 = processWithSessionLock('session-1', async () => {
+      ran = true;
+    });
+
+    await assert.rejects(p2, (err) => err instanceof SessionQueueTimeoutError);
+    await p1;
+    await new Promise(r => setTimeout(r, 0));
+    assert.equal(ran, false, 'Timed-out queued fn should be skipped');
+  });
+});
+
+describe('bridge-manager timeout defaults', () => {
+  it('uses explicit queue timeout setting (including 0=disabled)', () => {
+    assert.equal(computeSessionQueueTimeoutMs(123, 5400000), 123);
+    assert.equal(computeSessionQueueTimeoutMs(0, 5400000), 0);
+  });
+
+  it('defaults queue timeout to turn_timeout + 10 minutes when not configured', () => {
+    // 90min + 10min = 100min
+    assert.equal(computeSessionQueueTimeoutMs(null, 90 * 60_000), 100 * 60_000);
+  });
+
+  it('uses default turn timeout when turn timeout is not configured', () => {
+    // 默认 turn 超时为 90min，因此队列超时默认应为 100min
+    assert.equal(computeSessionQueueTimeoutMs(null, null), 100 * 60_000);
+  });
+
+  it('falls back to 5 minutes when turn timeout is disabled', () => {
+    assert.equal(computeSessionQueueTimeoutMs(null, 0), 5 * 60_000);
   });
 });
 

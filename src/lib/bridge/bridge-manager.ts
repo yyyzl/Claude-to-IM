@@ -21,6 +21,11 @@ import { markdownToDiscordChunks } from './markdown/discord.js';
 import { getBridgeContext } from './context.js';
 import { escapeHtml } from './adapters/telegram-utils.js';
 import {
+  processWithSessionLock as processWithSessionLockInternal,
+  SessionQueueTimeoutError,
+} from './internal/session-lock.js';
+import { computeSessionQueueTimeoutMs } from './internal/timeouts.js';
+import {
   validateWorkingDirectory,
   validateSessionId,
   isDangerousInput,
@@ -207,16 +212,6 @@ function getState(): BridgeManagerState {
   return g[GLOBAL_KEY];
 }
 
-class SessionQueueTimeoutError extends Error {
-  timeoutMs: number;
-
-  constructor(sessionId: string, timeoutMs: number) {
-    super(`Session ${sessionId} is busy, queue timeout`);
-    this.name = 'SessionQueueTimeoutError';
-    this.timeoutMs = timeoutMs;
-  }
-}
-
 /**
  * Process a function with per-session serialization.
  * Different sessions run concurrently; same-session requests are serialized.
@@ -224,37 +219,12 @@ class SessionQueueTimeoutError extends Error {
  */
 function processWithSessionLock(sessionId: string, fn: () => Promise<void>): Promise<void> {
   const state = getState();
-  const prev = state.sessionLocks.get(sessionId) || Promise.resolve();
   const { store } = getBridgeContext();
-  const queueTimeoutMs = parsePositiveInt(store.getSetting('bridge_session_queue_timeout_ms')) ?? 5 * 60_000;
-
-  let cancelled = false;
-
-  const current = prev.catch(() => {}).then(async () => {
-    if (cancelled) return;
-    await fn();
-  });
-
-  state.sessionLocks.set(sessionId, current.then(() => {}, () => {}));
-  current.finally(() => {
-    if (state.sessionLocks.get(sessionId) === current) {
-      state.sessionLocks.delete(sessionId);
-    }
-  }).catch(() => {});
-
-  if (queueTimeoutMs <= 0) return current;
-
-  return new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      cancelled = true;
-      reject(new SessionQueueTimeoutError(sessionId, queueTimeoutMs));
-    }, queueTimeoutMs);
-
-    current.then(
-      () => { clearTimeout(timer); resolve(); },
-      (err) => { clearTimeout(timer); reject(err); },
-    );
-  });
+  const queueTimeoutMs = computeSessionQueueTimeoutMs(
+    parsePositiveInt(store.getSetting('bridge_session_queue_timeout_ms')),
+    parsePositiveInt(store.getSetting('bridge_codex_turn_timeout_ms')),
+  );
+  return processWithSessionLockInternal(state.sessionLocks, sessionId, fn, queueTimeoutMs);
 }
 
 function parsePositiveInt(raw: string | null): number | null {

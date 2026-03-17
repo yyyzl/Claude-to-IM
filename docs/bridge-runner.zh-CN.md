@@ -40,7 +40,9 @@ bridge_codex_approval_policy=never
 # 设为 0 可关闭（恢复每条消息一个 turn）。
 bridge_feishu_input_debounce_ms=1200
 
-# 可选：session 排队超时（毫秒）。默认 5 分钟；设为 0 可关闭。
+# 可选：session 排队超时（毫秒）。
+# 默认：turn 超时生效值（bridge_codex_turn_timeout_ms，未配置则默认 90 分钟）+ 10 分钟；
+# 若 turn 超时关闭（=0），则回退为 5 分钟。设为 0 可关闭。
 # 同一 session 正在跑 turn 时，后续消息会进入队列；排队超过该时间会提示并自动取消。
 # bridge_session_queue_timeout_ms=300000
 
