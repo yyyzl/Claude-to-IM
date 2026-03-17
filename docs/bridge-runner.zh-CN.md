@@ -9,7 +9,7 @@
 
 1. 本机已安装 `codex`（`codex --version` 能跑通）
 2. 本机已完成 Codex CLI 登录/鉴权（`codex login`），鉴权信息在 `~/.codex/*`
-3. 已在本仓库执行过 `npm install` 且存在 `dist/`（桥接会 import `dist/lib/bridge/*`）
+3. 已在本仓库执行过 `npm install` 且存在 `dist/`（桥接会 import `dist/lib/bridge/*`；脚本会在发现 dist 过期时自动执行 `npm run build`）
 
 ## 2) 唯一配置文件：`.env.bridge.local`
 
@@ -39,6 +39,10 @@ bridge_codex_approval_policy=never
 # 例如：你先发一句“帮我改下 X”，紧接着又补充一句“另外要兼容 Y”，希望一次性发给模型。
 # 设为 0 可关闭（恢复每条消息一个 turn）。
 bridge_feishu_input_debounce_ms=1200
+
+# 可选：流式卡片刷新节流（毫秒）。
+# 默认 2000；值太小会更容易触发飞书侧频控（99991400 request trigger frequency limit）。
+# bridge_feishu_stream_card_throttle_ms=2000
 
 # 可选：session 排队超时（毫秒）。
 # 默认：turn 超时生效值（bridge_codex_turn_timeout_ms，未配置则默认 90 分钟）+ 10 分钟；

@@ -24,6 +24,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { loadDotEnvFile } from "./claude-to-im-bridge/settings.ts";
@@ -59,6 +60,53 @@ function pickExistingPath(candidates: Array<string | undefined>, mustContainRela
   return null;
 }
 
+function ensureClaudeToImBuild(claudeToImRoot: string): void {
+  const distContext = path.join(claudeToImRoot, "dist/lib/bridge/context.js");
+  const distBridgeManager = path.join(claudeToImRoot, "dist/lib/bridge/bridge-manager.js");
+  const srcBridgeManager = path.join(claudeToImRoot, "src/lib/bridge/bridge-manager.ts");
+
+  const distMissing = !fs.existsSync(distContext) || !fs.existsSync(distBridgeManager);
+
+  const distOlderThanSrc = (() => {
+    try {
+      if (!fs.existsSync(srcBridgeManager)) return false;
+      if (!fs.existsSync(distBridgeManager)) return true;
+      const srcStat = fs.statSync(srcBridgeManager);
+      const distStat = fs.statSync(distBridgeManager);
+      return srcStat.mtimeMs > distStat.mtimeMs;
+    } catch {
+      return false;
+    }
+  })();
+
+  const distLooksOutdated = (() => {
+    try {
+      if (!fs.existsSync(distBridgeManager)) return true;
+      const text = fs.readFileSync(distBridgeManager, "utf8");
+      // 旧版 dist 会固定用 5 分钟作为默认队列超时，导致 turn 超时改成 90 分钟也不生效。
+      return text.includes("bridge_session_queue_timeout_ms')) ?? 5 * 60_000");
+    } catch {
+      return false;
+    }
+  })();
+
+  if (!distMissing && !distOlderThanSrc && !distLooksOutdated) return;
+
+  console.log("[bridge-runner] 检测到 Claude-to-IM dist 可能过期，正在执行 npm run build...");
+  const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+  const res = spawnSync(npmCmd, ["run", "build"], { cwd: claudeToImRoot, stdio: "inherit" });
+  if ((res.status ?? 1) !== 0) {
+    throw new Error(
+      [
+        `npm run build 失败（exit=${res.status ?? "unknown"}）。`,
+        "请在 CLAUDE_TO_IM_ROOT 目录手动执行：",
+        "  npm install",
+        "  npm run build",
+      ].join("\n"),
+    );
+  }
+}
+
 async function main() {
   const scriptPath = fileURLToPath(import.meta.url);
   const scriptDir = path.dirname(scriptPath);
@@ -77,7 +125,7 @@ async function main() {
       path.resolve(runnerRoot, "../../project/Claude-to-IM"),
       "G:\\project\\Claude-to-IM",
     ],
-    "dist/lib/bridge/context.js",
+    "package.json",
   );
 
   if (!claudeToImRoot) {
@@ -90,6 +138,8 @@ async function main() {
       ].join("\n"),
     );
   }
+
+  ensureClaudeToImBuild(claudeToImRoot);
 
   const bridgeContextMod = (await import(
     pathToFileURL(path.join(claudeToImRoot, "dist/lib/bridge/context.js")).href

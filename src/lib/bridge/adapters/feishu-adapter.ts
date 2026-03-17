@@ -59,10 +59,111 @@ interface FeishuCardState {
   pendingText: string | null;
   lastUpdateAt: number;
   throttleTimer: ReturnType<typeof setTimeout> | null;
+  nextFlushAt: number | null;
+  inFlight: boolean;
+  needsFlush: boolean;
+  cooldownUntil: number;
+  rateLimitBackoffMs: number;
+  lastRateLimitLogAt: number;
 }
 
-/** Streaming card throttle interval (ms). */
-const CARD_THROTTLE_MS = 200;
+/** Streaming card flush interval (ms). */
+const DEFAULT_CARD_THROTTLE_MS = 2_000;
+const MIN_CARD_THROTTLE_MS = 200;
+const MAX_CARD_THROTTLE_MS = 30_000;
+
+/** Feishu request trigger frequency limit (rate-limit). */
+const FEISHU_TRIGGER_RATE_LIMIT_CODE = 99991400;
+const DEFAULT_RATE_LIMIT_BACKOFF_MS = 5_000;
+const MAX_RATE_LIMIT_BACKOFF_MS = 60_000;
+const RATE_LIMIT_LOG_THROTTLE_MS = 60_000;
+
+function parsePositiveInt(raw: string | null): number | null {
+  if (raw == null) return null;
+  const t = raw.trim();
+  if (!t) return null;
+  const n = parseInt(t, 10);
+  if (!Number.isFinite(n)) return null;
+  return n > 0 ? n : 0;
+}
+
+function clamp(n: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, n));
+}
+
+type FeishuApiErrorPayload = {
+  code: number;
+  msg?: string;
+  log_id?: string;
+};
+
+function pickString(v: unknown): string | null {
+  return typeof v === 'string' && v.trim() ? v.trim() : null;
+}
+
+function normalizeNumericCode(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string') {
+    const t = v.trim();
+    if (/^\d+$/.test(t)) return parseInt(t, 10);
+  }
+  return null;
+}
+
+function findFeishuApiErrorPayload(err: unknown, depth = 0): FeishuApiErrorPayload | null {
+  if (err == null) return null;
+  if (depth > 5) return null;
+
+  if (Array.isArray(err)) {
+    for (const item of err) {
+      const found = findFeishuApiErrorPayload(item, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  if (typeof err !== 'object') return null;
+  const anyErr = err as any;
+
+  const directCode = normalizeNumericCode(anyErr?.code);
+  if (directCode != null) {
+    const msg = pickString(anyErr?.msg) || undefined;
+    const log_id = pickString(anyErr?.log_id) || undefined;
+    return { code: directCode, ...(msg ? { msg } : {}), ...(log_id ? { log_id } : {}) };
+  }
+
+  const respData = anyErr?.response?.data;
+  if (respData && typeof respData === 'object') {
+    const code = normalizeNumericCode((respData as any)?.code);
+    if (code != null) {
+      const msg = pickString((respData as any)?.msg) || undefined;
+      const log_id = pickString((respData as any)?.log_id) || undefined;
+      return { code, ...(msg ? { msg } : {}), ...(log_id ? { log_id } : {}) };
+    }
+  }
+
+  return null;
+}
+
+function toErrorMessage(err: unknown, depth = 0): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === 'string') return err;
+  if (depth > 3) return 'Unknown error';
+
+  if (Array.isArray(err)) {
+    for (const item of err) {
+      const msg = toErrorMessage(item, depth + 1);
+      if (msg) return msg;
+    }
+  }
+
+  const payload = findFeishuApiErrorPayload(err);
+  if (payload) {
+    return payload.msg ? `FeishuError(${payload.code}): ${payload.msg}` : `FeishuError(${payload.code})`;
+  }
+
+  return 'Unknown error';
+}
 
 /** Shape of the SDK's im.message.receive_v1 event data. */
 type FeishuMessageEventData = {
@@ -116,6 +217,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
   private lastIncomingMessageId = new Map<string, string>();
   /** Track active typing reaction IDs per chat for cleanup. */
   private typingReactions = new Map<string, string>();
+  /** 兜底定时器：若无法展示打字/卡片指示，则回一条“正在处理”的短提示。 */
+  private processingNoticeTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** Active streaming card state per chatId. */
   private activeCards = new Map<string, FeishuCardState>();
   /** In-flight card creation promises per chatId — prevents duplicate creation. */
@@ -227,6 +330,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
     this.seenMessageIds.clear();
     this.lastIncomingMessageId.clear();
     this.typingReactions.clear();
+    for (const [, t] of this.processingNoticeTimers) {
+      clearTimeout(t);
+    }
+    this.processingNoticeTimers.clear();
 
     console.log('[feishu-adapter] Stopped');
   }
@@ -266,9 +373,45 @@ export class FeishuAdapter extends BaseChannelAdapter {
   onMessageStart(chatId: string): void {
     const messageId = this.lastIncomingMessageId.get(chatId);
 
-    // Create streaming card (fire-and-forget — fallback to traditional if fails)
+    // Clear previous fallback timer (if any)
+    const existingTimer = this.processingNoticeTimers.get(chatId);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      this.processingNoticeTimers.delete(chatId);
+    }
+
+    const cancelProcessingNotice = () => {
+      const t = this.processingNoticeTimers.get(chatId);
+      if (t) {
+        clearTimeout(t);
+        this.processingNoticeTimers.delete(chatId);
+      }
+    };
+
+    // 兜底：如果没能展示任何“正在处理”的可见指示（无 reaction、无流式卡片），
+    // 就回一条短提示，避免长时间无反馈导致用户不确定是否还在跑。
+    if (messageId && this.restClient) {
+      const timer = setTimeout(() => {
+        this.processingNoticeTimers.delete(chatId);
+        if (this.activeCards.has(chatId) || this.typingReactions.has(chatId)) return;
+
+        const text = '已开始处理（可能需要较长时间）。可用 /status 查看，/stop 中断。';
+        this.restClient!.im.message.reply({
+          path: { message_id: messageId },
+          data: {
+            msg_type: 'text',
+            content: JSON.stringify({ text }),
+          },
+        }).catch(() => { /* best effort */ });
+      }, 2500);
+      this.processingNoticeTimers.set(chatId, timer);
+    }
+
+    // 创建流式卡片（非关键路径）。若成功，取消兜底提示。
     if (messageId) {
-      this.createStreamingCard(chatId, messageId).catch(() => {});
+      this.createStreamingCard(chatId, messageId)
+        .then((ok) => { if (ok) cancelProcessingNotice(); })
+        .catch(() => {});
     }
 
     // Typing indicator (same as before)
@@ -280,6 +423,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       const reactionId = (res as any)?.data?.reaction_id;
       if (reactionId) {
         this.typingReactions.set(chatId, reactionId);
+        cancelProcessingNotice();
       }
     }).catch((err) => {
       const code = (err as { code?: number })?.code;
@@ -294,6 +438,12 @@ export class FeishuAdapter extends BaseChannelAdapter {
    * Called by bridge-manager via onMessageEnd().
    */
   onMessageEnd(chatId: string): void {
+    const timer = this.processingNoticeTimers.get(chatId);
+    if (timer) {
+      clearTimeout(timer);
+      this.processingNoticeTimers.delete(chatId);
+    }
+
     // Clean up any orphaned card state (normally cleaned by finalizeCard)
     this.cleanupCard(chatId);
 
@@ -438,6 +588,12 @@ export class FeishuAdapter extends BaseChannelAdapter {
         pendingText: null,
         lastUpdateAt: 0,
         throttleTimer: null,
+        nextFlushAt: null,
+        inFlight: false,
+        needsFlush: false,
+        cooldownUntil: 0,
+        rateLimitBackoffMs: DEFAULT_RATE_LIMIT_BACKOFF_MS,
+        lastRateLimitLogAt: 0,
       });
 
       console.log(`[feishu-adapter] Streaming card created: cardId=${cardId}, msgId=${messageId}`);
@@ -451,6 +607,55 @@ export class FeishuAdapter extends BaseChannelAdapter {
   /**
    * Update streaming card content with throttling.
    */
+  private getCardThrottleMs(): number {
+    const { store } = getBridgeContext();
+    const raw = store.getSetting('bridge_feishu_stream_card_throttle_ms');
+    const n = parsePositiveInt(raw);
+    if (n == null) return DEFAULT_CARD_THROTTLE_MS;
+    if (n === 0) return 0;
+    return clamp(n, MIN_CARD_THROTTLE_MS, MAX_CARD_THROTTLE_MS);
+  }
+
+  private scheduleCardUpdate(chatId: string): void {
+    const state = this.activeCards.get(chatId);
+    if (!state) return;
+
+    if (state.inFlight) {
+      state.needsFlush = true;
+      return;
+    }
+
+    const throttleMs = this.getCardThrottleMs();
+    const now = Date.now();
+    const earliestByThrottle = (state.lastUpdateAt > 0) ? (state.lastUpdateAt + throttleMs) : now;
+    const earliest = Math.max(earliestByThrottle, state.cooldownUntil);
+
+    if (earliest <= now) {
+      if (state.throttleTimer) {
+        clearTimeout(state.throttleTimer);
+        state.throttleTimer = null;
+      }
+      state.nextFlushAt = null;
+      this.flushCardUpdate(chatId);
+      return;
+    }
+
+    if (state.throttleTimer) {
+      if (state.nextFlushAt === earliest) return;
+      clearTimeout(state.throttleTimer);
+      state.throttleTimer = null;
+    }
+
+    state.nextFlushAt = earliest;
+    state.throttleTimer = setTimeout(() => {
+      const current = this.activeCards.get(chatId);
+      if (!current) return;
+      current.throttleTimer = null;
+      current.nextFlushAt = null;
+      this.flushCardUpdate(chatId);
+    }, Math.max(0, earliest - now));
+  }
+
   private updateCardContent(chatId: string, text: string): void {
     const state = this.activeCards.get(chatId);
     if (!state || !this.restClient) return;
@@ -460,25 +665,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       state.thinking = false;
     }
     state.pendingText = text;
-
-    const elapsed = Date.now() - state.lastUpdateAt;
-    if (elapsed < CARD_THROTTLE_MS && state.lastUpdateAt > 0) {
-      // Schedule trailing-edge flush
-      if (!state.throttleTimer) {
-        state.throttleTimer = setTimeout(() => {
-          state.throttleTimer = null;
-          this.flushCardUpdate(chatId);
-        }, CARD_THROTTLE_MS - elapsed);
-      }
-      return;
-    }
-
-    // Clear pending timer and flush immediately
-    if (state.throttleTimer) {
-      clearTimeout(state.throttleTimer);
-      state.throttleTimer = null;
-    }
-    this.flushCardUpdate(chatId);
+    this.scheduleCardUpdate(chatId);
   }
 
   /**
@@ -488,6 +675,17 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const state = this.activeCards.get(chatId);
     if (!state || !this.restClient) return;
 
+    if (state.inFlight) {
+      state.needsFlush = true;
+      return;
+    }
+
+    const now = Date.now();
+    if (state.cooldownUntil > now) {
+      this.scheduleCardUpdate(chatId);
+      return;
+    }
+
     const content = buildStreamingContent(state.pendingText || '', state.toolCalls);
 
     state.sequence++;
@@ -495,13 +693,48 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const cardId = state.cardId;
 
     // Fire-and-forget — streaming updates are non-critical
+    state.inFlight = true;
+    state.needsFlush = false;
     (this.restClient as any).cardkit.v1.cardElement.content({
       path: { card_id: cardId, element_id: 'streaming_content' },
       data: { content, sequence: seq },
     }).then(() => {
       state.lastUpdateAt = Date.now();
+      state.cooldownUntil = 0;
+      state.rateLimitBackoffMs = DEFAULT_RATE_LIMIT_BACKOFF_MS;
     }).catch((err: unknown) => {
-      console.warn('[feishu-adapter] cardElement.content failed:', err instanceof Error ? err.message : err);
+      const payload = findFeishuApiErrorPayload(err);
+      const code = payload?.code ?? null;
+      const msg = payload?.msg ?? null;
+      const logId = payload?.log_id ?? null;
+
+      if (code === FEISHU_TRIGGER_RATE_LIMIT_CODE) {
+        const base = state.rateLimitBackoffMs > 0 ? state.rateLimitBackoffMs : DEFAULT_RATE_LIMIT_BACKOFF_MS;
+        const next = clamp(base * 2, DEFAULT_RATE_LIMIT_BACKOFF_MS, MAX_RATE_LIMIT_BACKOFF_MS);
+        state.rateLimitBackoffMs = next;
+        state.cooldownUntil = Date.now() + next;
+        // 强制触发一次后续 flush（由 cooldown + throttle 共同控制），避免卡片长时间停在旧内容。
+        state.needsFlush = true;
+
+        const ts = Date.now();
+        if (ts - state.lastRateLimitLogAt >= RATE_LIMIT_LOG_THROTTLE_MS) {
+          state.lastRateLimitLogAt = ts;
+          const seconds = Math.max(1, Math.ceil(next / 1000));
+          const extra = logId ? ` log_id=${logId}` : '';
+          console.warn(`[feishu-adapter] cardElement.content 触发频控（${code}），将退避 ${seconds}s。${extra}`);
+        }
+      } else if (code != null || msg != null) {
+        const extra = logId ? ` log_id=${logId}` : '';
+        console.warn(`[feishu-adapter] cardElement.content failed: code=${code ?? 'unknown'}, msg=${msg ?? 'unknown'}.${extra}`);
+      } else {
+        console.warn(`[feishu-adapter] cardElement.content failed: ${toErrorMessage(err)}`);
+      }
+    }).finally(() => {
+      state.inFlight = false;
+      if (state.needsFlush) {
+        state.needsFlush = false;
+        this.scheduleCardUpdate(chatId);
+      }
     });
   }
 
