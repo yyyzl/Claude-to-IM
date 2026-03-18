@@ -1,4 +1,4 @@
-param(
+﻿param(
   [Parameter(Position = 0)]
   [ValidateSet("start", "stop", "restart", "status", "watchdog")]
   [string]$Action = "status",
@@ -40,17 +40,23 @@ function Read-TextFile([string]$path) {
 function Get-BridgePid([string]$pidFile) {
   $t = Read-TextFile $pidFile
   if (-not $t) { return $null }
-  $pid = 0
-  if ([int]::TryParse($t, [ref]$pid) -and $pid -gt 0) { return $pid }
+  $parsedPid = 0
+  if ([int]::TryParse($t, [ref]$parsedPid) -and $parsedPid -gt 0) { return $parsedPid }
   return $null
 }
 
-function Get-BridgeProcess([int]$pid) {
-  try { return (Get-Process -Id $pid -ErrorAction Stop) } catch { return $null }
+function Get-BridgeProcess([int]$bridgePid) {
+  try { return (Get-Process -Id $bridgePid -ErrorAction Stop) } catch { return $null }
 }
 
 function Read-Heartbeat([string]$heartbeatFile) {
   $t = Read-TextFile $heartbeatFile
+  if (-not $t) { return $null }
+  try { return ($t | ConvertFrom-Json) } catch { return $null }
+}
+
+function Read-JsonFile([string]$path) {
+  $t = Read-TextFile $path
   if (-not $t) { return $null }
   try { return ($t | ConvertFrom-Json) } catch { return $null }
 }
@@ -69,18 +75,20 @@ function Get-HeartbeatAgeSec($hb) {
 function Print-Status([string]$controlDir) {
   $pidFile = Join-Path $controlDir "pid"
   $heartbeatFile = Join-Path $controlDir "heartbeat.json"
+  $lastStopFile = Join-Path $controlDir "last-stop.json"
   $logOut = Join-Path $controlDir "stdout.log"
   $logErr = Join-Path $controlDir "stderr.log"
   $stopFile = Join-Path $controlDir "stop"
 
-  $pid = Get-BridgePid $pidFile
-  $proc = if ($pid) { Get-BridgeProcess $pid } else { $null }
+  $bridgePid = Get-BridgePid $pidFile
+  $proc = if ($bridgePid) { Get-BridgeProcess $bridgePid } else { $null }
   $hb = Read-Heartbeat $heartbeatFile
+  $lastStop = Read-JsonFile $lastStopFile
   $age = Get-HeartbeatAgeSec $hb
 
   Write-Host ("[bridge] controlDir = {0}" -f $controlDir)
-  if ($pid) {
-    Write-Host ("[bridge] pid        = {0}" -f $pid)
+  if ($bridgePid) {
+    Write-Host ("[bridge] pid        = {0}" -f $bridgePid)
   } else {
     Write-Host "[bridge] pid        = (none)"
   }
@@ -93,9 +101,25 @@ function Print-Status([string]$controlDir) {
 
   if ($null -ne $age) {
     $status = if ($hb.status) { [string]$hb.status } else { "(unknown)" }
-    Write-Host ("[bridge] heartbeat  = {0}s ago (status={1})" -f $age, $status)
+    $hasReason = $hb.PSObject.Properties.Name -contains "reason"
+    $reason = if ($hasReason -and $hb.reason) { [string]$hb.reason } else { "" }
+    if ($reason) {
+      Write-Host ("[bridge] heartbeat  = {0}s ago (status={1}, reason={2})" -f $age, $status, $reason)
+    } else {
+      Write-Host ("[bridge] heartbeat  = {0}s ago (status={1})" -f $age, $status)
+    }
   } else {
     Write-Host "[bridge] heartbeat  = (none)"
+  }
+
+  if ($lastStop) {
+    $hasSignal = $lastStop.PSObject.Properties.Name -contains "signal"
+    $hasTs = $lastStop.PSObject.Properties.Name -contains "ts"
+    $hasUptime = $lastStop.PSObject.Properties.Name -contains "uptimeSec"
+    $signal = if ($hasSignal -and $lastStop.signal) { [string]$lastStop.signal } else { "(unknown)" }
+    $ts = if ($hasTs -and $lastStop.ts) { [string]$lastStop.ts } else { "(unknown)" }
+    $uptime = if ($hasUptime -and $null -ne $lastStop.uptimeSec) { [string]$lastStop.uptimeSec } else { "(unknown)" }
+    Write-Host ("[bridge] lastStop   = {0} signal={1} uptime={2}s" -f $ts, $signal, $uptime)
   }
 
   if (Test-Path -LiteralPath $stopFile) {
@@ -110,11 +134,11 @@ function Start-Bridge([string]$repoRoot, [string]$controlDir) {
   New-Item -ItemType Directory -Force -Path $controlDir | Out-Null
 
   $pidFile = Join-Path $controlDir "pid"
-  $pid = Get-BridgePid $pidFile
-  if ($pid) {
-    $proc = Get-BridgeProcess $pid
+  $bridgePid = Get-BridgePid $pidFile
+  if ($bridgePid) {
+    $proc = Get-BridgeProcess $bridgePid
     if ($proc) {
-      Write-Host ("[bridge] 已在运行：pid={0}" -f $pid)
+      Write-Host ("[bridge] 已在运行：pid={0}" -f $bridgePid)
       return
     }
   }
@@ -151,31 +175,31 @@ function Stop-Bridge([string]$controlDir) {
   $pidFile = Join-Path $controlDir "pid"
   $stopFile = Join-Path $controlDir "stop"
 
-  $pid = Get-BridgePid $pidFile
-  if (-not $pid) {
+  $bridgePid = Get-BridgePid $pidFile
+  if (-not $bridgePid) {
     Write-Host "[bridge] 未检测到 pid 文件，可能未运行。"
     return
   }
 
-  $proc = Get-BridgeProcess $pid
+  $proc = Get-BridgeProcess $bridgePid
   if (-not $proc) {
-    Write-Host ("[bridge] pid 文件存在但进程不存在（pid={0}），将清理残留文件。" -f $pid)
+    Write-Host ("[bridge] pid 文件存在但进程不存在（pid={0}），将清理残留文件。" -f $bridgePid)
     Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $stopFile -Force -ErrorAction SilentlyContinue
     return
   }
 
-  Write-Host ("[bridge] 请求优雅停止：pid={0}" -f $pid)
+  Write-Host ("[bridge] 请求优雅停止：pid={0}" -f $bridgePid)
   Set-Content -LiteralPath $stopFile -Encoding UTF8 -Value (Get-Date).ToString("o")
 
   $deadline = (Get-Date).AddSeconds([Math]::Max(1, $TimeoutSec))
   while ((Get-Date) -lt $deadline) {
     Start-Sleep -Milliseconds 500
-    $p = Get-BridgeProcess $pid
+    $p = Get-BridgeProcess $bridgePid
     if (-not $p) { break }
   }
 
-  $still = Get-BridgeProcess $pid
+  $still = Get-BridgeProcess $bridgePid
   if (-not $still) {
     Write-Host "[bridge] 已停止。"
     Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
@@ -190,7 +214,7 @@ function Stop-Bridge([string]$controlDir) {
   }
 
   Write-Host "[bridge] 强制结束进程树（仅用于卡死场景）..."
-  & taskkill.exe /PID $pid /T /F | Out-Null
+  & taskkill.exe /PID $bridgePid /T /F | Out-Null
 
   Start-Sleep -Milliseconds 300
   Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
@@ -208,8 +232,8 @@ function Watchdog([string]$repoRoot, [string]$controlDir) {
     $pidFile = Join-Path $controlDir "pid"
     $heartbeatFile = Join-Path $controlDir "heartbeat.json"
 
-    $pid = Get-BridgePid $pidFile
-    $proc = if ($pid) { Get-BridgeProcess $pid } else { $null }
+    $bridgePid = Get-BridgePid $pidFile
+    $proc = if ($bridgePid) { Get-BridgeProcess $bridgePid } else { $null }
     $hb = Read-Heartbeat $heartbeatFile
     $age = Get-HeartbeatAgeSec $hb
 
@@ -224,8 +248,8 @@ function Watchdog([string]$repoRoot, [string]$controlDir) {
       Write-Host ("[bridge] watchdog：检测到可能卡死/失联（heartbeatAge={0}s），准备重启..." -f $age)
       Stop-Bridge $controlDir
       # Stop-Bridge 默认优雅；若仍存活则强制
-      $pid2 = Get-BridgePid $pidFile
-      if ($pid2 -and (Get-BridgeProcess $pid2)) {
+      $bridgePid2 = Get-BridgePid $pidFile
+      if ($bridgePid2 -and (Get-BridgeProcess $bridgePid2)) {
         $script:Force = $true
         Stop-Bridge $controlDir
         $script:Force = $false
@@ -247,8 +271,8 @@ switch ($Action) {
   "stop" { Stop-Bridge $controlDir; break }
   "restart" {
     Stop-Bridge $controlDir
-    $pid = Get-BridgePid (Join-Path $controlDir "pid")
-    if ($pid -and (Get-BridgeProcess $pid)) {
+    $bridgePid = Get-BridgePid (Join-Path $controlDir "pid")
+    if ($bridgePid -and (Get-BridgeProcess $bridgePid)) {
       if (-not $Force) {
         Write-Host "[bridge] 仍在运行；如需强制重启请加 -Force。"
         break
@@ -263,3 +287,6 @@ switch ($Action) {
   "status" { Print-Status $controlDir; break }
   "watchdog" { Watchdog $repoRoot $controlDir; break }
 }
+
+
+

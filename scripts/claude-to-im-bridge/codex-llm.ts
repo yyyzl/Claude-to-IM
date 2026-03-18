@@ -5,6 +5,14 @@ import type { LLMProvider, StreamChatParams } from "./llm.ts";
 import { JsonRpcAppServerClient, type JsonRpcMessage } from "./codex-jsonrpc.ts";
 import { buildTurnSandboxPolicy, resolveCodexBinary, selectCodexModel } from "./codex-utils.ts";
 
+type TokenUsage = {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cost_usd?: number;
+};
+
 function redactSensitive(text: string): string {
   let out = text;
   out = out.replace(/sk-[A-Za-z0-9_-]{10,}/g, "sk-***");
@@ -78,6 +86,94 @@ function abortError(message = "Task stopped by user"): Error {
 
 function pickString(v: unknown): string | null {
   return typeof v === "string" && v.trim() ? v.trim() : null;
+}
+
+function toSafeNonNegativeNumber(value: unknown): number | null {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) return null;
+  return n >= 0 ? n : null;
+}
+
+function normalizeTokenUsage(raw: unknown): TokenUsage | null {
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as any;
+
+  const input = toSafeNonNegativeNumber(
+    obj.input_tokens ?? obj.prompt_tokens ?? obj.inputTokens ?? obj.promptTokens,
+  );
+  const output = toSafeNonNegativeNumber(
+    obj.output_tokens ?? obj.completion_tokens ?? obj.outputTokens ?? obj.completionTokens,
+  );
+
+  const inputTokens = input ?? 0;
+  const outputTokens = output ?? 0;
+  if (inputTokens + outputTokens <= 0) return null;
+
+  const usage: TokenUsage = { input_tokens: inputTokens, output_tokens: outputTokens };
+
+  const cacheRead = toSafeNonNegativeNumber(obj.cache_read_input_tokens ?? obj.cacheReadInputTokens);
+  const cacheCreate = toSafeNonNegativeNumber(obj.cache_creation_input_tokens ?? obj.cacheCreationInputTokens);
+  const costUsd = toSafeNonNegativeNumber(obj.cost_usd ?? obj.costUsd);
+
+  if (cacheRead != null) usage.cache_read_input_tokens = cacheRead;
+  if (cacheCreate != null) usage.cache_creation_input_tokens = cacheCreate;
+  if (costUsd != null) usage.cost_usd = costUsd;
+
+  return usage;
+}
+
+function tryParseJsonLikeString(value: unknown): unknown | null {
+  if (typeof value !== "string") return null;
+  const t = value.trim();
+  if (!t) return null;
+  // 保守限制：避免解析超大字符串造成阻塞
+  if (t.length > 20_000) return null;
+  if (!(t.startsWith("{") || t.startsWith("["))) return null;
+  try {
+    return JSON.parse(t);
+  } catch {
+    return null;
+  }
+}
+
+function findTokenUsageInAny(value: unknown): TokenUsage | null {
+  // direct
+  const direct = normalizeTokenUsage(value);
+  if (direct) return direct;
+
+  // BFS (depth-limited)
+  const queue: unknown[] = [value];
+  let scanned = 0;
+  while (queue.length > 0 && scanned < 200) {
+    const cur = queue.shift();
+    scanned += 1;
+    if (!cur || typeof cur !== "object") {
+      const parsed = tryParseJsonLikeString(cur);
+      if (parsed) queue.push(parsed);
+      continue;
+    }
+
+    if (Array.isArray(cur)) {
+      for (const item of cur) queue.push(item);
+      continue;
+    }
+
+    const obj = cur as Record<string, unknown>;
+    for (const [k, v] of Object.entries(obj)) {
+      // 常见字段名优先
+      if (k === "usage" || k === "tokenUsage" || k === "token_usage") {
+        const u = normalizeTokenUsage(v) || normalizeTokenUsage(tryParseJsonLikeString(v));
+        if (u) return u;
+      }
+
+      const u = normalizeTokenUsage(v) || normalizeTokenUsage(tryParseJsonLikeString(v));
+      if (u) return u;
+
+      if (v && typeof v === "object") queue.push(v);
+    }
+  }
+
+  return null;
 }
 
 function isTransientReconnectNotification(errObj: unknown): boolean {
@@ -358,7 +454,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
                 cwd: params.workingDirectory,
               });
 
-              const text = await this.collectTurnText({
+              const { text, usage } = await this.collectTurnText({
                 threadId: freshThreadId,
                 turnId,
                 onDelta: (delta) => emit(controller, "text", delta),
@@ -369,13 +465,13 @@ export class CodexAppServerLLMProvider implements LLMProvider {
                 // 已通过 delta 发过的情况下，text 可能等于已发送内容；这里不再重复发送
               }
 
-              emit(controller, "result", { usage: null, is_error: false, session_id: freshThreadId });
+              emit(controller, "result", { usage, is_error: false, session_id: freshThreadId });
               return;
             }
             throw e;
           }
 
-          const text = await this.collectTurnText({
+          const { text, usage } = await this.collectTurnText({
             threadId,
             turnId,
             onDelta: (delta) => emit(controller, "text", delta),
@@ -387,7 +483,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
             // 已通过 delta 发过的情况下，text 可能等于已发送内容；这里不再重复发送
           }
 
-          emit(controller, "result", { usage: null, is_error: false, session_id: threadId });
+          emit(controller, "result", { usage, is_error: false, session_id: threadId });
         } catch (err) {
           const isAbort = err instanceof Error && err.name === "AbortError";
           const msg = isAbort ? "Task stopped by user" : toErrorMessage(err);
@@ -542,13 +638,14 @@ export class CodexAppServerLLMProvider implements LLMProvider {
     turnId: string;
     onDelta: (delta: string) => void;
     signal: AbortSignal;
-  }): Promise<string> {
+  }): Promise<{ text: string; usage: TokenUsage | null }> {
     const timeoutMs = this.turnTimeoutMs;
     const deadlineMs = timeoutMs > 0 ? Date.now() + timeoutMs : Number.POSITIVE_INFINITY;
     const idleTimeoutMs = this.turnIdleTimeoutMs;
     let merged = "";
     let itemCompletedText: string | null = null;
     let turnCompleted = false;
+    let usage: TokenUsage | null = null;
     let lastRelevantEventMs = Date.now();
 
     const handle = (msg: JsonRpcMessage): void => {
@@ -559,6 +656,12 @@ export class CodexAppServerLLMProvider implements LLMProvider {
 
       const method = msg.method || "";
       const params = (msg.params || {}) as Record<string, unknown>;
+
+      // Best-effort: capture usage from any notification payload (通常在 turn/completed 附近出现)。
+      if (!usage) {
+        const maybe = findTokenUsageInAny(params);
+        if (maybe) usage = maybe;
+      }
 
       if (method === "item/agentMessage/delta") {
         const delta = String(params.delta ?? "");
@@ -624,7 +727,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
             merged = itemCompletedText;
             opts.onDelta(itemCompletedText);
           }
-          return merged.trim();
+          return { text: merged.trim(), usage };
         }
 
         // “无事件”超时：只统计本 turn 的相关通知（其它 turn 的噪声不算进展）。用于尽快发现卡死/网络阻塞。

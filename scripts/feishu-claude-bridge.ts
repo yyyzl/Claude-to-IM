@@ -7,7 +7,7 @@
  * 运行：
  *   npx tsx scripts/feishu-claude-bridge.ts
  *
- * 配置（建议放到“中央 runner 目录”（本仓库根目录）下的 .env.bridge.local）：
+ * 配置（建议放到"中央 runner 目录"（本仓库根目录）下的 .env.bridge.local）：
  *   bridge_feishu_app_id=cli_xxx
  *   bridge_feishu_app_secret=xxx
  *   bridge_feishu_allowed_users=ou_xxx   # 强烈建议限制为你自己
@@ -49,6 +49,7 @@ type RunnerControlFiles = {
   pidFile: string;
   heartbeatFile: string;
   stopFile: string;
+  lastStopFile: string;
 };
 
 function redactSensitive(text: string): string {
@@ -72,7 +73,7 @@ function pickEnv(name: string): string | null {
 function detectPotentialSignalSourceHints(): string[] {
   const hints: string[] = [];
 
-  // 常见“看似自动中断”的根因：watch/restart 工具会向子进程发 SIGINT/SIGTERM 来重启。
+  // 常见"看似自动中断"的根因：watch/restart 工具会向子进程发 SIGINT/SIGTERM 来重启。
   const lifecycle = pickEnv("npm_lifecycle_script");
   if (lifecycle && /(tsx\s+watch|nodemon|concurrently|turbo|vite|webpack|rollup|watch)/i.test(lifecycle)) {
     hints.push(`npm_lifecycle_script=${lifecycle}`);
@@ -159,6 +160,7 @@ function resolveRunnerControlFiles(runnerRoot: string): RunnerControlFiles {
     pidFile: path.join(controlDir, "pid"),
     heartbeatFile: path.join(controlDir, "heartbeat.json"),
     stopFile: path.join(controlDir, "stop"),
+    lastStopFile: path.join(controlDir, "last-stop.json"),
   };
 }
 
@@ -168,6 +170,10 @@ function safeMkdirp(dir: string): void {
 
 function safeWriteFile(filePath: string, text: string): void {
   try { fs.writeFileSync(filePath, text, "utf8"); } catch { /* ignore */ }
+}
+
+function safeWriteJson(filePath: string, data: unknown): void {
+  try { fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8"); } catch { /* ignore */ }
 }
 
 function safeUnlink(filePath: string): void {
@@ -239,10 +245,16 @@ async function main() {
   safeMkdirp(control.controlDir);
 
   // Load local env file (no override)
-  // 约定：仅使用“中央 runner 目录”的 .env.bridge.local，避免多项目间互相覆盖/漂移。
-  // - 配置集中：一台机器只维护一份 bot 凭据/默认模型等
-  // - 目标工作目录通过 bridge_default_work_dir 指向要操作的项目
-  loadDotEnvFile(path.join(runnerRoot, ".env.bridge.local"));
+  // 支持通过命令行参数指定 env 文件，方便同时运行多个 Bot 实例：
+  //   npx tsx scripts/feishu-claude-bridge.ts .env.bridge.claude
+  //   npx tsx scripts/feishu-claude-bridge.ts .env.bridge.codex
+  // 未指定时回退到默认的 .env.bridge.local
+  const envFileName = process.argv[2] || ".env.bridge.local";
+  const envFilePath = path.isAbsolute(envFileName)
+    ? envFileName
+    : path.join(runnerRoot, envFileName);
+  loadDotEnvFile(envFilePath);
+  console.log(`[bridge-runner] Env file: ${envFilePath}`);
 
   const claudeToImRoot = pickExistingPath(
     [
@@ -394,11 +406,21 @@ async function main() {
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let stopPollTimer: ReturnType<typeof setInterval> | null = null;
 
-  const writeHeartbeat = (status: "running" | "stopping" | "stopped") => {
+  const writeHeartbeat = (
+    status: "running" | "stopping" | "stopped",
+    extra: Record<string, unknown> = {},
+  ) => {
     const upSec = Math.round((Date.now() - bootAt) / 1000);
     safeWriteFile(
       control.heartbeatFile,
-      JSON.stringify({ ts: new Date().toISOString(), pid: process.pid, uptimeSec: upSec, status, backend }),
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        pid: process.pid,
+        uptimeSec: upSec,
+        status,
+        backend,
+        ...extra,
+      }),
     );
   };
 
@@ -410,7 +432,7 @@ async function main() {
 
     const upSec = Math.round((Date.now() - bootAt) / 1000);
     console.log(`[bridge-runner] Received ${signal}, stopping... (uptime=${upSec}s)`);
-    writeHeartbeat("stopping");
+    writeHeartbeat("stopping", { reason: signal });
 
     if (heartbeatTimer) {
       clearInterval(heartbeatTimer);
@@ -423,7 +445,7 @@ async function main() {
     safeUnlink(control.stopFile);
 
     // 诊断信息：SIGINT 多数情况下来自 Ctrl+C 或父进程（watch/restart 工具）发出的终止信号。
-    // 这里尽量在不泄漏敏感信息的前提下，打印一些线索，方便定位“自动中断”的真实来源。
+    // 这里尽量在不泄漏敏感信息的前提下，打印一些线索，方便定位"自动中断"的真实来源。
     const hints = detectPotentialSignalSourceHints();
     if (hints.length) {
       console.log("[bridge-runner] 诊断：检测到可能的信号来源线索：");
@@ -437,10 +459,21 @@ async function main() {
       console.log(`[bridge-runner] 诊断：父进程信息：${parentDiag}`);
     }
 
+    safeWriteJson(control.lastStopFile, {
+      ts: new Date().toISOString(),
+      pid: process.pid,
+      ppid: process.ppid,
+      signal,
+      uptimeSec: upSec,
+      backend,
+      hints,
+      parentProcess: parentDiag,
+    });
+
     try { await bridgeManager.stop(); } catch { /* ignore */ }
     try { (llmFinal as any).stop?.(); } catch { /* ignore */ }
     safeUnlink(control.pidFile);
-    writeHeartbeat("stopped");
+    writeHeartbeat("stopped", { reason: signal });
     process.exit(0);
   };
 
@@ -455,7 +488,7 @@ async function main() {
     stopPollTimer = setInterval(() => {
       if (!fs.existsSync(control.stopFile)) return;
 
-      // 防误触发：若 stop 文件早于本次启动，则视为“残留文件”，直接清理。
+      // 防误触发：若 stop 文件早于本次启动，则视为"残留文件"，直接清理。
       try {
         const st = fs.statSync(control.stopFile);
         if (st.mtimeMs + 500 < bootAt) {

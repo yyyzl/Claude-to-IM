@@ -66,13 +66,56 @@ bridge_feishu_input_debounce_ms=1200
 
 ## 3) 启动
 
+### 单实例（默认）
+
 在本仓库根目录执行：
 
 ```bash
 npx tsx scripts/feishu-claude-bridge.ts
 ```
 
-运行数据会落到本仓库根目录的 `.ccg/`（已建议加入忽略）。
+默认读取 `.env.bridge.local`，运行数据落到 `.ccg/bridge-runner/`。
+
+### 多实例并行（Claude + Codex 双桥接）
+
+脚本支持通过命令行参数指定不同的 env 文件，配合 `BRIDGE_CONTROL_DIR` 环境变量隔离各实例的运行数据，即可同时运行多个桥接实例（分别连接不同的飞书机器人 + 不同的 LLM 后端）。
+
+**准备工作**：在仓库根目录分别创建两份配置文件：
+
+| 文件 | 后端 | 控制目录 |
+|---|---|---|
+| `.env.bridge.claude` | Claude Code | `.ccg/bridge-claude/` |
+| `.env.bridge.codex` | Codex CLI | `.ccg/bridge-codex/` |
+
+**PowerShell 启动命令**（在本仓库根目录执行）：
+
+```powershell
+# 启动 Claude 桥接
+$env:BRIDGE_CONTROL_DIR=".ccg/bridge-claude"; npx tsx scripts/feishu-claude-bridge.ts .env.bridge.claude
+
+# 启动 Codex 桥接
+$env:BRIDGE_CONTROL_DIR=".ccg/bridge-codex"; npx tsx scripts/feishu-claude-bridge.ts .env.bridge.codex
+```
+
+**Git Bash 启动命令**：
+
+```bash
+# 启动 Claude 桥接
+BRIDGE_CONTROL_DIR=".ccg/bridge-claude" npx tsx scripts/feishu-claude-bridge.ts .env.bridge.claude
+
+# 启动 Codex 桥接
+BRIDGE_CONTROL_DIR=".ccg/bridge-codex" npx tsx scripts/feishu-claude-bridge.ts .env.bridge.codex
+```
+
+> **注意**：两个实例需要使用不同的飞书机器人（不同的 `app_id` / `app_secret`），否则 Webhook 事件会冲突。
+
+运行数据分别落到各自的控制目录（`.ccg/bridge-claude/`、`.ccg/bridge-codex/`），互不干扰。
+
+**一键启动**（推荐）：自动打开两个独立窗口，分别运行 Claude 和 Codex 桥接：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/start-bridges.ps1
+```
 
 ## 3.1) 推荐：用 `scripts/bridge.ps1` 管理（更适合远程/无人值守）
 
@@ -100,6 +143,7 @@ powershell -ExecutionPolicy Bypass -File scripts/bridge.ps1 stop -Force
 
 - `pid`：runner PID
 - `heartbeat.json`：心跳（默认每 15s 更新一次）
+- `last-stop.json`：最近一次优雅退出的原因（如 `SIGINT` / `STOP_FILE`）
 - `stop`：触发优雅退出（由 stop 命令创建）
 - `stdout.log` / `stderr.log`：runner 输出日志
 
