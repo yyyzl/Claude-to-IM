@@ -35,6 +35,13 @@ import {
 } from './internal/git-command.js';
 import { generateGitCommitMessageWithLLM } from './internal/git-llm.js';
 import {
+  getUsageRetentionDays,
+  recordTokenUsageToDailySummary,
+  resolveProjectInfoFromWorkingDirectory,
+  resolveUsageSummaryPath,
+} from './internal/usage-summary.js';
+import { parseUsageQueryRange, renderUsageReportHtml } from './internal/usage-command.js';
+import {
   validateWorkingDirectory,
   validateSessionId,
   isDangerousInput,
@@ -939,6 +946,35 @@ async function handleMessage(
       );
     }, taskAbort.signal, hasAttachments ? msg.attachments : undefined, onPartialText, onToolEvent);
 
+    // Best-effort: record token usage into local daily summary.
+    // 写入失败不得影响主流程（IM 响应/流式体验）。
+    if (result.tokenUsage) {
+      try {
+        const filePath = resolveUsageSummaryPath(store);
+        const retentionDays = getUsageRetentionDays(store);
+        const workDir = binding.workingDirectory
+          || store.getSession(binding.codepilotSessionId)?.working_directory
+          || '';
+        const project = resolveProjectInfoFromWorkingDirectory(workDir);
+        recordTokenUsageToDailySummary({
+          filePath,
+          project,
+          usage: result.tokenUsage,
+          retentionDays,
+        }).catch((err) => {
+          console.warn(
+            '[bridge-manager] Failed to record token usage summary:',
+            err instanceof Error ? err.message : err,
+          );
+        });
+      } catch (err) {
+        console.warn(
+          '[bridge-manager] Failed to schedule token usage summary write:',
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+
     // Finalize streaming card if adapter supports it.
     // onStreamEnd awaits any in-flight card creation and returns true if a card
     // was actually finalized (meaning content is already visible to the user).
@@ -1073,6 +1109,7 @@ async function handleCommand(
         '/git help - Show /git usage',
         '/git draft - Generate commit draft (LLM)',
         '/git push - Push current branch',
+        '/usage [今天|昨天|最近N天] - Show token usage summary',
         '/perm allow|allow_session|deny &lt;id&gt; - Respond to permission',
         '/help - Show this help',
       ].join('\n');
@@ -1236,6 +1273,27 @@ async function handleCommand(
         `Turn idle timeout: <code>${formatTimeoutMs(effectiveIdleTimeoutMs)}</code>`,
         `Queue timeout: <code>${formatTimeoutMs(effectiveQueueTimeoutMs)}</code>`,
       ].join('\n');
+      break;
+    }
+
+    case '/usage':
+    case '/tokens': {
+      try {
+        const filePath = resolveUsageSummaryPath(store);
+        const range = parseUsageQueryRange(args, new Date());
+        response = await renderUsageReportHtml({
+          filePath,
+          range,
+          options: { topN: 5 },
+        });
+      } catch (err) {
+        response = [
+          '<b>Token 用量</b>',
+          '',
+          '读取统计失败。',
+          err instanceof Error ? `原因：<code>${escapeHtml(err.message)}</code>` : '',
+        ].filter(Boolean).join('\n');
+      }
       break;
     }
 
@@ -1944,6 +2002,7 @@ async function handleCommand(
         '/git help - Show /git usage',
         '/git draft - Generate commit draft (LLM)',
         '/git push - Push current branch',
+        '/usage [今天|昨天|最近N天] - Show token usage summary',
         '/perm allow|allow_session|deny &lt;id&gt; - Respond to permission request',
         '1/2/3 - Quick permission reply (Feishu/QQ, single pending)',
         '/help - Show this help',

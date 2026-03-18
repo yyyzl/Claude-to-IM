@@ -77,6 +77,18 @@ Returns a configuration value by key. All bridge configuration (bot tokens, allo
 | `bridge_model` | `"claude-sonnet-4-20250514"` | Default model |
 | `bridge_{adapter}_stream_enabled` | `"true"` | Enable streaming previews |
 
+**Optional keys (usage stats via /usage)**
+
+The bridge attempts to extract token usage from the SSE `result.usage` event at the end of each turn and writes it into a local daily summary file.
+You can query the summary via the IM slash command `/usage` (today / yesterday / last N days).
+
+> Semantics: `cache_read_input_tokens` / `cache_creation_input_tokens` are input breakdown fields (for cache visibility) and are not double-counted into total.
+
+| Key | Example Value | Purpose |
+|-----|--------------|---------|
+| `bridge_usage_summary_path` | `"/home/user/.claude-to-im/usage-summary.json"` | Daily summary file path (defaults to user home) |
+| `bridge_usage_retention_days` | `"90"` | Keep last N days of data (`0` disables pruning) |
+
 #### Channel Bindings
 
 ```typescript

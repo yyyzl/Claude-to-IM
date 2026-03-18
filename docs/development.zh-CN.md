@@ -77,6 +77,18 @@ getSetting(key: string): string | null;
 | `bridge_model` | `"claude-sonnet-4-20250514"` | 默认模型 |
 | `bridge_{adapter}_stream_enabled` | `"true"` | 启用流式预览 |
 
+**可选的 key（用量统计 /usage）**
+
+桥接会在每轮对话结束时尝试从 SSE `result.usage` 事件中提取 Token 用量，并写入本地按天汇总文件。
+你可以通过 IM 斜杠命令 `/usage` 查询今天或最近 N 天的汇总情况。
+
+> 统计口径说明：`cache_read_input_tokens` / `cache_creation_input_tokens` 是 input 的拆分字段（用于展示缓存占比），不会重复计入 total。
+
+| Key | 示例值 | 用途 |
+|-----|--------|------|
+| `bridge_usage_summary_path` | `"/home/user/.claude-to-im/usage-summary.json"` | 按天汇总文件路径（默认写到用户目录） |
+| `bridge_usage_retention_days` | `"90"` | 保留最近 N 天的统计数据（`0` 表示不裁剪） |
+
 #### 通道绑定（Channel Bindings）
 
 ```typescript
