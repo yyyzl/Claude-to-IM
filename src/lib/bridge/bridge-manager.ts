@@ -48,6 +48,8 @@ import {
   sanitizeInput,
   validateMode,
 } from './security/validators.js';
+import { buildClaudePassthroughHelp, buildCodexPassthroughHelp } from './internal/passthrough-help.js';
+import { buildCodexPassthroughPrompt } from './internal/codex-passthrough.js';
 
 const GLOBAL_KEY = '__bridge_manager__';
 const execFileAsync = promisify(execFile);
@@ -801,23 +803,82 @@ async function handleMessage(
     }
   }
 
-  // Check for IM commands (before sanitization — commands are validated individually)
-  if (rawText.startsWith('/')) {
+  // ── Passthrough detection ─────────────────────────────────────
+  // // double-slash   → forward to Claude session as plain message
+  // /codex:xxx       → wrap with Codex role prompt, then forward
+  // /xxx (single)    → bridge command (handled by handleCommand)
+
+  let effectiveText = rawText; // may be rewritten by passthrough logic
+
+  if (rawText.startsWith('//')) {
+    const passthroughBody = rawText.slice(2).trim(); // strip leading //
+    const passthroughLower = passthroughBody.toLowerCase();
+
+    // //help → return help text directly (not forwarded to LLM)
+    if (passthroughLower === 'help' || passthroughLower === '') {
+      await deliver(adapter, {
+        address: msg.address,
+        text: buildClaudePassthroughHelp(),
+        parseMode: 'HTML',
+        replyToMessageId: msg.messageId,
+      });
+      ack();
+      return;
+    }
+
+    // Rewrite: strip one leading / so it becomes a regular message
+    // e.g. "//review src/" → "/review src/" (sent as-is to Claude)
+    effectiveText = rawText.slice(1);
+    // Fall through to normal message processing below
+  } else if (rawText.toLowerCase().startsWith('/codex:')) {
+    const spaceIdx = rawText.search(/\s/);
+    const cmdPart = spaceIdx === -1 ? rawText : rawText.slice(0, spaceIdx);
+    const codexCmd = cmdPart.split('@')[0].toLowerCase(); // /codex:review@bot → /codex:review
+    const codexArgs = spaceIdx === -1 ? '' : rawText.slice(spaceIdx).trim();
+
+    // /codex:help → return help text directly
+    if (codexCmd === '/codex:help') {
+      await deliver(adapter, {
+        address: msg.address,
+        text: buildCodexPassthroughHelp(),
+        parseMode: 'HTML',
+        replyToMessageId: msg.messageId,
+      });
+      ack();
+      return;
+    }
+
+    const prompt = buildCodexPassthroughPrompt(codexCmd, codexArgs);
+    if (prompt) {
+      effectiveText = prompt; // Replace with role-annotated prompt
+      // Fall through to normal message processing below
+    } else {
+      await deliver(adapter, {
+        address: msg.address,
+        text: 'Unknown codex command. Type <code>/codex:help</code> for available commands.',
+        parseMode: 'HTML',
+        replyToMessageId: msg.messageId,
+      });
+      ack();
+      return;
+    }
+  } else if (rawText.startsWith('/')) {
+    // Single slash → bridge command
     await handleCommand(adapter, msg, rawText);
     ack();
     return;
   }
 
   // Sanitize general message text before routing to conversation engine
-  const { text, truncated } = sanitizeInput(rawText);
+  const { text, truncated } = sanitizeInput(effectiveText);
   if (truncated) {
-    console.warn(`[bridge-manager] Input truncated from ${rawText.length} to ${text.length} chars for chat ${msg.address.chatId}`);
+    console.warn(`[bridge-manager] Input truncated from ${effectiveText.length} to ${text.length} chars for chat ${msg.address.chatId}`);
     store.insertAuditLog({
       channelType: adapter.channelType,
       chatId: msg.address.chatId,
       direction: 'inbound',
       messageId: msg.messageId,
-      summary: `[TRUNCATED] Input truncated from ${rawText.length} chars`,
+      summary: `[TRUNCATED] Input truncated from ${effectiveText.length} chars`,
     });
   }
 
@@ -1112,6 +1173,10 @@ async function handleCommand(
         '/usage [今天|昨天|最近N天] - Show token usage summary',
         '/perm allow|allow_session|deny &lt;id&gt; - Respond to permission',
         '/help - Show this help',
+        '',
+        '<b>Passthrough:</b>',
+        '//help - Claude 透传命令清单',
+        '/codex:help - Codex 透传命令清单',
       ].join('\n');
       break;
 
@@ -2006,6 +2071,12 @@ async function handleCommand(
         '/perm allow|allow_session|deny &lt;id&gt; - Respond to permission request',
         '1/2/3 - Quick permission reply (Feishu/QQ, single pending)',
         '/help - Show this help',
+        '',
+        '<b>Passthrough (透传)</b>',
+        '//&lt;指令&gt; - 透传给 Claude（如 //review, //debug, //plan）',
+        '/codex:&lt;角色&gt; - 透传给 Codex（如 /codex:analyze, /codex:review）',
+        '//help - Claude 透传命令完整清单',
+        '/codex:help - Codex 透传命令完整清单',
       ].join('\n');
       break;
 
