@@ -68,6 +68,7 @@ export class ClaudeCodeLLMProvider implements LLMProvider {
             cwd: params.workingDirectory,
             model: params.model,
             resume,
+            settingSources: ['user', 'project', 'local'],
             systemPrompt: params.systemPrompt,
             abortController,
             permissionMode,
