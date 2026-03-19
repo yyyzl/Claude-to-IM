@@ -164,7 +164,7 @@ export async function processMessage(
     switch (binding.mode) {
       case 'plan': permissionMode = 'plan'; break;
       case 'ask': permissionMode = 'default'; break;
-      default: permissionMode = 'acceptEdits'; break;
+      default: permissionMode = 'dontAsk'; break;
     }
 
     // Load conversation history for context
