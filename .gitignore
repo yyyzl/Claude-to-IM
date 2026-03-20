@@ -11,3 +11,6 @@ dist/
 .env.bridge.codex
 .ccg/
 .ace-tool/
+
+# Workflow Engine runtime data (not tracked)
+.claude-workflows/runs/
