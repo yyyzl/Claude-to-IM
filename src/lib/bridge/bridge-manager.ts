@@ -202,6 +202,16 @@ interface GitDraftRecord {
   summaryLines: string[];
 }
 
+/** Timestamped tool call entry for /status live context display. */
+interface RecentToolCallEntry {
+  name: string;
+  status: 'running' | 'complete' | 'error';
+  timestamp: number; // Date.now()
+}
+
+/** Max tool call entries kept per session. */
+const MAX_RECENT_TOOL_CALLS = 10;
+
 interface BridgeManagerState {
   adapters: Map<string, BaseChannelAdapter>;
   adapterMeta: Map<string, AdapterMeta>;
@@ -217,6 +227,8 @@ interface BridgeManagerState {
   /** /git draft 缓存：key = codepilotSessionId */
   gitDrafts: Map<string, GitDraftRecord>;
   autoStartChecked: boolean;
+  /** Recent tool calls per session for /status live context: key = codepilotSessionId */
+  recentToolCalls: Map<string, RecentToolCallEntry[]>;
 }
 
 function getState(): BridgeManagerState {
@@ -234,6 +246,7 @@ function getState(): BridgeManagerState {
       inputDebounceBuffers: new Map(),
       gitDrafts: new Map(),
       autoStartChecked: false,
+      recentToolCalls: new Map(),
     };
   }
   // Backfill sessionLocks for states created before this field existed
@@ -252,7 +265,30 @@ function getState(): BridgeManagerState {
   if (!g[GLOBAL_KEY].gitDrafts) {
     g[GLOBAL_KEY].gitDrafts = new Map();
   }
+  // Backfill recentToolCalls for states created before this field existed
+  if (!g[GLOBAL_KEY].recentToolCalls) {
+    g[GLOBAL_KEY].recentToolCalls = new Map();
+  }
   return g[GLOBAL_KEY];
+}
+
+/**
+ * Record a tool call into the per-session recent history.
+ * Only records when status is 'running' (start of a new tool call).
+ */
+function recordRecentToolCall(sessionId: string, name: string, status: 'running' | 'complete' | 'error'): void {
+  if (status !== 'running') return; // only record new tool starts
+  const st = getState();
+  let list = st.recentToolCalls.get(sessionId);
+  if (!list) {
+    list = [];
+    st.recentToolCalls.set(sessionId, list);
+  }
+  list.push({ name, status, timestamp: Date.now() });
+  // Keep only the latest N entries
+  if (list.length > MAX_RECENT_TOOL_CALLS) {
+    st.recentToolCalls.set(sessionId, list.slice(-MAX_RECENT_TOOL_CALLS));
+  }
 }
 
 /**
@@ -972,18 +1008,23 @@ async function handleMessage(
     try { adapter.onStreamText!(msg.address.chatId, fullText); } catch { /* non-critical */ }
   } : undefined;
 
-  const onToolEvent = hasStreamingCards ? (toolId: string, toolName: string, status: 'running' | 'complete' | 'error') => {
+  const onToolEvent = (toolId: string, toolName: string, status: 'running' | 'complete' | 'error') => {
+    // Always record to global state for /status live context
     if (toolName) {
+      recordRecentToolCall(binding.codepilotSessionId, toolName, status);
       toolCallTracker.set(toolId, { id: toolId, name: toolName, status });
     } else {
       // tool_result doesn't carry name — update existing entry's status
       const existing = toolCallTracker.get(toolId);
       if (existing) existing.status = status;
     }
-    try {
-      adapter.onToolEvent!(msg.address.chatId, Array.from(toolCallTracker.values()));
-    } catch { /* non-critical */ }
-  } : undefined;
+    // Update streaming card if adapter supports it
+    if (hasStreamingCards) {
+      try {
+        adapter.onToolEvent!(msg.address.chatId, Array.from(toolCallTracker.values()));
+      } catch { /* non-critical */ }
+    }
+  };
 
   // Combined partial text callback: streaming preview + streaming cards
   const onPartialText = (previewOnPartialText || onStreamCardText) ? (fullText: string) => {
@@ -1302,6 +1343,22 @@ async function handleCommand(
       const effectiveIdleTimeoutMs = (idleTimeoutSetting != null) ? idleTimeoutSetting : 0;
       const effectiveQueueTimeoutMs = computeSessionQueueTimeoutMs(queueTimeoutSetting, turnTimeoutSetting);
 
+      // Build recent tool calls section
+      const recentTools = st.recentToolCalls.get(binding.codepilotSessionId) || [];
+      const toolLines: string[] = [];
+      if (recentTools.length > 0) {
+        toolLines.push('', '<b>Recent tools:</b>');
+        // Show last 5 tool calls with relative timestamps
+        const now = Date.now();
+        for (const tc of recentTools.slice(-5)) {
+          const ago = Math.round((now - tc.timestamp) / 1000);
+          const agoStr = ago < 60 ? `${ago}s ago` : `${Math.floor(ago / 60)}m${ago % 60}s ago`;
+          toolLines.push(`  <code>${escapeHtml(tc.name)}</code> (${agoStr})`);
+        }
+      } else if (isRunningTask) {
+        toolLines.push('', '<i>No tool calls recorded yet.</i>');
+      }
+
       response = [
         '<b>Bridge Status</b>',
         '',
@@ -1316,6 +1373,7 @@ async function handleCommand(
         `Turn timeout: <code>${formatTimeoutMs(effectiveTurnTimeoutMs)}</code>`,
         `Turn idle timeout: <code>${formatTimeoutMs(effectiveIdleTimeoutMs)}</code>`,
         `Queue timeout: <code>${formatTimeoutMs(effectiveQueueTimeoutMs)}</code>`,
+        ...toolLines,
       ].join('\n');
       break;
     }
