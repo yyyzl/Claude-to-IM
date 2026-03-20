@@ -177,3 +177,63 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 5: Workflow IM Integration (P2A)
+
+**Date**: 2026-03-20
+**Task**: Workflow IM Integration (P2A)
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+## 完成内容
+
+将 Workflow Engine 集成到 Bridge IM 命令系统（P2A 最小可用级别）。
+
+| 项目 | 详情 |
+|------|------|
+| 新增文件 | `internal/workflow-command.ts` (~400行) — 命令解析、引擎管理、事件推送 |
+| 新增测试 | `workflow-command.test.ts` (~155行) — 20 个子命令解析测试 |
+| 修改文件 | `bridge-manager.ts` — +1 import, +4行 case, +2行帮助文案 |
+
+## 命令设计
+
+- `/workflow start <spec> <plan>` → 启动 Spec-Review
+- `/workflow status [run-id]` → 查看状态
+- `/workflow resume <run-id>` → 恢复暂停的工作流
+- `/workflow stop` → 停止当前工作流
+
+## 架构决策
+
+- 每 chat 单工作流，Map<chatKey, RunningWorkflow> 防并发
+- 后台异步执行，/workflow start 立即返回
+- bindProgressEvents() 事件到消息单一映射点，便于 P2B 卡片化迭代
+- Workflow Engine 保持独立，不引入 Bridge 依赖
+
+## 验证
+
+- TypeScript 类型检查通过
+- 128 测试全通过（108 原有 + 20 新增），0 回归
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9859d91` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
