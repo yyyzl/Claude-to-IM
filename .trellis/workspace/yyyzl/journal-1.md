@@ -290,3 +290,35 @@ Updated Files:
 ### Next Steps
 
 - None - task complete
+
+
+## Session 7: feat(bridge): /status 实时工具调用上下文
+
+**Date**: 2026-03-20
+**Task**: feat(bridge): /status 实时工具调用上下文
+
+### Summary
+
+F:/Git/status 增加最近工具调用展示（名称+相对时间），onToolEvent 改为始终生效不再依赖 streaming card，全局 state 环形缓冲最近 10 条记录
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `17c10a3` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

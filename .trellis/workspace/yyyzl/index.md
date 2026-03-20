@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 6
+- **Total Sessions**: 7
 - **Last Active**: 2026-03-20
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~292 | Active |
+| `journal-1.md` | ~324 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits |
 |---|------|-------|---------|
+| 7 | 2026-03-20 | feat(bridge): /status 实时工具调用上下文 | `17c10a3` |
 | 6 | 2026-03-20 | Code Review & Fix: /workflow 命令竞态、安全和健壮性修复 | `82dfe0a` |
 | 5 | 2026-03-20 | Workflow IM Integration (P2A) | `9859d91` |
 | 4 | 2026-03-20 | Workflow Engine P0 + P1a MVP 完整实现 | `ab8cdb3` |
