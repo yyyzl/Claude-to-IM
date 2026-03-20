@@ -140,6 +140,36 @@ export class ClaudeCodeLLMProvider implements LLMProvider {
               capturedSdkSessionId = msg.session_id;
               emit(controller, "status", { session_id: msg.session_id });
             }
+
+            // ── Forward tool events for /status live context display ──
+            // Pattern 1: SDK yields assistant messages containing tool_use content blocks
+            if (msg?.type === "assistant" && Array.isArray(msg?.message?.content)) {
+              for (const block of msg.message.content) {
+                if (block?.type === "tool_use" && block.name) {
+                  emit(controller, "tool_use", {
+                    id: block.id || `tool-${Date.now()}`,
+                    name: block.name,
+                    input: block.input || {},
+                  });
+                }
+              }
+            }
+            // Pattern 2: SDK yields direct tool_use / tool_result events
+            if (msg?.type === "tool_use" && msg?.name) {
+              emit(controller, "tool_use", {
+                id: msg.id || `tool-${Date.now()}`,
+                name: msg.name,
+                input: msg.input || {},
+              });
+            }
+            if (msg?.type === "tool_result") {
+              emit(controller, "tool_result", {
+                tool_use_id: msg.tool_use_id || msg.id || "",
+                content: typeof msg.content === "string" ? msg.content : "",
+                is_error: msg.is_error || false,
+              });
+            }
+
             if (msg?.type === "result") {
               resultMsg = msg;
               // 不 break：SDK 可能在 result 后还有 prompt_suggestion 等

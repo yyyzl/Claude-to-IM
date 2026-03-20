@@ -426,6 +426,19 @@ export class CodexAppServerLLMProvider implements LLMProvider {
 
           const prompt = this.buildTurnPrompt(params.prompt, params.workingDirectory);
 
+          // ── Tool event bridge: forward Codex tool calls to SSE stream ──
+          const onToolEvent = (toolId: string, toolName: string, status: 'running' | 'complete' | 'error') => {
+            if (status === "running" && toolName) {
+              emit(controller, "tool_use", { id: toolId, name: toolName, input: {} });
+            } else {
+              emit(controller, "tool_result", {
+                tool_use_id: toolId,
+                content: "",
+                is_error: status === "error",
+              });
+            }
+          };
+
           let turnId: string;
           try {
             turnId = await this.startTurn({
@@ -458,6 +471,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
                 threadId: freshThreadId,
                 turnId,
                 onDelta: (delta) => emit(controller, "text", delta),
+                onToolEvent,
                 signal,
               });
 
@@ -475,6 +489,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
             threadId,
             turnId,
             onDelta: (delta) => emit(controller, "text", delta),
+            onToolEvent,
             signal,
           });
 
@@ -637,6 +652,8 @@ export class CodexAppServerLLMProvider implements LLMProvider {
     threadId: string;
     turnId: string;
     onDelta: (delta: string) => void;
+    /** Callback for tool call lifecycle events (start / complete / error). */
+    onToolEvent?: (toolId: string, toolName: string, status: 'running' | 'complete' | 'error') => void;
     signal: AbortSignal;
   }): Promise<{ text: string; usage: TokenUsage | null }> {
     const timeoutMs = this.turnTimeoutMs;
@@ -647,6 +664,9 @@ export class CodexAppServerLLMProvider implements LLMProvider {
     let turnCompleted = false;
     let usage: TokenUsage | null = null;
     let lastRelevantEventMs = Date.now();
+    /** De-dup set for streaming tool notifications (commandExecution, mcpToolCall)
+     *  that fire per-delta rather than once per tool invocation. */
+    const seenToolIds = new Set<string>();
 
     const handle = (msg: JsonRpcMessage): void => {
       const msgThreadId = getNotifThreadId(msg);
@@ -672,11 +692,73 @@ export class CodexAppServerLLMProvider implements LLMProvider {
         return;
       }
 
+      // ── Tool call lifecycle ─────────────────────────────────────
+      // Codex app-server (v0.115+) notifications for tool activity:
+      //   item/started              — new item begins (item.type identifies kind)
+      //   item/tool/call            — explicit tool invocation notification
+      //   item/commandExecution/*   — shell command execution
+      //   item/mcpToolCall/progress — MCP tool progress
+      //   item/completed            — item finished
+
+      if (method === "item/started" && opts.onToolEvent) {
+        const item = (params.item || {}) as Record<string, unknown>;
+        const itemType = String(item.type || "");
+        if (itemType === "function_call" || itemType === "tool_call") {
+          const toolId = pickString(item.id) || `tool-${Date.now()}`;
+          const toolName = pickString(item.name)
+            || pickString((item as any).function?.name)
+            || "codex_tool";
+          opts.onToolEvent(toolId, toolName, "running");
+        }
+        return;
+      }
+
+      // item/tool/call — explicit tool invocation (alternative to item/started)
+      if (method === "item/tool/call" && opts.onToolEvent) {
+        const toolId = pickString(params.id) || pickString((params as any).callId) || `tool-${Date.now()}`;
+        const toolName = pickString(params.toolName as string)
+          || pickString(params.name as string)
+          || "codex_tool";
+        opts.onToolEvent(toolId, toolName, "running");
+        return;
+      }
+
+      // item/commandExecution/outputDelta — shell command is running
+      if (method === "item/commandExecution/outputDelta" && opts.onToolEvent) {
+        const itemId = pickString(params.itemId as string) || pickString((params as any).item?.id);
+        if (itemId && !seenToolIds.has(itemId)) {
+          seenToolIds.add(itemId);
+          opts.onToolEvent(itemId, "shell", "running");
+        }
+        return;
+      }
+
+      // item/mcpToolCall/progress — MCP tool is executing
+      if (method === "item/mcpToolCall/progress" && opts.onToolEvent) {
+        const itemId = pickString(params.itemId as string) || pickString((params as any).item?.id);
+        const toolName = pickString(params.toolName as string) || "mcp_tool";
+        if (itemId && !seenToolIds.has(itemId)) {
+          seenToolIds.add(itemId);
+          opts.onToolEvent(itemId, toolName, "running");
+        }
+        return;
+      }
+
       if (method === "item/completed") {
         const item = (params.item || {}) as Record<string, unknown>;
-        if (String(item.type || "") === "agentMessage") {
+        const itemType = String(item.type || "");
+        if (itemType === "agentMessage") {
           const txt = pickString(item.text);
           if (txt) itemCompletedText = txt;
+        } else if ((itemType === "function_call" || itemType === "tool_call") && opts.onToolEvent) {
+          // Tool call finished executing
+          const toolId = pickString(item.id) || "";
+          const toolName = pickString(item.name) || pickString((item as any).function?.name) || "";
+          if (toolId) opts.onToolEvent(toolId, toolName, "complete");
+        } else if ((itemType === "function_call_output" || itemType === "tool_call_output") && opts.onToolEvent) {
+          // Tool result arrived
+          const callId = pickString((item as any).call_id) || pickString((item as any).tool_use_id) || "";
+          if (callId) opts.onToolEvent(callId, "", (item as any).is_error ? "error" : "complete");
         }
         return;
       }
