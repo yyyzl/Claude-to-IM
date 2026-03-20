@@ -48,6 +48,7 @@ import {
   sanitizeInput,
   validateMode,
 } from './security/validators.js';
+import { buildBridgeCommandHelp } from './internal/bridge-help.js';
 import { buildClaudePassthroughHelp, buildCodexPassthroughHelp } from './internal/passthrough-help.js';
 import { buildCodexPassthroughPrompt } from './internal/codex-passthrough.js';
 import { handleWorkflowCommand } from './internal/workflow-command.js';
@@ -1155,32 +1156,7 @@ async function handleCommand(
 
   switch (command) {
     case '/start':
-      response = [
-        '<b>CodePilot Bridge</b>',
-        '',
-        'Send any message to interact with Claude.',
-        '',
-        '<b>Commands:</b>',
-        '/new [path] - Start new session',
-        '/bind &lt;session_id&gt; - Bind to existing session',
-        '/cwd /path - Change working directory',
-        '/mode plan|code|ask - Change mode',
-        '/status - Show current status',
-        '/sessions - List recent sessions',
-        '/stop - Stop current session',
-        '/git - Auto commit all changes',
-        '/git help - Show /git usage',
-        '/git draft - Generate commit draft (LLM)',
-        '/git push - Push current branch',
-        '/usage [今天|昨天|最近N天] - Show token usage summary',
-        '/workflow start|status|resume|stop - Spec-Review 工作流',
-        '/perm allow|allow_session|deny &lt;id&gt; - Respond to permission',
-        '/help - Show this help',
-        '',
-        '<b>Passthrough:</b>',
-        '//help - Claude 透传命令清单',
-        '/codex:help - Codex 透传命令清单',
-      ].join('\n');
+      response = buildBridgeCommandHelp();
       break;
 
     case '/new': {
@@ -2062,33 +2038,7 @@ async function handleCommand(
     }
 
     case '/help':
-      response = [
-        '<b>CodePilot Bridge Commands</b>',
-        '',
-        '/new [path] - Start new session',
-        '/bind &lt;session_id&gt; - Bind to existing session',
-        '/cwd /path - Change working directory',
-        '/mode plan|code|ask - Change mode',
-        '/status - Show current status',
-        '/sessions - List recent sessions',
-        '/stop - Stop current session',
-        '/git - Auto commit all changes',
-        '/git help - Show /git usage',
-        '/git draft - Generate commit draft (LLM)',
-        '/git push - Push current branch',
-        '/usage [今天|昨天|最近N天] - Show token usage summary',
-        '/workflow start|status|resume|stop - Spec-Review 工作流',
-        '/perm allow|allow_session|deny &lt;id&gt; - Respond to permission request',
-        '1/2/3 - Quick permission reply (Feishu/QQ, single pending)',
-        '/help - Show this help',
-        '',
-        '<b>Passthrough (透传)</b>',
-        '//&lt;指令&gt; - 透传给 Claude（如 //review, //debug, //plan）',
-        '//trellis:&lt;命令&gt; - Trellis 工作流（如 //trellis:start, //trellis:parallel）',
-        '/codex:&lt;角色&gt; - 透传给 Codex（如 /codex:analyze, /codex:review）',
-        '//help - Claude 透传命令完整清单',
-        '/codex:help - Codex 透传命令完整清单',
-      ].join('\n');
+      response = buildBridgeCommandHelp();
       break;
 
     default:

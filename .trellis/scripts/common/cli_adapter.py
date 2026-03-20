@@ -503,10 +503,11 @@ def detect_platform(project_root: Path) -> Platform:
     5. .agents/skills exists and no other platform dirs → codex
     6. .kilocode directory exists → kilo
     7. .kiro/skills exists and no other platform dirs → kiro
-    8. .gemini directory exists → gemini
-    9. .agent/workflows exists and no other platform dirs → antigravity
-    10. .qoder directory exists → qoder
-    11. Default → claude
+    8. .claude directory exists → claude
+    9. .gemini directory exists → gemini
+    10. .agent/workflows exists and no other platform dirs → antigravity
+    11. .qoder directory exists → qoder
+    12. Default → claude
 
     Args:
         project_root: Project root directory
@@ -546,6 +547,10 @@ def detect_platform(project_root: Path) -> Platform:
     # Only detect as cursor if .claude doesn't exist (to avoid confusion)
     if (project_root / ".cursor").is_dir() and not (project_root / ".claude").is_dir():
         return "cursor"
+
+    # Prefer Claude when both .claude and .gemini exist in the same repo.
+    if (project_root / ".claude").is_dir():
+        return "claude"
 
     # Check for .gemini directory (Gemini CLI-specific)
     if (project_root / ".gemini").is_dir():
