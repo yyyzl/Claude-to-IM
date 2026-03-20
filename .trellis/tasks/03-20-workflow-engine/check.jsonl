@@ -1,0 +1,7 @@
+{"file": ".agents/skills/finish-work/SKILL.md", "reason": "Finish work checklist"}
+{"file": ".agents/skills/check-backend/SKILL.md", "reason": "Backend check spec"}
+{"file": ".trellis/spec/backend/testing-guidelines.md", "reason": "验证 workflow 单测与集成测试要求"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "收尾时检查路径、导出、脚本与规范一致性"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "复查跨层边界和契约同步"}
+{"file": ".claude/plan/workflow-engine-spec.md", "reason": "对照原始 spec 验收实现范围"}
+{"file": ".claude/plan/workflow-engine-plan.md", "reason": "对照原始 plan 验收步骤覆盖"}

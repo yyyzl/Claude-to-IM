@@ -1,0 +1,90 @@
+{
+  "id": "workflow-engine",
+  "name": "workflow-engine",
+  "title": "Workflow Engine（双模型协作工作流）",
+  "description": "将 .claude/plan 下的 Workflow Engine spec/plan 转换为 Trellis 父任务，用于跟踪 P0 协议定义与 P1a Spec-Review MVP 的实现进展。",
+  "status": "planning",
+  "dev_type": "backend",
+  "scope": "workflow",
+  "priority": "P2",
+  "creator": "yyyzl",
+  "assignee": "yyyzl",
+  "createdAt": "2026-03-20",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "current_phase": 0,
+  "next_action": [
+    {
+      "phase": 1,
+      "action": "implement"
+    },
+    {
+      "phase": 2,
+      "action": "check"
+    },
+    {
+      "phase": 3,
+      "action": "finish"
+    },
+    {
+      "phase": 4,
+      "action": "create-pr"
+    }
+  ],
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [
+    {
+      "name": "P0 脚手架、模板与 schema",
+      "status": "pending"
+    },
+    {
+      "name": "核心类型与 WorkflowStore",
+      "status": "pending"
+    },
+    {
+      "name": "JsonParser、IssueMatcher、PromptAssembler",
+      "status": "pending"
+    },
+    {
+      "name": "PackBuilder 与 ModelInvoker",
+      "status": "pending"
+    },
+    {
+      "name": "TerminationJudge、ContextCompressor、PatchApplier",
+      "status": "pending"
+    },
+    {
+      "name": "WorkflowEngine 主循环与恢复机制",
+      "status": "pending"
+    },
+    {
+      "name": "CLI、导出接线与端到端测试",
+      "status": "pending"
+    }
+  ],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    ".claude/plan/workflow-engine-spec.md",
+    ".claude/plan/workflow-engine-plan.md",
+    "多机器人协作/最终方案.md",
+    "src/lib/workflow/",
+    "package.json",
+    ".claude-workflows/"
+  ],
+  "notes": "由 2026-03-20 的 workflow-engine spec/plan 映射为 Trellis 跟踪任务；当前仅完成建档、上下文配置与激活，不包含实现代码。",
+  "meta": {
+    "source_spec": ".claude/plan/workflow-engine-spec.md",
+    "source_plan": ".claude/plan/workflow-engine-plan.md",
+    "source_spec_mtime": "2026-03-20 03:16:16",
+    "source_plan_mtime": "2026-03-20 03:22:56",
+    "tracking_mode": "parent-task",
+    "tracked_scope": [
+      "P0 protocol definition",
+      "P1a spec-review MVP"
+    ]
+  }
+}
