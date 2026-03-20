@@ -2,13 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "issue-ledger.schema.json",
   "title": "IssueLedger",
-  "description": "Decision log for Workflow Engine spec/plan review. Tracks all issues raised, their status, and resolution history.",
+  "description": "Tracks all issues raised during a workflow run, including their lifecycle and decisions.",
   "type": "object",
   "required": ["run_id", "issues"],
   "properties": {
     "run_id": {
       "type": "string",
-      "description": "Unique identifier for the workflow run"
+      "description": "Unique run identifier"
     },
     "issues": {
       "type": "array",
@@ -17,75 +17,57 @@
       }
     }
   },
-  "additionalProperties": false,
   "$defs": {
     "Issue": {
       "type": "object",
-      "required": [
-        "id",
-        "round",
-        "raised_by",
-        "severity",
-        "description",
-        "evidence",
-        "status",
-        "repeat_count"
-      ],
+      "required": ["id", "round", "raised_by", "severity", "description", "evidence", "status", "repeat_count"],
       "properties": {
         "id": {
           "type": "string",
-          "pattern": "^ISS-\\d{3,}$",
-          "description": "Issue identifier, e.g. ISS-001"
+          "pattern": "^ISS-\d{3,}$",
+          "description": "Issue ID, e.g. ISS-001"
         },
         "round": {
           "type": "integer",
           "minimum": 1,
-          "description": "Round in which the issue was first raised"
+          "description": "Round number when first raised"
         },
         "raised_by": {
           "type": "string",
-          "enum": ["codex", "claude", "human"],
-          "description": "Who raised this issue"
+          "enum": ["codex", "claude", "human"]
         },
         "severity": {
           "type": "string",
-          "enum": ["critical", "high", "medium", "low"],
-          "description": "Issue severity level"
+          "enum": ["critical", "high", "medium", "low"]
         },
         "description": {
-          "type": "string",
-          "description": "Clear description of the issue"
+          "type": "string"
         },
         "evidence": {
           "type": "string",
-          "description": "Specific reference to the affected section or content"
+          "description": "Section reference or evidence location"
         },
         "status": {
           "type": "string",
-          "enum": ["open", "accepted", "rejected", "deferred", "resolved"],
-          "description": "Current status of the issue"
+          "enum": ["open", "accepted", "rejected", "deferred", "resolved"]
         },
         "decided_by": {
           "type": "string",
-          "enum": ["claude", "human"],
-          "description": "Who made the decision on this issue"
+          "enum": ["claude", "human"]
         },
         "decision_reason": {
-          "type": "string",
-          "description": "Rationale for the decision"
+          "type": "string"
         },
         "resolved_in_round": {
           "type": "integer",
-          "minimum": 1,
-          "description": "Round in which the issue was resolved (status transitioned to resolved)"
+          "minimum": 1
         },
         "repeat_count": {
           "type": "integer",
           "minimum": 0,
-          "description": "Number of times this issue was re-raised after rejection. Used for deadlock detection (>= 2 triggers pause_for_human)."
+          "description": "Times re-raised after rejection (for deadlock detection)"
         }
-      },
-      "additionalProperties": false
+      }
     }
   }
 }

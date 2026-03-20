@@ -2,23 +2,20 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "event.schema.json",
   "title": "WorkflowEvent",
-  "description": "Event log entry for workflow execution. Stored as ndjson (one JSON per line, append-only).",
+  "description": "A single event in the workflow event log (stored as ndjson).",
   "type": "object",
   "required": ["timestamp", "run_id", "round", "event_type", "data"],
   "properties": {
     "timestamp": {
       "type": "string",
-      "format": "date-time",
-      "description": "ISO 8601 timestamp of the event"
+      "format": "date-time"
     },
     "run_id": {
-      "type": "string",
-      "description": "Run identifier this event belongs to"
+      "type": "string"
     },
     "round": {
       "type": "integer",
-      "minimum": 0,
-      "description": "Round number when the event occurred (0 for workflow-level events)"
+      "minimum": 0
     },
     "event_type": {
       "type": "string",
@@ -47,14 +44,11 @@
         "workflow_completed",
         "workflow_failed",
         "workflow_resumed"
-      ],
-      "description": "Type of workflow event"
+      ]
     },
     "data": {
       "type": "object",
-      "description": "Event-specific payload. Structure varies by event_type.",
-      "additionalProperties": true
+      "description": "Event-specific payload (varies by event_type)"
     }
-  },
-  "additionalProperties": false
+  }
 }

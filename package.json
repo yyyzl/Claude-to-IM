@@ -25,6 +25,14 @@
     "./src/lib/bridge/security/*.js": {
       "types": "./dist/lib/bridge/security/*.d.ts",
       "import": "./dist/lib/bridge/security/*.js"
+    },
+    "./workflow": {
+      "types": "./dist/lib/workflow/index.d.ts",
+      "import": "./dist/lib/workflow/index.js"
+    },
+    "./workflow/*": {
+      "types": "./dist/lib/workflow/*.d.ts",
+      "import": "./dist/lib/workflow/*.js"
     }
   },
   "files": ["dist", "src/lib"],
@@ -32,12 +40,14 @@
     "build": "tsc -p tsconfig.build.json",
     "prepare": "npm run build",
     "typecheck": "tsc --noEmit",
-    "test:unit": "node --test --import tsx --test-timeout=15000 src/__tests__/unit/bridge-*.test.ts",
+    "workflow:review": "node --import tsx src/lib/workflow/cli.ts",
+    "test:unit": "node --test --import tsx --test-timeout=15000 src/__tests__/unit/bridge-*.test.ts src/__tests__/unit/workflow-*.test.ts",
     "test": "npm run typecheck && npm run test:unit",
     "example": "npx tsx src/lib/bridge/examples/mock-host.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.62",
+    "@anthropic-ai/sdk": "^0.39.0",
     "@larksuiteoapi/node-sdk": "^1.59.0",
     "discord.js": "^14.25.1",
     "markdown-it": "^14.1.1",

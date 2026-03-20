@@ -2,184 +2,113 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "meta.schema.json",
   "title": "WorkflowMeta",
-  "description": "Metadata for a workflow run, including configuration, status, and checkpoint information for crash-safe resume.",
+  "description": "Metadata for a workflow run, including status, configuration, and checkpoint info.",
   "type": "object",
-  "required": [
-    "run_id",
-    "workflow_type",
-    "status",
-    "current_round",
-    "current_step",
-    "created_at",
-    "updated_at",
-    "config",
-    "last_completed"
-  ],
+  "required": ["run_id", "workflow_type", "status", "current_round", "current_step", "created_at", "updated_at", "config"],
   "properties": {
     "run_id": {
-      "type": "string",
-      "description": "Unique identifier for this run"
+      "type": "string"
     },
     "workflow_type": {
       "type": "string",
-      "enum": ["spec-review", "dev", "code-review"],
-      "description": "Type of workflow being executed"
+      "enum": ["spec-review", "dev", "code-review"]
     },
     "status": {
       "type": "string",
-      "enum": ["running", "paused", "completed", "failed", "human_review"],
-      "description": "Overall workflow status"
+      "enum": ["running", "paused", "completed", "failed", "human_review"]
     },
     "current_round": {
       "type": "integer",
-      "minimum": 0,
-      "description": "Current round number (0 = not started)"
+      "minimum": 0
     },
     "current_step": {
       "type": "string",
-      "enum": [
-        "codex_review",
-        "issue_matching",
-        "pre_termination",
-        "claude_decision",
-        "post_decision"
-      ],
-      "description": "Fine-grained step within the current round. Used as commit marker for crash-safe resume. Step ordering: codex_review -> issue_matching -> pre_termination -> claude_decision -> post_decision"
+      "enum": ["codex_review", "issue_matching", "pre_termination", "claude_decision", "post_decision"],
+      "description": "Fine-grained step state for crash-safe resume"
     },
     "created_at": {
       "type": "string",
-      "format": "date-time",
-      "description": "ISO 8601 timestamp of run creation"
+      "format": "date-time"
     },
     "updated_at": {
       "type": "string",
-      "format": "date-time",
-      "description": "ISO 8601 timestamp of last update"
+      "format": "date-time"
     },
     "config": {
       "$ref": "#/$defs/WorkflowConfig"
     },
     "last_completed": {
       "oneOf": [
+        { "type": "null" },
         {
           "type": "object",
           "required": ["round", "step"],
           "properties": {
-            "round": {
-              "type": "integer",
-              "minimum": 0
-            },
+            "round": { "type": "integer", "minimum": 0 },
             "step": {
               "type": "string",
-              "enum": [
-                "codex_review",
-                "issue_matching",
-                "pre_termination",
-                "claude_decision",
-                "post_decision"
-              ]
+              "enum": ["codex_review", "issue_matching", "pre_termination", "claude_decision", "post_decision"]
             }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "null"
+          }
         }
-      ],
-      "description": "Last successfully completed checkpoint. null if no steps completed yet."
+      ]
     }
   },
-  "additionalProperties": false,
   "$defs": {
     "WorkflowConfig": {
       "type": "object",
-      "required": [
-        "max_rounds",
-        "auto_terminate",
-        "human_review_on_deadlock",
-        "codex_timeout_ms",
-        "claude_timeout_ms",
-        "codex_max_retries",
-        "claude_max_retries",
-        "codex_context_window_tokens",
-        "context_files"
-      ],
+      "required": ["max_rounds", "auto_terminate", "human_review_on_deadlock", "codex_timeout_ms", "claude_timeout_ms", "codex_max_retries", "claude_max_retries", "codex_context_window_tokens", "context_files"],
       "properties": {
         "max_rounds": {
           "type": "integer",
           "minimum": 1,
-          "default": 3,
-          "description": "Maximum number of review rounds. Default 3, architecture-level: 5"
+          "default": 3
         },
         "auto_terminate": {
           "type": "boolean",
-          "default": true,
-          "description": "Whether to auto-terminate when conditions are met"
+          "default": true
         },
         "human_review_on_deadlock": {
           "type": "boolean",
-          "default": true,
-          "description": "Pause for human review when deadlock detected (repeat_count >= 2)"
+          "default": true
         },
         "codex_timeout_ms": {
           "type": "integer",
           "minimum": 1000,
-          "default": 180000,
-          "description": "Codex invocation timeout in milliseconds (default 3 min)"
+          "default": 180000
         },
         "claude_timeout_ms": {
           "type": "integer",
           "minimum": 1000,
-          "default": 120000,
-          "description": "Claude invocation timeout in milliseconds (default 2 min)"
+          "default": 120000
         },
         "codex_max_retries": {
           "type": "integer",
           "minimum": 0,
-          "default": 1,
-          "description": "Max retries on Codex timeout (default 1)"
+          "default": 1
         },
         "claude_max_retries": {
           "type": "integer",
           "minimum": 0,
-          "default": 1,
-          "description": "Max retries on Claude timeout (default 1)"
+          "default": 1
         },
         "codex_context_window_tokens": {
           "type": "integer",
           "minimum": 1000,
-          "default": 128000,
-          "description": "Codex context window size in tokens. Used by ContextCompressor threshold (60% triggers compression)."
+          "default": 128000
         },
         "context_files": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/ContextFile"
-          },
-          "description": "Global reference files with inlined content, sent to Codex each round"
-        },
-        "max_deferred_issues": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Maximum deferred issues included in Codex prompt. Oldest deferred issues are dropped when exceeded."
+            "type": "object",
+            "required": ["path", "content"],
+            "properties": {
+              "path": { "type": "string" },
+              "content": { "type": "string" }
+            }
+          }
         }
-      },
-      "additionalProperties": false
-    },
-    "ContextFile": {
-      "type": "object",
-      "required": ["path", "content"],
-      "properties": {
-        "path": {
-          "type": "string",
-          "description": "File path (for display in prompt)"
-        },
-        "content": {
-          "type": "string",
-          "description": "File content (inlined into prompt)"
-        }
-      },
-      "additionalProperties": false
+      }
     }
   }
 }

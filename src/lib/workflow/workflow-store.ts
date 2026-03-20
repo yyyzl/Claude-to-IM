@@ -1,0 +1,316 @@
+/**
+ * Artifact Store for workflow runs.
+ * Handles all persistence: meta, spec/plan versions, ledger, round artifacts, events, templates.
+ *
+ * Directory structure:
+ *   {basePath}/
+ *     templates/      -- Prompt templates (git-tracked)
+ *     schemas/        -- JSON schemas (git-tracked)
+ *     runs/           -- Runtime output (gitignored)
+ *       {run-id}/
+ *         meta.json
+ *         spec-v1.md, spec-v2.md, ...
+ *         plan-v1.md, plan-v2.md, ...
+ *         issue-ledger.json
+ *         events.ndjson
+ *         rounds/
+ *           R1-pack.json, R1-codex-review.md, R1-claude-raw.md, ...
+ */
+
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import type {
+  WorkflowMeta,
+  WorkflowEvent,
+  IssueLedger,
+} from './types.js';
+
+export class WorkflowStore {
+  private readonly basePath: string;
+
+  constructor(basePath?: string) {
+    this.basePath = basePath ?? '.claude-workflows';
+  }
+
+  // ── Helper: paths ────────────────────────────────────────────
+
+  private runDir(runId: string): string {
+    return path.join(this.basePath, 'runs', runId);
+  }
+
+  private roundsDir(runId: string): string {
+    return path.join(this.runDir(runId), 'rounds');
+  }
+
+  // ── Run lifecycle ────────────────────────────────────────────
+
+  /**
+   * Create a new run directory and write initial meta.json.
+   * Also creates the rounds/ subdirectory.
+   */
+  async createRun(meta: WorkflowMeta): Promise<void> {
+    const dir = this.runDir(meta.run_id);
+    await fs.mkdir(path.join(dir, 'rounds'), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, 'meta.json'),
+      JSON.stringify(meta, null, 2),
+      'utf-8',
+    );
+  }
+
+  /**
+   * Read run metadata. Returns null if the run directory or meta.json does not exist.
+   */
+  async getMeta(runId: string): Promise<WorkflowMeta | null> {
+    const filePath = path.join(this.runDir(runId), 'meta.json');
+    try {
+      const raw = await fs.readFile(filePath, 'utf-8');
+      return JSON.parse(raw) as WorkflowMeta;
+    } catch (err: unknown) {
+      if (isNotFoundError(err)) return null;
+      throw err;
+    }
+  }
+
+  /**
+   * Merge partial updates into existing meta and write back.
+   * Always updates `updated_at` to the current ISO timestamp.
+   */
+  async updateMeta(runId: string, updates: Partial<WorkflowMeta>): Promise<void> {
+    const existing = await this.getMeta(runId);
+    if (!existing) {
+      throw new Error(`[WorkflowStore] Run not found: ${runId}`);
+    }
+    const merged: WorkflowMeta = {
+      ...existing,
+      ...updates,
+      updated_at: new Date().toISOString(),
+    };
+    await fs.writeFile(
+      path.join(this.runDir(runId), 'meta.json'),
+      JSON.stringify(merged, null, 2),
+      'utf-8',
+    );
+  }
+
+  // ── Spec / Plan (versioned) ──────────────────────────────────
+
+  /**
+   * Save spec content. Auto-increments version if not specified.
+   * Naming: spec-v1.md, spec-v2.md, etc.
+   * @returns The version number that was written.
+   */
+  async saveSpec(runId: string, content: string, version?: number): Promise<number> {
+    const ver = version ?? (await this.findLatestVersion(runId, 'spec')) + 1;
+    const filePath = path.join(this.runDir(runId), `spec-v${ver}.md`);
+    await fs.writeFile(filePath, content, 'utf-8');
+    return ver;
+  }
+
+  /**
+   * Load spec content. If version is not given, returns the latest version.
+   * Returns null if no spec file exists.
+   */
+  async loadSpec(runId: string, version?: number): Promise<string | null> {
+    const ver = version ?? (await this.findLatestVersion(runId, 'spec'));
+    if (ver === 0) return null;
+    const filePath = path.join(this.runDir(runId), `spec-v${ver}.md`);
+    try {
+      return await fs.readFile(filePath, 'utf-8');
+    } catch (err: unknown) {
+      if (isNotFoundError(err)) return null;
+      throw err;
+    }
+  }
+
+  /**
+   * Save plan content. Auto-increments version if not specified.
+   * Naming: plan-v1.md, plan-v2.md, etc.
+   * @returns The version number that was written.
+   */
+  async savePlan(runId: string, content: string, version?: number): Promise<number> {
+    const ver = version ?? (await this.findLatestVersion(runId, 'plan')) + 1;
+    const filePath = path.join(this.runDir(runId), `plan-v${ver}.md`);
+    await fs.writeFile(filePath, content, 'utf-8');
+    return ver;
+  }
+
+  /**
+   * Load plan content. If version is not given, returns the latest version.
+   * Returns null if no plan file exists.
+   */
+  async loadPlan(runId: string, version?: number): Promise<string | null> {
+    const ver = version ?? (await this.findLatestVersion(runId, 'plan'));
+    if (ver === 0) return null;
+    const filePath = path.join(this.runDir(runId), `plan-v${ver}.md`);
+    try {
+      return await fs.readFile(filePath, 'utf-8');
+    } catch (err: unknown) {
+      if (isNotFoundError(err)) return null;
+      throw err;
+    }
+  }
+
+  // ── Issue Ledger ─────────────────────────────────────────────
+
+  /**
+   * Write issue-ledger.json for the given run.
+   */
+  async saveLedger(runId: string, ledger: IssueLedger): Promise<void> {
+    const filePath = path.join(this.runDir(runId), 'issue-ledger.json');
+    await fs.writeFile(filePath, JSON.stringify(ledger, null, 2), 'utf-8');
+  }
+
+  /**
+   * Load the issue ledger. Returns null if not found (first run scenario).
+   */
+  async loadLedger(runId: string): Promise<IssueLedger | null> {
+    const filePath = path.join(this.runDir(runId), 'issue-ledger.json');
+    try {
+      const raw = await fs.readFile(filePath, 'utf-8');
+      return JSON.parse(raw) as IssueLedger;
+    } catch (err: unknown) {
+      if (isNotFoundError(err)) return null;
+      throw err;
+    }
+  }
+
+  // ── Round artifacts ──────────────────────────────────────────
+
+  /**
+   * Save a round artifact.
+   * File naming: R{round}-{name} (e.g. R1-pack.json, R2-codex-review.md).
+   */
+  async saveRoundArtifact(
+    runId: string,
+    round: number,
+    name: string,
+    content: string,
+  ): Promise<void> {
+    const dir = this.roundsDir(runId);
+    await fs.mkdir(dir, { recursive: true });
+    const filePath = path.join(dir, `R${round}-${name}`);
+    await fs.writeFile(filePath, content, 'utf-8');
+  }
+
+  /**
+   * Load a round artifact. Returns null if the file does not exist.
+   */
+  async loadRoundArtifact(
+    runId: string,
+    round: number,
+    name: string,
+  ): Promise<string | null> {
+    const filePath = path.join(this.roundsDir(runId), `R${round}-${name}`);
+    try {
+      return await fs.readFile(filePath, 'utf-8');
+    } catch (err: unknown) {
+      if (isNotFoundError(err)) return null;
+      throw err;
+    }
+  }
+
+  // ── Events (ndjson append) ───────────────────────────────────
+
+  /**
+   * Append a single event as one JSON line to events.ndjson.
+   * The file is created if it does not exist.
+   */
+  async appendEvent(event: WorkflowEvent): Promise<void> {
+    const filePath = path.join(this.runDir(event.run_id), 'events.ndjson');
+    const line = JSON.stringify(event) + '\n';
+    await fs.appendFile(filePath, line, 'utf-8');
+  }
+
+  /**
+   * Load all events from events.ndjson.
+   * Returns an empty array if the file does not exist.
+   */
+  async loadEvents(runId: string): Promise<WorkflowEvent[]> {
+    const filePath = path.join(this.runDir(runId), 'events.ndjson');
+    let raw: string;
+    try {
+      raw = await fs.readFile(filePath, 'utf-8');
+    } catch (err: unknown) {
+      if (isNotFoundError(err)) return [];
+      throw err;
+    }
+
+    const events: WorkflowEvent[] = [];
+    const lines = raw.split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.length === 0) continue;
+      events.push(JSON.parse(trimmed) as WorkflowEvent);
+    }
+    return events;
+  }
+
+  // ── Templates ────────────────────────────────────────────────
+
+  /**
+   * Load a prompt template from the templates/ directory.
+   * THROWS if the template is not found (critical error -- templates must exist).
+   */
+  async loadTemplate(name: string): Promise<string> {
+    const filePath = path.join(this.basePath, 'templates', name);
+    try {
+      return await fs.readFile(filePath, 'utf-8');
+    } catch (err: unknown) {
+      if (isNotFoundError(err)) {
+        throw new Error(
+          `[WorkflowStore] Template not found: ${name} (looked in ${path.resolve(this.basePath, 'templates')})`,
+        );
+      }
+      throw err;
+    }
+  }
+
+  // ── Private helpers ──────────────────────────────────────────
+
+  /**
+   * Find the latest version number for spec or plan files.
+   * Scans the run directory for files matching pattern: {prefix}-v{N}.md
+   * Returns 0 if no matching files are found.
+   */
+  private async findLatestVersion(runId: string, prefix: string): Promise<number> {
+    const dir = this.runDir(runId);
+    let entries: string[];
+    try {
+      entries = await fs.readdir(dir);
+    } catch (err: unknown) {
+      if (isNotFoundError(err)) return 0;
+      throw err;
+    }
+
+    const pattern = new RegExp(`^${prefix}-v(\\d+)\\.md$`);
+    let maxVersion = 0;
+
+    for (const entry of entries) {
+      const match = pattern.exec(entry);
+      if (match) {
+        const ver = parseInt(match[1], 10);
+        if (ver > maxVersion) {
+          maxVersion = ver;
+        }
+      }
+    }
+
+    return maxVersion;
+  }
+}
+
+// ── File-system error detection ──────────────────────────────────
+
+/**
+ * Check whether an error is a "file not found" or "directory not found" error.
+ * Works with Node.js fs errors (ENOENT).
+ */
+function isNotFoundError(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    (err as { code: string }).code === 'ENOENT'
+  );
+}
