@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
-- **Last Active**: 2026-03-20
+- **Total Sessions**: 8
+- **Last Active**: 2026-03-21
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~324 | Active |
+| `journal-1.md` | ~356 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits |
 |---|------|-------|---------|
+| 8 | 2026-03-21 | feat: 实现 LLM Provider 工具调用事件转发 | `0af6d88` |
 | 7 | 2026-03-20 | feat(bridge): /status 实时工具调用上下文 | `17c10a3` |
 | 6 | 2026-03-20 | Code Review & Fix: /workflow 命令竞态、安全和健壮性修复 | `82dfe0a` |
 | 5 | 2026-03-20 | Workflow IM Integration (P2A) | `9859d91` |

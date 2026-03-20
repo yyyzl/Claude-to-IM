@@ -322,3 +322,35 @@ F:/Git/status 增加最近工具调用展示（名称+相对时间），onToolEv
 ### Next Steps
 
 - None - task complete
+
+
+## Session 8: feat: 实现 LLM Provider 工具调用事件转发
+
+**Date**: 2026-03-21
+**Task**: feat: 实现 LLM Provider 工具调用事件转发
+
+### Summary
+
+修复 /status 始终显示 No tool calls recorded yet 的问题。Codex 后端新增 5 个工具通知检测点（item/started, item/tool/call, commandExecution, mcpToolCall, item/completed 扩展），Claude 后端新增 3 种 SDK 工具事件检测模式。通知方法名基于 Codex CLI v0.115.0 二进制验证。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0af6d88` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
