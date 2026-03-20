@@ -3,13 +3,15 @@
  *
  * 测试范围：
  * - parseWorkflowArgs(): 子命令解析（help/start/status/resume/stop）
+ * - _resolveSafePath(): 路径遍历防护
  * - Edge cases: 空输入、缺参、多余参数、--context 解析
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import * as path from 'node:path';
 
-import { parseWorkflowArgs } from '../../lib/bridge/internal/workflow-command.js';
+import { parseWorkflowArgs, _resolveSafePath } from '../../lib/bridge/internal/workflow-command.js';
 
 // ── Tests ────────────────────────────────────────────────────────
 
@@ -174,6 +176,57 @@ describe('parseWorkflowArgs', () => {
     it('handles RESUME with run-id', () => {
       const result = parseWorkflowArgs('RESUME abc123');
       assert.deepStrictEqual(result, { kind: 'resume', runId: 'abc123' });
+    });
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════
+// resolveSafePath (path traversal guard)
+// ══════════════════════════════════════════════════════════════════
+
+describe('resolveSafePath', () => {
+  // Use a consistent cwd for tests (works on both Windows and POSIX)
+  const cwd = path.resolve('/project/myapp');
+
+  describe('allows paths within cwd', () => {
+    it('allows a simple filename', () => {
+      const result = _resolveSafePath(cwd, 'spec.md');
+      assert.equal(result, path.join(cwd, 'spec.md'));
+    });
+
+    it('allows a nested relative path', () => {
+      const result = _resolveSafePath(cwd, 'docs/spec.md');
+      assert.equal(result, path.join(cwd, 'docs', 'spec.md'));
+    });
+
+    it('allows a deeply nested path', () => {
+      const result = _resolveSafePath(cwd, 'a/b/c/d.md');
+      assert.equal(result, path.join(cwd, 'a', 'b', 'c', 'd.md'));
+    });
+
+    it('normalizes redundant ./ prefix', () => {
+      const result = _resolveSafePath(cwd, './spec.md');
+      assert.equal(result, path.join(cwd, 'spec.md'));
+    });
+  });
+
+  describe('rejects paths outside cwd', () => {
+    it('rejects parent traversal (../)', () => {
+      assert.equal(_resolveSafePath(cwd, '../secret.md'), null);
+    });
+
+    it('rejects deep parent traversal (../../)', () => {
+      assert.equal(_resolveSafePath(cwd, '../../etc/passwd'), null);
+    });
+
+    it('rejects traversal via subdirectory (sub/../../out)', () => {
+      assert.equal(_resolveSafePath(cwd, 'sub/../../out.md'), null);
+    });
+
+    it('rejects absolute path outside cwd', () => {
+      // Absolute path that doesn't start with cwd
+      const outsidePath = path.resolve('/other/project/file.md');
+      assert.equal(_resolveSafePath(cwd, outsidePath), null);
     });
   });
 });

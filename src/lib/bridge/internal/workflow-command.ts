@@ -11,6 +11,7 @@
  * - 工作流在后台异步执行，`/workflow start` 立即返回确认
  * - Engine 实例按需创建（lazy），不在 Bridge 启动时预创建
  * - 事件到消息的映射集中在 `bindProgressEvents()` 中，方便 P2B 卡片化迭代
+ * - activeWorkflows 占位在任何 await 之前完成，防止并发 start 竞态
  *
  * @module bridge/internal/workflow-command
  */
@@ -19,11 +20,21 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { createSpecReviewEngine } from '../../workflow/index.js';
 import type { WorkflowEngine } from '../../workflow/workflow-engine.js';
+import { WorkflowStore } from '../../workflow/workflow-store.js';
 import type { WorkflowEvent, WorkflowMeta } from '../../workflow/types.js';
 import type { BaseChannelAdapter } from '../channel-adapter.js';
 import type { InboundMessage, ChannelBinding } from '../types.js';
 import { deliver } from '../delivery-layer.js';
 import { getBridgeContext } from '../context.js';
+
+// ── Module-level Singleton ────────────────────────────────────
+
+/** Lazy-initialized WorkflowStore singleton for status queries. */
+let _workflowStore: WorkflowStore | null = null;
+function getWorkflowStore(): WorkflowStore {
+  if (!_workflowStore) _workflowStore = new WorkflowStore();
+  return _workflowStore;
+}
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -156,7 +167,7 @@ export async function handleWorkflowCommand(
       return;
 
     case 'stop':
-      await handleStop(adapter, msg, key);
+      await handleStop(adapter, msg, cmd, key);
       return;
   }
 }
@@ -170,7 +181,9 @@ async function handleStart(
   cwd: string,
   key: string,
 ): Promise<void> {
-  // Guard: only one workflow per chat
+  // ── Guard: only one workflow per chat ──
+  // CRITICAL: check + set MUST happen synchronously (before any await)
+  // to prevent concurrent /workflow start from both passing the guard.
   if (activeWorkflows.has(key)) {
     const running = activeWorkflows.get(key)!;
     await deliverText(adapter, msg,
@@ -180,80 +193,118 @@ async function handleStart(
     return;
   }
 
-  // Resolve file paths (relative to cwd)
-  const specFile = path.isAbsolute(cmd.specPath) ? cmd.specPath : path.join(cwd, cmd.specPath);
-  const planFile = path.isAbsolute(cmd.planPath) ? cmd.planPath : path.join(cwd, cmd.planPath);
-
-  // Validate & read files
-  let spec: string;
-  let plan: string;
-  try {
-    spec = await fs.readFile(specFile, 'utf-8');
-  } catch {
-    await deliverText(adapter, msg, `Spec 文件不存在或无法读取: <code>${esc(specFile)}</code>`);
-    return;
-  }
-  try {
-    plan = await fs.readFile(planFile, 'utf-8');
-  } catch {
-    await deliverText(adapter, msg, `Plan 文件不存在或无法读取: <code>${esc(planFile)}</code>`);
-    return;
-  }
-
-  // Read optional context files
-  const contextFiles: Array<{ path: string; content: string }> = [];
-  for (const p of cmd.contextPaths) {
-    const fullPath = path.isAbsolute(p) ? p : path.join(cwd, p);
-    try {
-      const content = await fs.readFile(fullPath, 'utf-8');
-      contextFiles.push({ path: p, content });
-    } catch {
-      await deliverText(adapter, msg, `Context 文件无法读取: <code>${esc(fullPath)}</code>，跳过。`);
-    }
-  }
-
-  // Create engine and bind events
-  const engine = createSpecReviewEngine();
-
-  // Confirm start immediately (non-blocking)
-  await deliverText(adapter, msg,
-    `正在启动 Spec-Review 工作流...\n` +
-    `Spec: <code>${esc(cmd.specPath)}</code>\n` +
-    `Plan: <code>${esc(cmd.planPath)}</code>` +
-    (contextFiles.length > 0 ? `\nContext: ${contextFiles.length} 个文件` : ''),
-  );
-
-  // 1. Set provisional entry FIRST (blocks concurrent /workflow start)
+  // Reserve the slot IMMEDIATELY — no await before this point.
+  // Uses null engine as placeholder; replaced with real engine below.
   activeWorkflows.set(key, {
-    engine,
-    runId: '(pending)',
+    engine: null as unknown as WorkflowEngine,
+    runId: '(reserving)',
     chatId: msg.address.chatId,
     channelType: msg.address.channelType,
     startedAt: Date.now(),
   });
 
-  // 2. Register run_id capture listener (updates provisional entry with real run_id)
-  engine.on('workflow_started', (e: WorkflowEvent) => {
+  // From here on, any early return MUST call activeWorkflows.delete(key).
+  try {
+    // ── Path traversal guard ──
+    const specFile = resolveSafePath(cwd, cmd.specPath);
+    const planFile = resolveSafePath(cwd, cmd.planPath);
+    if (!specFile) {
+      await deliverText(adapter, msg, `Spec 路径不在工作目录范围内: <code>${esc(cmd.specPath)}</code>`);
+      return;
+    }
+    if (!planFile) {
+      await deliverText(adapter, msg, `Plan 路径不在工作目录范围内: <code>${esc(cmd.planPath)}</code>`);
+      return;
+    }
+
+    // ── Validate & read files ──
+    let spec: string;
+    let plan: string;
+    try {
+      spec = await fs.readFile(specFile, 'utf-8');
+    } catch {
+      await deliverText(adapter, msg, `Spec 文件不存在或无法读取: <code>${esc(specFile)}</code>`);
+      return;
+    }
+    try {
+      plan = await fs.readFile(planFile, 'utf-8');
+    } catch {
+      await deliverText(adapter, msg, `Plan 文件不存在或无法读取: <code>${esc(planFile)}</code>`);
+      return;
+    }
+
+    // Read optional context files (skip files outside cwd)
+    const contextFiles: Array<{ path: string; content: string }> = [];
+    for (const p of cmd.contextPaths) {
+      const fullPath = resolveSafePath(cwd, p);
+      if (!fullPath) {
+        await deliverText(adapter, msg, `Context 路径不在工作目录范围内: <code>${esc(p)}</code>，跳过。`);
+        continue;
+      }
+      try {
+        const content = await fs.readFile(fullPath, 'utf-8');
+        contextFiles.push({ path: p, content });
+      } catch {
+        await deliverText(adapter, msg, `Context 文件无法读取: <code>${esc(fullPath)}</code>，跳过。`);
+      }
+    }
+
+    // ── Create engine and upgrade slot ──
+    const engine = createSpecReviewEngine();
+
+    // Upgrade the placeholder to a real provisional entry with engine.
     activeWorkflows.set(key, {
       engine,
-      runId: e.run_id,
+      runId: '(pending)',
       chatId: msg.address.chatId,
       channelType: msg.address.channelType,
       startedAt: Date.now(),
     });
-  });
 
-  // 3. Bind progress events (message push)
-  bindProgressEvents(engine, adapter, msg, key);
+    // Register run_id capture listener (updates provisional entry with real run_id)
+    engine.on('workflow_started', (e: WorkflowEvent) => {
+      const current = activeWorkflows.get(key);
+      // Only update if this engine still owns the slot (guard against stop+re-start)
+      if (current && current.engine === engine) {
+        activeWorkflows.set(key, { ...current, runId: e.run_id });
+      }
+    });
 
-  // 4. Launch workflow in background (fire-and-forget with error handling)
-  void engine.start({ spec, plan, contextFiles }).then(() => {
+    // Bind progress events (message push)
+    bindProgressEvents(engine, adapter, msg, key);
+
+    // Confirm start immediately (non-blocking)
+    await deliverText(adapter, msg,
+      `正在启动 Spec-Review 工作流...\n` +
+      `Spec: <code>${esc(cmd.specPath)}</code>\n` +
+      `Plan: <code>${esc(cmd.planPath)}</code>` +
+      (contextFiles.length > 0 ? `\nContext: ${contextFiles.length} 个文件` : ''),
+    );
+
+    // ── Launch workflow in background (fire-and-forget) ──
+    void engine.start({ spec, plan, contextFiles }).then(() => {
+      // Only delete if this engine still owns the slot
+      const current = activeWorkflows.get(key);
+      if (current && current.engine === engine) activeWorkflows.delete(key);
+    }).catch((err: unknown) => {
+      const current = activeWorkflows.get(key);
+      if (current && current.engine === engine) activeWorkflows.delete(key);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      deliverText(adapter, msg, `工作流异常退出: ${esc(errMsg)}`).catch(() => {});
+    });
+
+  } catch (err: unknown) {
+    // Unexpected error during setup — release the reserved slot
     activeWorkflows.delete(key);
-  }).catch(async (err: unknown) => {
-    activeWorkflows.delete(key);
-    const errMsg = err instanceof Error ? err.message : String(err);
-    await deliverText(adapter, msg, `工作流异常退出: ${esc(errMsg)}`);
-  });
+    throw err;
+  } finally {
+    // If we returned early from within the try block (validation failures),
+    // the slot may still be held with a placeholder engine. Clean it up.
+    const current = activeWorkflows.get(key);
+    if (current && current.engine === (null as unknown as WorkflowEngine)) {
+      activeWorkflows.delete(key);
+    }
+  }
 }
 
 async function handleStatus(
@@ -307,31 +358,46 @@ async function handleResume(
 
   // Launch resume in background
   void engine.resume(cmd.runId).then(() => {
-    activeWorkflows.delete(key);
-  }).catch(async (err: unknown) => {
-    activeWorkflows.delete(key);
+    const current = activeWorkflows.get(key);
+    if (current && current.engine === engine) activeWorkflows.delete(key);
+  }).catch((err: unknown) => {
+    const current = activeWorkflows.get(key);
+    if (current && current.engine === engine) activeWorkflows.delete(key);
     const errMsg = err instanceof Error ? err.message : String(err);
-    await deliverText(adapter, msg, `工作流恢复失败: ${esc(errMsg)}`);
+    deliverText(adapter, msg, `工作流恢复失败: ${esc(errMsg)}`).catch(() => {});
   });
 }
 
 async function handleStop(
   adapter: BaseChannelAdapter,
   msg: InboundMessage,
+  cmd: Extract<WorkflowSubcommand, { kind: 'stop' }>,
   key: string,
 ): Promise<void> {
+  // If a specific run-id is provided, look it up; otherwise use the active workflow.
   const running = activeWorkflows.get(key);
+
+  if (cmd.runId && (!running || running.runId !== cmd.runId)) {
+    // Explicit run-id that doesn't match the active workflow (or no active workflow).
+    await deliverText(adapter, msg,
+      `未找到运行中的工作流: <code>${esc(cmd.runId)}</code>`,
+    );
+    return;
+  }
+
   if (!running) {
     await deliverText(adapter, msg, '当前聊天没有运行中的工作流。');
     return;
   }
 
   try {
+    // stop = graceful pause (engine can be resumed later).
+    // The command is named "stop" for user simplicity; internally it's a pause.
     await running.engine.pause(running.runId);
     activeWorkflows.delete(key);
     await deliverText(adapter, msg,
-      `工作流已暂停 (run: <code>${esc(running.runId)}</code>)\n` +
-      `使用 <code>/workflow resume ${esc(running.runId)}</code> 恢复。`,
+      `工作流已停止 (run: <code>${esc(running.runId)}</code>)\n` +
+      `如需继续，使用 <code>/workflow resume ${esc(running.runId)}</code> 恢复。`,
     );
   } catch (err: unknown) {
     const errMsg = err instanceof Error ? err.message : String(err);
@@ -354,7 +420,9 @@ function bindProgressEvents(
   _key: string,
 ): void {
   const push = (text: string): void => {
-    void deliverText(adapter, msg, text);
+    deliverText(adapter, msg, text).catch((err) => {
+      console.error('[workflow-command] Failed to push progress message:', err);
+    });
   };
 
   engine.on('workflow_started', (e: WorkflowEvent) => {
@@ -466,9 +534,7 @@ async function deliverRunStatus(
   runId: string,
 ): Promise<void> {
   try {
-    // WorkflowStore reads from file system. Create a temp store to query.
-    const { WorkflowStore } = await import('../../workflow/workflow-store.js');
-    const store = new WorkflowStore();
+    const store = getWorkflowStore();
     const meta: WorkflowMeta | null = await store.getMeta(runId);
 
     if (!meta) {
@@ -530,8 +596,8 @@ function buildHelpText(): string {
     '<code>/workflow resume &lt;run-id&gt;</code>',
     '  恢复暂停或失败的工作流',
     '',
-    '<code>/workflow stop</code>',
-    '  停止当前运行的工作流',
+    '<code>/workflow stop [run-id]</code>',
+    '  停止当前/指定运行中的工作流（可恢复）',
     '',
     '<code>/workflow help</code>',
     '  显示此帮助',
@@ -554,9 +620,30 @@ async function deliverText(
   });
 }
 
-/** Minimal HTML entity escaping for user-supplied values. */
+/**
+ * Minimal HTML entity escaping for user-supplied values.
+ *
+ * NOTE: Only safe for tag *content*. Do NOT use inside HTML attributes
+ * (would need `"` and `'` escaping). Current usages are all content-context.
+ */
 function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
+ * Resolve a user-supplied file path relative to `cwd` and verify it stays
+ * within the cwd boundary (path traversal guard).
+ *
+ * @returns Resolved absolute path, or `null` if the path escapes cwd.
+ */
+function resolveSafePath(cwd: string, filePath: string): string | null {
+  const resolved = path.resolve(cwd, filePath);
+  const normalizedCwd = path.resolve(cwd);
+  // Ensure resolved path starts with cwd + separator (or is cwd itself)
+  if (resolved !== normalizedCwd && !resolved.startsWith(normalizedCwd + path.sep)) {
+    return null;
+  }
+  return resolved;
 }
 
 // ── Test Helpers (exported for unit testing) ───────────────────
@@ -570,3 +657,6 @@ export function _getActiveWorkflows(): Map<string, RunningWorkflow> {
 export function _clearActiveWorkflows(): void {
   activeWorkflows.clear();
 }
+
+/** @internal Expose resolveSafePath for testing. */
+export const _resolveSafePath = resolveSafePath;
