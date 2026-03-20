@@ -1,0 +1,4 @@
+{"file": ".gemini/commands/trellis/finish-work.toml", "reason": "Finish work checklist"}
+{"file": ".gemini/commands/trellis/check-backend.toml", "reason": "Backend check spec"}
+{"file": "src/lib/bridge/bridge-manager.ts", "reason": "验证 /workflow 集成"}
+{"file": "src/lib/workflow/types.ts", "reason": "验证类型一致性"}

@@ -1,0 +1,10 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": "src/lib/bridge/bridge-manager.ts", "reason": "命令系统主文件，需新增 /workflow case"}
+{"file": "src/lib/bridge/internal/git-command.ts", "reason": "最佳参照：复杂子命令模式"}
+{"file": "src/lib/bridge/delivery-layer.ts", "reason": "消息推送 deliver() API"}
+{"file": "src/lib/workflow/index.ts", "reason": "createSpecReviewEngine() 工厂"}
+{"file": "src/lib/workflow/workflow-engine.ts", "reason": "WorkflowEngine public API + 事件"}
+{"file": "src/lib/workflow/types.ts", "reason": "Workflow 全量类型定义"}
+{"file": "src/lib/bridge/security/validators.ts", "reason": "路径/输入校验复用"}
+{"file": "src/lib/bridge/types.ts", "reason": "Bridge 类型定义"}

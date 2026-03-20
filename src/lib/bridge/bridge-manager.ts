@@ -50,6 +50,7 @@ import {
 } from './security/validators.js';
 import { buildClaudePassthroughHelp, buildCodexPassthroughHelp } from './internal/passthrough-help.js';
 import { buildCodexPassthroughPrompt } from './internal/codex-passthrough.js';
+import { handleWorkflowCommand } from './internal/workflow-command.js';
 
 const GLOBAL_KEY = '__bridge_manager__';
 const execFileAsync = promisify(execFile);
@@ -1172,6 +1173,7 @@ async function handleCommand(
         '/git draft - Generate commit draft (LLM)',
         '/git push - Push current branch',
         '/usage [今天|昨天|最近N天] - Show token usage summary',
+        '/workflow start|status|resume|stop - Spec-Review 工作流',
         '/perm allow|allow_session|deny &lt;id&gt; - Respond to permission',
         '/help - Show this help',
         '',
@@ -2033,6 +2035,12 @@ async function handleCommand(
       break;
     }
 
+    case '/workflow': {
+      const binding = router.resolve(msg.address);
+      await handleWorkflowCommand(adapter, msg, args, binding);
+      break;
+    }
+
     case '/perm': {
       // Text-based permission approval fallback (for channels without inline buttons)
       // Usage: /perm allow <id> | /perm allow_session <id> | /perm deny <id>
@@ -2069,6 +2077,7 @@ async function handleCommand(
         '/git draft - Generate commit draft (LLM)',
         '/git push - Push current branch',
         '/usage [今天|昨天|最近N天] - Show token usage summary',
+        '/workflow start|status|resume|stop - Spec-Review 工作流',
         '/perm allow|allow_session|deny &lt;id&gt; - Respond to permission request',
         '1/2/3 - Quick permission reply (Feishu/QQ, single pending)',
         '/help - Show this help',
