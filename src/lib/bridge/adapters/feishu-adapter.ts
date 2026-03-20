@@ -786,7 +786,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
         elapsed,
       };
 
-      const finalCardJson = buildFinalCardJson(responseText, state.toolCalls, footer);
+      // Pass empty tools array — tool progress is only useful during streaming;
+      // the final card should show clean text + footer only.
+      const finalCardJson = buildFinalCardJson(responseText, [], footer);
 
       state.sequence++;
       await (this.restClient as any).cardkit.v1.card.update({
