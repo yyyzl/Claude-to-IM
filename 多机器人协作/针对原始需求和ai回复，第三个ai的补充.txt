@@ -1,0 +1,129 @@
+
+• 核心结论：不要把 Claude 和 Codex 设计成“两个在群里互相聊天的平级机器人”，而要设计成 Claude 做控制面，Codex 做无状态执
+  行/挑战节点；它们之间靠 结构化工单、决策账本、评审结果包 协作，而不是靠一轮轮转述聊天记录。
+
+  一、我对那份答案的判断
+
+  我同意它的大方向，但我觉得它有两个地方判断偏了。
+
+  第一，它说 session-orchestraor “不值得直接用，但值得借鉴”，这个方向对。因为你现在要的不是单模型流水线，而是“双模型 +
+  不同上下文策略 + 多轮裁决”。当前项目的 real runner 仍然是直接绑 codex app-server 的，/G:/project/session-orchestraor/
+  src/orchestrator/runners.py:499 和 /G:/project/session-orchestraor/src/orchestrator/runners.py:528 很清楚，说明它现在
+  更像“Codex 控制平面”，还不是“双模型中立编排器”。
+
+  第二，它把现有项目的匹配度说得有点低。就“控制面骨架”来说，这个项目其实已经有不少你需要的东西了：
+  /G:/project/session-orchestraor/src/orchestrator/service.py:396 里已经有 work_items + human_review 闸门；
+  /G:/project/session-orchestraor/src/orchestrator/service.py:570 和 /G:/project/session-orchestraor/src/orchestrator/
+  service.py:605 已经有 run snapshot、goal、budgets、window、work item 状态；
+  /G:/project/session-orchestraor/src/orchestrator/service.py:2353 已经有基于 ObservationPack 的 planner；
+  /G:/project/session-orchestraor/src/orchestrator/storage.py:160 已经会自动落 spec.md / progress.md / work_items.csv /
+  observation_pack.json / policy.json；
+  /G:/project/session-orchestraor/tests/test_workflow_control.py:819 也验证了“新窗口切换”的语义；
+  /G:/project/session-orchestraor/tests/test_workflow_control.py:1875 验证了 human_review 闸门。
+
+  所以我的判断是：
+
+  - 它不能直接拿来做你要的双机器人系统
+  - 但它已经足够做“状态底座”和“审计底座”
+  - 真正缺的是 actor 层，不是整个控制面重写
+
+  二、真正该设计的，不是“双机器人”，而是“五个协议”
+
+  你现在最需要想清楚的是这五件事：
+
+  1. 谁是控制面
+     Claude 最适合做控制面。因为它更适合保留长上下文、理解你的真实意图、做裁决和收口。Codex 更适合做“清空上下文后的独立
+     执行者/审查者”。
+  2. 上下文怎么流动
+     不要在两边反复贴整段聊天记录。要传的是一个压缩包：
+     目标 + 当前 spec/plan + 已接受/已拒绝的决策 + 当前 work item + 验收标准 + 上轮结果摘要。
+  3. 什么时候清空上下文
+     Codex 默认应当“按 work item / 按审查轮次清空”。
+     Claude 默认应当“保留控制面上下文”，但必要时可以开新窗口做一次无偏裁决。
+     不要两边都一直保留，也不要两边都每轮都清空。
+  4. 什么时候停止
+     不要固定“最多 10 轮”当成默认常态。正确的终止条件应该是：
+     没有新的高价值问题、只剩风格性建议、同一争议重复两轮、收益小于沟通成本。
+  5. 结果如何归档
+     必须有单一事实源。群消息不是事实源，文件才是。
+     群只适合当“通知面板”，不适合当“状态数据库”。
+
+  三、我建议的最合理流程
+
+  1. Spec / Plan 审查
+     Claude 生成 spec.md + plan.md + decision-log.md。
+     然后给 Codex 一个“干净评审包”，让它做盲审。
+     Codex 输出结构化 findings。
+     Claude 只做一件事：逐条裁决 accept / reject / defer，并写入 decision-log。
+     如果 spec/plan 有实质变化，再给 Codex 做第二轮“只看变更与未解决争议”的复审。
+     通常 2 轮够了，3 轮封顶。你现在设想的 5 次 Codex review，我认为大多数场景是过度的，会进入回音室。
+  2. 开发
+     不要“每一轮开一个新 Codex 窗口去做一小部分”，这太碎。
+     正确粒度应该是：一个 work item 对应一个 Codex 会话。
+     Claude 负责拆 work item，给出：
+     目标、文件范围、验收点、上下文摘要、禁止修改范围。
+     Codex 负责在这个边界内实现。
+     如果 work item 独立，可以并行多个 Codex；如果强依赖，就串行。
+     关键不是“新窗口次数”，而是“work item 切分质量”。
+  3. Review
+     Review 也不要无限 ping-pong。
+     更合理的是：
+     Codex 盲审成品；
+     Claude 做 findings 裁决；
+     Codex 只修“被接受的问题”；
+     必要时再做一次基于 diff 的快审。
+     重点是把“发现问题”和“决定要不要改”分开，否则两个模型会不断互相放大噪声。
+
+  四、session-orchestraor 怎么联动最值
+
+  我不建议你现在就把它硬改成完整双机器人产品，那会把大量时间耗在“工具工程”上，而不是耗在“你的开发提效”上。
+
+  我建议你把它当成 后台控制面底座 来用，而不是前台交互入口：
+
+  - 用它的 runpack 存：
+    spec.md、work_items.csv、observation_pack.json、report.md
+  - 用它的 work_items 机制表示开发切片
+  - 用它的 human_review 闸门承接 Claude 的裁决
+  - 用它的 window 语义承接 Codex 新会话
+  - 暂时不要让它直接“驱动 Claude”
+  - 先让 Claude 继续做人类可控的控制面，session-orchestraor 只做状态仓库和审计仓库
+
+  换句话说：
+
+  你 / Claude
+    -> 维护 spec、plan、decision-log、work-items
+    -> 生成给 Codex 的 ReviewPack / TaskPack
+    -> Codex 执行或评审
+    -> 结果回写 runpack
+    -> Claude 裁决并推进下一轮
+
+  这才是顺的。
+
+  五、我最核心的意见
+
+  你现在最该避免的，不是“要不要用这个项目”，而是下面这三件事：
+
+  - 不要让两个机器人平级对聊
+  - 不要把聊天记录本身当状态
+  - 不要把多轮当目标，而要把收敛当目标
+
+  所以如果让我替你定原则，我会这样定：
+
+  - Claude 永远是控制面
+  - Codex 永远是无状态工人/挑战者
+  - 所有协作都围绕结构化工单和决策账本
+  - 双模型只用在高杠杆节点
+      - spec/plan 定稿前
+      - 高风险实现切片
+      - 合并前审查
+  - 简单改动不要双审
+    否则提效会变成降效
+
+  如果只用一句话概括：最顺的联动方式不是“Claude 和 Codex 自然聊天”，而是“Claude 持有全局状态，Codex 按包执行，双方围绕同
+  一份 runpack 协作”。
+
+  工具调用简报
+
+  - shell：读取 session-orchestraor 的 README、AGENTS、.trellis/workflow、核心源码与测试。
+  - 目的：确认现有项目是否已具备 work_items / planner / human_review / runpack / new window 等控制面能力。
+  - 结果：确认“控制面骨架已具备，双模型 actor 层缺失”；未使用网络工具。
