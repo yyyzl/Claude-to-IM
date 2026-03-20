@@ -237,3 +237,56 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: Code Review & Fix: /workflow 命令竞态、安全和健壮性修复
+
+**Date**: 2026-03-20
+**Task**: Code Review & Fix: /workflow 命令竞态、安全和健壮性修复
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+## 会话内容
+
+对已实现的 `/workflow` 命令集成代码进行了系统性 Code Review，发现并修复 7 个问题：
+
+| 严重度 | 问题 | 修复 |
+|--------|------|------|
+| Critical | 并发 /workflow start 竞态 -> 孤儿 engine 泄漏 | has()+set() 同步完成，finally 自动清理占位 |
+| High | 路径遍历可读任意文件 | 新增 resolveSafePath() 校验路径在 cwd 内 |
+| High | stop 语义矛盾 + 丢弃 runId 参数 | handleStop 接收 cmd，消息改为已停止，支持 run-id |
+| Medium | fire-and-forget catch 中 unhandled rejection | .catch(() => {}) 吞掉 delivery 失败 |
+| Medium | push 静默丢弃 delivery 错误 | 改为 .catch(err => console.error(...)) |
+| Medium | 每次 status 创建新 WorkflowStore | 模块级 lazy 单例 |
+| Low | esc() 使用风险 | JSDoc 注释限定 content 上下文 |
+
+额外改进: fire-and-forget 的 then/catch 增加 current.engine === engine 守卫，防止误删新 engine 的 slot。
+
+Updated Files:
+- src/lib/bridge/internal/workflow-command.ts — 主要修复（+215 / -72）
+- src/__tests__/unit/workflow-command.test.ts — 新增 8 个 resolveSafePath 测试（28/28 通过）
+
+验证: TypeScript 零错误 | 单元测试 28/28 | workflow-engine 回归 17/17
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `82dfe0a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
