@@ -19,17 +19,25 @@ import type { ChannelBinding } from '../../lib/bridge/types';
 
 // ── Mock Store ──────────────────────────────────────────────
 
-function createMockStore(): BridgeStore & { bindings: Map<string, ChannelBinding>; sessions: Map<string, { id: string; working_directory: string; model: string }> } {
+function createMockStore(): BridgeStore & {
+  bindings: Map<string, ChannelBinding>;
+  sessions: Map<string, { id: string; working_directory: string; model: string }>;
+  setCurrentBackend(nextBackend: string): void;
+} {
   const bindings = new Map<string, ChannelBinding>();
   const sessions = new Map<string, { id: string; working_directory: string; model: string }>();
   let nextId = 1;
+  let currentBackend = 'claude';
 
   return {
     bindings,
     sessions,
     getSetting(key: string) {
+      if (key === 'bridge_llm_backend') return currentBackend;
       if (key === 'bridge_default_work_dir') return '/tmp/test';
       if (key === 'bridge_default_model') return 'claude-3';
+      if (key === 'bridge_codex_model_id') return 'gpt-5.4';
+      if (key === 'bridge_codex_model_hint') return 'gpt-5.4';
       if (key === 'bridge_default_provider_id') return '';
       return null;
     },
@@ -50,6 +58,7 @@ function createMockStore(): BridgeStore & { bindings: Map<string, ChannelBinding
         workingDirectory: data.workingDirectory,
         model: data.model,
         mode: prev?.mode || 'code',
+        backend: data.backend ?? prev?.backend,
         active: prev?.active ?? true,
         createdAt: prev?.createdAt || now,
         updatedAt: now,
@@ -101,6 +110,9 @@ function createMockStore(): BridgeStore & { bindings: Map<string, ChannelBinding
     listPendingPermissionLinksByChat() { return []; },
     getChannelOffset() { return '0'; },
     setChannelOffset() {},
+    setCurrentBackend(nextBackend: string) {
+      currentBackend = nextBackend;
+    },
   };
 }
 
@@ -161,6 +173,20 @@ describe('channel-router', () => {
 
     const second = router.resolve({ channelType: 'telegram', chatId: '123' });
     assert.notEqual(first.codepilotSessionId, second.codepilotSessionId);
+  });
+
+  it('resolve() recreates binding when backend changed', () => {
+    store.setCurrentBackend('codex');
+    const first = router.resolve({ channelType: 'telegram', chatId: '123' });
+    router.updateBinding(first.id, { sdkSessionId: 'codex-session-id' });
+
+    store.setCurrentBackend('claude');
+    const second = router.resolve({ channelType: 'telegram', chatId: '123' });
+
+    assert.notEqual(first.codepilotSessionId, second.codepilotSessionId);
+    assert.equal(second.backend, 'claude');
+    assert.equal(second.model, 'claude-3');
+    assert.equal(second.sdkSessionId, '');
   });
 
   it('createBinding() uses custom working directory', () => {

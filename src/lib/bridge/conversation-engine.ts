@@ -214,7 +214,7 @@ export async function processMessage(
       // Consume the stream server-side (replicate collectStreamResponse pattern).
       // Permission requests are forwarded immediately via the callback during streaming
       // because the stream blocks until permission is resolved — we can't wait until after.
-      return await consumeStream(stream, sessionId, onPermissionRequest, onPartialText, onToolEvent, abortController.signal);
+      return await consumeStream(stream, sessionId, binding, onPermissionRequest, onPartialText, onToolEvent, abortController.signal);
     } finally {
       if (timeoutTimer) clearTimeout(timeoutTimer);
     }
@@ -232,6 +232,7 @@ export async function processMessage(
 async function consumeStream(
   stream: ReadableStream<string>,
   sessionId: string,
+  binding: ChannelBinding,
   onPermissionRequest?: OnPermissionRequest,
   onPartialText?: OnPartialText,
   onToolEvent?: OnToolEvent,
@@ -356,6 +357,10 @@ async function consumeStream(
               }
               if (statusData.model) {
                 store.updateSessionModel(sessionId, statusData.model);
+                // 同步更新 binding 的 model，避免 /new 继承时显示旧的 hint 字符串
+                if (binding.id) {
+                  store.updateChannelBinding(binding.id, { model: statusData.model });
+                }
               }
             } catch { /* skip */ }
             break;
@@ -374,6 +379,7 @@ async function consumeStream(
           case 'error':
             hasError = true;
             errorMessage = event.data || 'Unknown error';
+            console.error(`[conversation-engine] SSE error event: ${errorMessage}`);
             break;
 
           case 'result': {

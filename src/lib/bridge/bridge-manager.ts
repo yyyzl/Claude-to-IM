@@ -828,6 +828,7 @@ async function handleMessage(
 
     // Rewrite: strip one leading / so it becomes a regular message
     // e.g. "//review src/" → "/review src/" (sent as-is to Claude)
+    // e.g. "//trellis:start" → "/trellis:start" (透传给 Claude，由 skill 处理)
     effectiveText = rawText.slice(1);
     // Fall through to normal message processing below
   } else if (rawText.toLowerCase().startsWith('/codex:')) {
@@ -2074,6 +2075,7 @@ async function handleCommand(
         '',
         '<b>Passthrough (透传)</b>',
         '//&lt;指令&gt; - 透传给 Claude（如 //review, //debug, //plan）',
+        '//trellis:&lt;命令&gt; - Trellis 工作流（如 //trellis:start, //trellis:parallel）',
         '/codex:&lt;角色&gt; - 透传给 Codex（如 /codex:analyze, /codex:review）',
         '//help - Claude 透传命令完整清单',
         '/codex:help - Codex 透传命令完整清单',

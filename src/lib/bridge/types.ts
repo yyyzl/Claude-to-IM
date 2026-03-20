@@ -101,6 +101,8 @@ export interface ChannelBinding {
   model: string;
   /** Chat mode */
   mode: 'code' | 'plan' | 'ask';
+  /** LLM backend used when this binding was last created/updated (e.g. 'claude' | 'codex') */
+  backend?: string;
   /** Whether this binding is currently active */
   active: boolean;
   createdAt: string;

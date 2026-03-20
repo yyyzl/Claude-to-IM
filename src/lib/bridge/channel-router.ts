@@ -15,6 +15,16 @@ export interface StartNewSessionOptions {
   mode?: 'code' | 'plan' | 'ask';
 }
 
+function getCurrentBackend(): string {
+  const { store } = getBridgeContext();
+  return (store.getSetting('bridge_llm_backend') || 'claude').trim().toLowerCase();
+}
+
+function hasBackendChanged(binding: ChannelBinding | null, currentBackend: string): boolean {
+  // backend 为 undefined（旧数据无此字段）视为"未知"，不触发切换逻辑，保持向后兼容。
+  return (binding?.backend != null) && (binding.backend !== currentBackend);
+}
+
 /**
  * Start a new session for an IM chat and re-bind the channel to it.
  *
@@ -28,14 +38,34 @@ export function startNewSession(
   const { store } = getBridgeContext();
 
   const existing = store.getChannelBinding(address.channelType, address.chatId);
+  const currentBackend = getCurrentBackend();
+  const backendChanged = hasBackendChanged(existing, currentBackend);
+
   const effectiveCwd = opts.workingDirectory
     || existing?.workingDirectory
     || store.getSetting('bridge_default_work_dir')
     || homedir()
     || '';
+  // 按 backend 选择各自的默认 model，避免跨 backend 的模型名污染。
+  // claude → bridge_default_model（历来就是给 Claude 用的）
+  // codex  → bridge_codex_model_id / bridge_codex_model_hint（不 fallback 到
+  //          bridge_default_model，因为那通常是 Claude 模型名；
+  //          为空时 Codex provider 会用自己的内置默认值）
+  const backendDefaultModel = currentBackend === 'codex'
+    ? (store.getSetting('bridge_codex_model_id') || store.getSetting('bridge_codex_model_hint') || '')
+    : (store.getSetting('bridge_default_model') || '');
+  // 优先从上一个 session 读取 model（Codex 解析后会通过 status 事件回写到
+  // session.model，是真正的模型名）；但如果 binding 上有用户刚刚手动切换的 model，
+  // 应优先继承 binding，避免 /new 回退到旧 session 里的陈旧值。
+  const prevSession = (!backendChanged && existing)
+    ? store.getSession(existing.codepilotSessionId)
+    : null;
+  const inheritedModel = backendChanged
+    ? ''
+    : (existing?.model || prevSession?.model || '');
   const effectiveModel = opts.model
-    || existing?.model
-    || store.getSetting('bridge_default_model')
+    || inheritedModel
+    || backendDefaultModel
     || '';
   const effectiveMode = opts.mode
     || existing?.mode
@@ -61,16 +91,18 @@ export function startNewSession(
     codepilotSessionId: session.id,
     workingDirectory: effectiveCwd,
     model: effectiveModel,
+    backend: currentBackend,
   });
 
   // 关键：新会话必须清空 sdkSessionId，避免 SDK 恢复到旧上下文。
-  // 同时补齐 upsert 可能没更新到的列（mode/active 等），保证行为一致。
+  // 同时补齐 upsert 可能没更新到的列（mode/active/backend 等），保证行为一致。
   store.updateChannelBinding(binding.id, {
     sdkSessionId: '',
     mode: effectiveMode,
     active: true,
     workingDirectory: effectiveCwd,
     model: effectiveModel,
+    backend: currentBackend,
   });
 
   return store.getChannelBinding(address.channelType, address.chatId) || binding;
@@ -85,6 +117,10 @@ export function resolve(address: ChannelAddress): ChannelBinding {
   const { store } = getBridgeContext();
   const existing = store.getChannelBinding(address.channelType, address.chatId);
   if (existing) {
+    const currentBackend = getCurrentBackend();
+    if (hasBackendChanged(existing, currentBackend)) {
+      return startNewSession(address);
+    }
     // Verify the linked session still exists; if not, create a new one
     const session = store.getSession(existing.codepilotSessionId);
     if (session) return existing;
@@ -102,6 +138,7 @@ export function createBinding(
   workingDirectory?: string,
 ): ChannelBinding {
   const { store } = getBridgeContext();
+  const currentBackend = getCurrentBackend();
   const defaultCwd = workingDirectory
     || store.getSetting('bridge_default_work_dir')
     || homedir()
@@ -130,6 +167,7 @@ export function createBinding(
     workingDirectory: defaultCwd,
     model: defaultModel,
     mode: 'code',
+    backend: currentBackend,
   });
 
   // 新建绑定时务必清空 sdkSessionId，避免恢复到历史 SDK 会话。
@@ -139,6 +177,7 @@ export function createBinding(
     active: true,
     workingDirectory: defaultCwd,
     model: defaultModel,
+    backend: currentBackend,
   });
 
   return store.getChannelBinding(address.channelType, address.chatId) || binding;
@@ -152,6 +191,7 @@ export function bindToSession(
   codepilotSessionId: string,
 ): ChannelBinding | null {
   const { store } = getBridgeContext();
+  const currentBackend = getCurrentBackend();
   const session = store.getSession(codepilotSessionId);
   if (!session) return null;
 
@@ -164,6 +204,7 @@ export function bindToSession(
     codepilotSessionId,
     workingDirectory: session.working_directory,
     model: session.model,
+    backend: currentBackend,
   });
 
   // 切换会话时也要清空 sdkSessionId，防止恢复到之前的 SDK 上下文。
@@ -173,6 +214,7 @@ export function bindToSession(
     active: true,
     workingDirectory: session.working_directory,
     model: session.model,
+    backend: currentBackend,
   });
 
   return store.getChannelBinding(address.channelType, address.chatId) || binding;

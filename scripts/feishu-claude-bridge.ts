@@ -256,6 +256,44 @@ async function main() {
   loadDotEnvFile(envFilePath);
   console.log(`[bridge-runner] Env file: ${envFilePath}`);
 
+  // ── Prevent SDK "nested session" error ──
+  // When the bridge is launched from inside a Claude Code session the CLAUDECODE
+  // env var leaks into the SDK child process, causing it to refuse to start.
+  if (process.env.CLAUDECODE) {
+    console.log("[bridge-runner] 检测到 CLAUDECODE 环境变量（嵌套会话），已清除以避免 SDK 启动失败");
+    delete process.env.CLAUDECODE;
+  }
+
+  // ── Auto-detect git-bash on Windows ──
+  // SDK's built-in cli.js only searches standard Git install paths.
+  // If Git is installed elsewhere (e.g. F:\Git), we need to tell it explicitly.
+  if (process.platform === "win32" && !process.env.CLAUDE_CODE_GIT_BASH_PATH) {
+    const gitBashCandidates = [
+      // Derive from git executable location
+      (() => {
+        try {
+          const gitExecPath = spawnSync("git", ["--exec-path"], { encoding: "utf8", timeout: 3000, windowsHide: true });
+          if (gitExecPath.stdout) {
+            // e.g. F:\Git\mingw64\libexec\git-core → F:\Git\bin\bash.exe
+            const gitRoot = path.resolve(gitExecPath.stdout.trim(), "..", "..", "..");
+            const candidate = path.join(gitRoot, "bin", "bash.exe");
+            if (fs.existsSync(candidate)) return candidate;
+          }
+        } catch { /* ignore */ }
+        return null;
+      })(),
+      "C:\\Program Files\\Git\\bin\\bash.exe",
+      "C:\\Program Files (x86)\\Git\\bin\\bash.exe",
+    ];
+    for (const c of gitBashCandidates) {
+      if (c && fs.existsSync(c)) {
+        process.env.CLAUDE_CODE_GIT_BASH_PATH = c;
+        console.log(`[bridge-runner] 自动检测 git-bash: ${c}`);
+        break;
+      }
+    }
+  }
+
   const claudeToImRoot = pickExistingPath(
     [
       process.env.CLAUDE_TO_IM_ROOT,

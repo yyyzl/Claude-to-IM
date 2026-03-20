@@ -99,27 +99,43 @@ const status = bridgeManager.getStatus();
 npx tsx src/lib/bridge/examples/mock-host.ts
 ```
 
+### 完整启动案例
+
+```
+npm install
+
+npm run build
+
+
+$env:BRIDGE_CONTROL_DIR=".ccg/bridge-codex"; npx tsx scripts/feishu-claude-bridge.ts .env.bridge.codex
+
+```
+
+  
+
+
+
 ## 配置
 
 所有设置通过 `BridgeStore.getSetting(key)` 读取。你的宿主应用决定如何存储和暴露这些值（数据库、环境变量、配置文件、UI 设置面板等）。
 
 ### 必需配置
 
-| Key | 说明 |
-|-----|------|
-| `remote_bridge_enabled` | 总开关——设为 `"true"` 启用桥接 |
-| `bridge_{adapter}_bot_token` | 平台的 Bot Token（如 `bridge_telegram_bot_token`） |
-| `bridge_{adapter}_allowed_users` | 逗号分隔的授权用户 ID |
+| Key                              | 说明                                           |
+| -------------------------------- | -------------------------------------------- |
+| `remote_bridge_enabled`          | 总开关——设为 `"true"` 启用桥接                        |
+| `bridge_{adapter}_bot_token`     | 平台的 Bot Token（如 `bridge_telegram_bot_token`） |
+| `bridge_{adapter}_allowed_users` | 逗号分隔的授权用户 ID                                 |
 
 ### 可选配置
 
-| Key | 说明 | 默认值 |
-|-----|------|--------|
-| `bridge_auto_start` | 应用启动时自动启动桥接 | `"false"` |
-| `bridge_{adapter}_enabled` | 按适配器的开关 | `"false"` |
-| `bridge_{adapter}_stream_enabled` | 启用流式预览 | `"true"` |
-| `bridge_default_cwd` | 新会话的默认工作目录 | `$HOME` |
-| `bridge_model` | 默认 Claude 模型 | 由宿主决定 |
+| Key                               | 说明           | 默认值       |
+| --------------------------------- | ------------ | --------- |
+| `bridge_auto_start`               | 应用启动时自动启动桥接  | `"false"` |
+| `bridge_{adapter}_enabled`        | 按适配器的开关      | `"false"` |
+| `bridge_{adapter}_stream_enabled` | 启用流式预览       | `"true"`  |
+| `bridge_default_cwd`              | 新会话的默认工作目录   | `$HOME`   |
+| `bridge_model`                    | 默认 Claude 模型 | 由宿主决定     |
 
 将 `{adapter}` 替换为 `telegram`、`discord` 或 `feishu`。
 
@@ -151,19 +167,20 @@ npx tsx src/lib/bridge/examples/mock-host.ts
 ### 平台 Bot 设置
 
 你仍然需要在各平台上创建 Bot 并获取 Token：
+
 - **Telegram**：通过 [@BotFather](https://t.me/BotFather) 创建 Bot
 - **Discord**：在 [Developer Portal](https://discord.com/developers/applications) 创建应用，启用 Message Content Intent
 - **飞书**：在[开发者后台](https://open.feishu.cn/app)创建应用，配置 IM 权限
 
 ## 文档
 
-| 文档 | 说明 |
-|------|------|
-| [开发指南](docs/development.zh-CN.md) | 宿主接口规范、SSE 格式、适配器开发、分步集成教程 |
-| [架构](src/lib/bridge/ARCHITECTURE.md) | 模块依赖图、消息流、设计决策 |
-| [安全](src/lib/bridge/SECURITY.md) | 威胁模型、缓解措施、部署建议 |
-| [贡献指南](src/lib/bridge/CONTRIBUTING.md) | 开发环境、代码风格、测试指南 |
-| [迁移](src/lib/bridge/MIGRATION.md) | 从直接导入迁移到 DI 的前后对比 |
+| 文档                                     | 说明                         |
+| -------------------------------------- | -------------------------- |
+| [开发指南](docs/development.zh-CN.md)      | 宿主接口规范、SSE 格式、适配器开发、分步集成教程 |
+| [架构](src/lib/bridge/ARCHITECTURE.md)   | 模块依赖图、消息流、设计决策             |
+| [安全](src/lib/bridge/SECURITY.md)       | 威胁模型、缓解措施、部署建议             |
+| [贡献指南](src/lib/bridge/CONTRIBUTING.md) | 开发环境、代码风格、测试指南             |
+| [迁移](src/lib/bridge/MIGRATION.md)      | 从直接导入迁移到 DI 的前后对比          |
 
 ## 项目结构
 

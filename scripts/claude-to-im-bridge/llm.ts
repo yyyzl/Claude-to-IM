@@ -62,9 +62,27 @@ export class ClaudeCodeLLMProvider implements LLMProvider {
         let resultMsg: any = null;
         let capturedSdkSessionId: string | null = null;
 
+        // Clean up env vars that interfere with SDK child process:
+        // CLAUDECODE: prevents "nested session" detection when bridge runs inside Claude Code
+        const cleanEnv = { ...process.env };
+        delete cleanEnv.CLAUDECODE;
+
+        // Debug: log SDK call parameters
+        console.log("[claude-sdk] query params:", JSON.stringify({
+          cwd: params.workingDirectory,
+          model: params.model,
+          resume,
+          permissionMode,
+          hasSystemPrompt: !!params.systemPrompt,
+          hasCanUseTool: true,
+          hasEnv: true,
+          CLAUDE_CODE_GIT_BASH_PATH: cleanEnv.CLAUDE_CODE_GIT_BASH_PATH || "(未设置)",
+        }));
+
         const q = this.query({
           prompt: params.prompt,
           options: {
+            env: cleanEnv,
             cwd: params.workingDirectory,
             model: params.model,
             resume,
@@ -72,6 +90,11 @@ export class ClaudeCodeLLMProvider implements LLMProvider {
             systemPrompt: params.systemPrompt,
             abortController,
             permissionMode,
+            stderr: (data: string) => {
+              // Surface SDK child process stderr to terminal for debugging
+              const trimmed = data.trim();
+              if (trimmed) console.error(`[claude-sdk-stderr] ${trimmed}`);
+            },
             canUseTool: async (
               toolName: string,
               input: Record<string, unknown>,

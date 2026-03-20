@@ -1,8 +1,9 @@
 /**
  * Help text generators for passthrough commands.
  *
- * - `//xxx`     → Claude passthrough (message forwarded to Claude session)
- * - `/codex:xxx` → Codex passthrough (dispatched to codeagent-wrapper)
+ * - `//xxx`          → Claude passthrough (message forwarded to Claude session)
+ * - `//trellis:xxx`  → Trellis passthrough (透传给 Claude，由 skill 处理)
+ * - `/codex:xxx`     → Codex passthrough (dispatched to codeagent-wrapper)
  */
 
 // ── // Claude passthrough help ───────────────────────────────────
@@ -67,6 +68,11 @@ export function buildClaudePassthroughHelp(): string {
     '//ccg:clean-branches - 安全清理 Git 分支',
     '//ccg:rollback - 交互式 Git 回滚',
     '//ccg:worktree - Git Worktree 管理',
+    '',
+    '<b>🌳 Trellis 开发工作流</b> <i>(需 .trellis/ 环境)</i>',
+    '//trellis:start - 初始化 Trellis 开发会话（读取上下文+指南）',
+    '//trellis:parallel &lt;task-dir&gt; - 启动多 Agent 并行（Worktree 模式）',
+    '//trellis:record-session - 记录工作进度并归档已完成任务',
     '',
     '<b>💬 自由形式</b>',
     '<code>//</code> 后可跟任意自然语言，Claude 都会理解：',

@@ -17,6 +17,7 @@ export interface ChannelBinding {
   workingDirectory: string;
   model: string;
   mode: BridgeMode;
+  backend?: string;
   active: boolean;
   createdAt: string;
   updatedAt: string;
@@ -77,6 +78,7 @@ export interface UpsertChannelBindingInput {
   codepilotSessionId: string;
   workingDirectory: string;
   model: string;
+  backend?: string;
 }
 
 type PersistedData = {
@@ -142,6 +144,7 @@ export class JsonFileBridgeStore {
           codepilotSessionId: data.codepilotSessionId,
           workingDirectory: data.workingDirectory,
           model: data.model,
+          ...(data.backend != null ? { backend: data.backend } : {}),
           updatedAt: now,
         }
       : {
@@ -152,6 +155,7 @@ export class JsonFileBridgeStore {
           sdkSessionId: "",
           workingDirectory: data.workingDirectory,
           model: data.model,
+          backend: data.backend,
           mode: "code",
           active: true,
           createdAt: now,

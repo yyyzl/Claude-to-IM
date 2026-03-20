@@ -134,6 +134,7 @@ export interface UpsertChannelBindingInput {
   workingDirectory: string;
   model: string;
   mode?: string;
+  backend?: string;
 }
 
 /**
