@@ -1,54 +1,57 @@
-# Directory Structure
+# 前端目录结构规范
 
-> How frontend code is organized in this project.
-
----
-
-## Overview
-
-<!--
-Document your project's frontend directory structure here.
-
-Questions to answer:
-- Where do components live?
-- How are features/modules organized?
-- Where are shared utilities?
-- How are assets organized?
--->
-
-(To be filled by the team)
+> 当前仓库暂无浏览器前端目录。本文件用于定义未来 UI 层的落位边界，避免与桥接核心混层。
 
 ---
 
-## Directory Layout
+## 当前状态
 
-```
-<!-- Replace with your actual structure -->
-src/
-├── ...
-└── ...
+当前没有可供遵循的前端目录结构，现有主结构是：
+
+```text
+src/lib/bridge/      # 桥接核心
+scripts/             # 宿主集成与启动脚本
+src/__tests__/unit/  # 单元测试
 ```
 
 ---
 
-## Module Organization
+## 如果未来新增前端
 
-<!-- How should new features be organized? -->
+建议把 UI 放到独立目录，例如：
 
-(To be filled by the team)
+```text
+src/ui/
+src/app/
+apps/<ui-app>/
+```
+
+无论采用哪种形式，都应满足：
+
+- 前端目录与 `src/lib/bridge/` 清晰分离
+- UI 只消费正式接口，不直接依赖 `internal/`
+- 桥接核心仍留在 `src/lib/bridge/`
 
 ---
 
-## Naming Conventions
+## 推荐模式
 
-<!-- File and folder naming rules -->
-
-(To be filled by the team)
+- 组件、状态、页面与桥接核心代码分层放置
+- 前端共享类型优先从正式公共边界导入，而不是跨层偷读内部文件
+- 如需展示桥接状态，优先读取宿主暴露的数据，而不是直接操作桥接单例
 
 ---
 
-## Examples
+## 禁止事项
 
-<!-- Link to well-organized modules as examples -->
+- 在 `src/lib/bridge/` 下混入页面或组件文件
+- 让前端目录直接依赖 `src/lib/bridge/internal/`
+- 把消息投递、权限审批、会话锁等核心能力搬进 UI
 
-(To be filled by the team)
+---
+
+## 当前最相关的参考
+
+- `README.zh-CN.md`：项目当前定位不是前端应用
+- `src/lib/bridge/README.md`：桥接核心职责说明
+- `src/lib/bridge/host.ts`：未来 UI 只能围绕正式宿主接口工作

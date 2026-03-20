@@ -1,51 +1,47 @@
-# Quality Guidelines
+# 前端质量规范
 
-> Code quality standards for frontend development.
-
----
-
-## Overview
-
-<!--
-Document your project's quality standards here.
-
-Questions to answer:
-- What patterns are forbidden?
-- What linting rules do you enforce?
-- What are your testing requirements?
-- What code review standards apply?
--->
-
-(To be filled by the team)
+> 当前仓库暂无前端代码。本文件用于防止未来 UI 层侵蚀桥接核心边界。
 
 ---
 
-## Forbidden Patterns
+## 当前状态
 
-<!-- Patterns that should never be used and why -->
+目前没有前端测试、组件测试或页面质量基线。现有质量基线主要针对桥接核心：
 
-(To be filled by the team)
-
----
-
-## Required Patterns
-
-<!-- Patterns that must always be used -->
-
-(To be filled by the team)
+- TypeScript 严格类型
+- `node:test`
+- 宿主契约与边界校验
 
 ---
 
-## Testing Requirements
+## 如果未来新增前端
 
-<!-- What level of testing is expected -->
+新增 UI 时至少应满足：
 
-(To be filled by the team)
+- 与桥接核心清晰分层
+- 正式使用宿主暴露的数据与操作接口
+- 为关键页面或组件建立可重复验证的测试方式
 
 ---
 
-## Code Review Checklist
+## 必须遵守
 
-<!-- What reviewers should check -->
+- UI 只做展示、交互和宿主控制
+- 文档、类型和测试要与真实实现保持同步
+- 涉及桥接状态展示时，要以正式接口为唯一数据入口
 
-(To be filled by the team)
+---
+
+## 禁止事项
+
+- 前端直接依赖桥接内部实现细节
+- 前端自己维护另一套桥接状态真相源
+- 把规范写成理想化口号，却与真实代码结构不一致
+
+---
+
+## 当前最相关的参考
+
+- `README.zh-CN.md`：项目真实定位
+- `src/lib/bridge/README.md`：桥接核心职责
+- `src/lib/bridge/host.ts`：未来 UI 的正式接口边界

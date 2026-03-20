@@ -1,105 +1,178 @@
-# Code Reuse Thinking Guide
+# 代码复用思考指南
 
-> **Purpose**: Stop and think before creating new code - does it already exist?
-
----
-
-## The Problem
-
-**Duplicated code is the #1 source of inconsistency bugs.**
-
-When you copy-paste or rewrite existing logic:
-- Bug fixes don't propagate
-- Behavior diverges over time
-- Codebase becomes harder to understand
+> **目的**：写新代码前先停一下，确认它是不是已经存在。当前仓库的很多分叉问题，根源都是“差不多就先复制一份”。
 
 ---
 
-## Before Writing New Code
+## 核心问题
 
-### Step 1: Search First
+重复实现会带来几类典型后果：
+
+- 修一个 bug，另一个副本没跟着修
+- 行为逐渐分叉，后面越补越乱
+- 新人很难判断哪一份才是真正应该改的地方
+
+---
+
+## 写新代码前先做两件事
+
+### 第一步：先搜索
 
 ```bash
-# Search for similar function names
-grep -r "functionName" .
-
-# Search for similar logic
-grep -r "keyword" .
+rg "functionName|keyword" .
 ```
 
-### Step 2: Ask These Questions
+### 第二步：问自己这几个问题
 
-| Question | If Yes... |
-|----------|-----------|
-| Does a similar function exist? | Use or extend it |
-| Is this pattern used elsewhere? | Follow the existing pattern |
-| Could this be a shared utility? | Create it in the right place |
-| Am I copying code from another file? | **STOP** - extract to shared |
-
----
-
-## Common Duplication Patterns
-
-### Pattern 1: Copy-Paste Functions
-
-**Bad**: Copying a validation function to another file
-
-**Good**: Extract to shared utilities, import where needed
-
-### Pattern 2: Similar Components
-
-**Bad**: Creating a new component that's 80% similar to existing
-
-**Good**: Extend existing component with props/variants
-
-### Pattern 3: Repeated Constants
-
-**Bad**: Defining the same constant in multiple files
-
-**Good**: Single source of truth, import everywhere
+| 问题 | 如果答案是“是” |
+|------|----------------|
+| 是否已经有类似函数或模块 | 先复用或扩展它 |
+| 是否只是已有模式的变体 | 先跟随现有结构 |
+| 是否准备复制别处的代码 | 先停下来，评估是否该抽公共实现 |
+| 是否只是缺一层更清晰的封装 | 在正确位置抽 helper，而不是再复制一份 |
 
 ---
 
-## When to Abstract
+## 常见重复模式
 
-**Abstract when**:
-- Same code appears 3+ times
-- Logic is complex enough to have bugs
-- Multiple people might need this
+### 模式 1：复制校验函数
 
-**Don't abstract when**:
-- Only used once
-- Trivial one-liner
-- Abstraction would be more complex than duplication
+坏例子：
 
----
+- 在第二个文件里再写一遍相似的校验逻辑
 
-## After Batch Modifications
+好例子：
 
-When you've made similar changes to multiple files:
+- 抽到统一 helper 或继续复用现有验证器
 
-1. **Review**: Did you catch all instances?
-2. **Search**: Run grep to find any missed
-3. **Consider**: Should this be abstracted?
+### 模式 2：重复命令处理
 
----
+坏例子：
 
-## Gotcha: Asymmetric Mechanisms Producing Same Output
+- 新命令自己解析一套参数和帮助文案
 
-**Problem**: When two different mechanisms must produce the same file set (e.g., recursive directory copy for init vs. manual `files.set()` for update), structural changes (renaming, moving, adding subdirectories) only propagate through the automatic mechanism. The manual one silently drifts.
+好例子：
 
-**Symptom**: Init works perfectly, but update creates files at wrong paths or misses files entirely.
+- 先看现有命令分支、帮助输出和对应单测
 
-**Prevention checklist**:
-- [ ] When migrating directory structures, search for ALL code paths that reference the old structure
-- [ ] If one path is auto-derived (glob/copy) and another is manually listed, the manual one needs updating
-- [ ] Add a regression test that compares outputs from both mechanisms
+### 模式 3：重复常量与配置读取
+
+坏例子：
+
+- 多处散落同一个默认值或配置 key
+
+好例子：
+
+- 找单一来源，围绕它扩展
 
 ---
 
-## Checklist Before Commit
+## 什么时候值得抽象
 
-- [ ] Searched for existing similar code
-- [ ] No copy-pasted logic that should be shared
-- [ ] Constants defined in one place
-- [ ] Similar patterns follow same structure
+适合抽象：
+
+- 同样逻辑已经出现 3 次以上
+- 逻辑复杂到容易出 bug
+- 多个平台或多脚本都可能复用
+
+不适合抽象：
+
+- 只用一次
+- 一行就能说明白
+- 抽象后比原始代码更难懂
+
+---
+
+## 当前仓库的定向搜索清单
+
+### 新平台行为
+
+先搜：
+
+```bash
+rg "delivery-layer|PLATFORM_LIMITS|registerAdapterFactory|sendPreview|markdownTo" src/lib/bridge
+```
+
+原因：
+
+- 平台限制、渲染分发、适配器注册和预览能力通常已经有可复用实现
+
+### 新 slash 命令或帮助文案
+
+先搜：
+
+```bash
+rg "case '/|/help|Usage:" src/lib/bridge
+rg "bridge-.*command" src/__tests__/unit
+```
+
+原因：
+
+- 命令解析、帮助输出和测试要一起演化
+
+### 新配置 key 或设置行为
+
+先搜：
+
+```bash
+rg "getSetting\\(" src/lib/bridge scripts
+```
+
+原因：
+
+- 配置 key 很容易在脚本、默认值和运行逻辑之间漂移
+
+### 新验证或输入清洗
+
+先搜：
+
+```bash
+rg "validate|sanitize|isDangerousInput|rate" src/lib/bridge
+```
+
+原因：
+
+- 安全 helper 和校验逻辑应继续集中，而不是四处复制
+
+---
+
+## 当前仓库的复用规则
+
+- 新平台支持先看 `adapters/`、`delivery-layer.ts`、`markdown/`、`security/`
+- 新命令先看现有命令分支、`/help` 文案和单元测试
+- 新配置行为先看所有 `BridgeStore.getSetting()` 调用点
+- 新共享类型先看 `types.ts` 和 `host.ts`
+- 新脚本逻辑先看 `scripts/claude-to-im-bridge/` 是否已有对应装配模块
+
+---
+
+## 当前仓库的反模式
+
+- 在某个适配器内部重新实现 chunking 或 retry
+- 在多个脚本中复制配置解析
+- 没搜 `internal/` 就新建一个名字不同但功能类似的 helper
+- 改了命令行为，却没同步改 `/help` 或测试
+
+---
+
+## 批量修改后的检查
+
+当你改了多处相似代码后，再做一轮复查：
+
+1. 是否所有实例都改到了
+2. 是否还有漏掉的旧实现
+3. 这次是否已经值得抽公共实现
+
+---
+
+## 一个容易忽略的坑
+
+**问题**：两个不同机制要产出同一组文件或结果时，一个是自动推导的，另一个却是手写列表。目录改动后，自动路径更新了，手写那份却静悄悄地漂移。
+
+**症状**：初始化路径是对的，更新路径却开始错位或漏文件。
+
+**预防清单**：
+
+- [ ] 结构迁移时，全文搜索所有旧路径引用
+- [ ] 自动推导和手写列表必须同步更新
+- [ ] 关键场景补一个回归检查，确认两条机制产出一致

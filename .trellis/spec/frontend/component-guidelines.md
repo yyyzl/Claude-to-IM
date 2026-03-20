@@ -1,59 +1,50 @@
-# Component Guidelines
+# 前端组件规范
 
-> How components are built in this project.
-
----
-
-## Overview
-
-<!--
-Document your project's component conventions here.
-
-Questions to answer:
-- What component patterns do you use?
-- How are props defined?
-- How do you handle composition?
-- What accessibility standards apply?
--->
-
-(To be filled by the team)
+> 当前仓库没有组件层。本文件定义的是未来如果新增 UI 组件时的约束边界。
 
 ---
 
-## Component Structure
+## 当前状态
 
-<!-- Standard structure of a component file -->
+仓库中暂无 React/Vue/Svelte 组件文件，也没有现成 props、样式或组合模式可直接继承。
 
-(To be filled by the team)
+当前最接近“正式边界”的是：
 
----
+- `src/lib/bridge/host.ts`
+- `src/lib/bridge/types.ts`
+- `src/lib/bridge/README.md`
 
-## Props Conventions
-
-<!-- How props should be defined and typed -->
-
-(To be filled by the team)
+未来 UI 组件应围绕这些正式边界消费数据，而不是直接介入桥接核心内部状态。
 
 ---
 
-## Styling Patterns
+## 如果未来新增组件
 
-<!-- How styles are applied (CSS modules, styled-components, Tailwind, etc.) -->
-
-(To be filled by the team)
-
----
-
-## Accessibility
-
-<!-- A11y requirements and patterns -->
-
-(To be filled by the team)
+- 组件应只负责展示和交互
+- 业务状态应由宿主层提供
+- 组件 props 应保持显式、稳定、可测试
+- 与桥接相关的数据结构应来自正式导出的类型或宿主适配层
 
 ---
 
-## Common Mistakes
+## 推荐模式
 
-<!-- Component-related mistakes your team has made -->
+- 容器组件负责拿数据，展示组件负责渲染
+- 桥接状态先在宿主层转换，再传给 UI
+- 把组件 API 设计成面向用户场景，而不是面向桥接内部细节
 
-(To be filled by the team)
+---
+
+## 禁止事项
+
+- 组件直接依赖 `src/lib/bridge/internal/`
+- 组件里直接处理权限回调、消息投递、会话锁
+- 把平台渲染逻辑嵌进 UI 组件
+
+---
+
+## 当前最相关的参考
+
+- `src/lib/bridge/host.ts`：未来 UI 应围绕正式契约对接
+- `src/lib/bridge/types.ts`：共享数据结构示例
+- `README.zh-CN.md`：项目当前不是组件驱动的前端工程

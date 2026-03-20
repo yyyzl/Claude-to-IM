@@ -1,51 +1,50 @@
-# State Management
+# 前端状态管理规范
 
-> How state is managed in this project.
-
----
-
-## Overview
-
-<!--
-Document your project's state management conventions here.
-
-Questions to answer:
-- What state management solution do you use?
-- How is local vs global state decided?
-- How do you handle server state?
-- What are the patterns for derived state?
--->
-
-(To be filled by the team)
+> 当前仓库没有前端状态管理层。本文件用于约束未来 UI 与桥接核心之间的状态边界。
 
 ---
 
-## State Categories
+## 当前状态
 
-<!-- Local state, global state, server state, URL state -->
+当前没有 Zustand、Redux、Vuex、Pinia 或 React Query 一类前端状态方案。
 
-(To be filled by the team)
+现有状态主要存在于桥接核心和宿主实现中，例如：
 
----
+- `ChannelBinding`
+- 会话运行状态
+- 配置项
+- 消息与权限请求
 
-## When to Use Global State
-
-<!-- Criteria for promoting state to global -->
-
-(To be filled by the team)
-
----
-
-## Server State
-
-<!-- How server data is cached and synchronized -->
-
-(To be filled by the team)
+这些状态目前由桥接核心和宿主存储管理，而不是由前端页面管理。
 
 ---
 
-## Common Mistakes
+## 如果未来新增前端状态层
 
-<!-- State management mistakes your team has made -->
+- UI 本地状态只管理展示、筛选、选中项、表单输入等界面问题
+- 全局 UI 状态只服务于界面层
+- 桥接会话、权限、消息、配置等核心状态仍由宿主与桥接核心管理
 
-(To be filled by the team)
+---
+
+## 推荐模式
+
+- 前端只缓存界面需要的派生视图状态
+- 桥接核心状态通过正式接口读取，不在 UI 里自行重建真相源
+- 需要变更桥接状态时，走明确的宿主命令或 API
+
+---
+
+## 禁止事项
+
+- 把 `ChannelBinding` 当成前端可随意修改的全局对象
+- 在 UI store 里直接实现桥接命令、投递或安全规则
+- 让前端状态成为桥接真实状态的唯一来源
+
+---
+
+## 当前最相关的参考
+
+- `src/lib/bridge/types.ts`：共享状态结构示例
+- `src/lib/bridge/host.ts`：宿主与桥接的正式边界
+- `README.zh-CN.md`：项目当前以桥接库为核心，而不是 UI 状态驱动

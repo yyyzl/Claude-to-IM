@@ -1,51 +1,46 @@
-# Type Safety
+# 前端类型安全规范
 
-> Type safety patterns in this project.
-
----
-
-## Overview
-
-<!--
-Document your project's type safety conventions here.
-
-Questions to answer:
-- What type system do you use?
-- How are types organized?
-- What validation library do you use?
-- How do you handle type inference?
--->
-
-(To be filled by the team)
+> 当前仓库没有前端类型体系。本文件描述未来 UI 层与桥接核心对接时应如何保持边界清晰。
 
 ---
 
-## Type Organization
+## 当前状态
 
-<!-- Where types are defined, shared types vs local types -->
+现有共享类型主要在桥接核心中定义：
 
-(To be filled by the team)
+- `src/lib/bridge/types.ts`
+- `src/lib/bridge/host.ts`
 
----
-
-## Validation
-
-<!-- Runtime validation patterns (Zod, Yup, io-ts, etc.) -->
-
-(To be filled by the team)
+未来前端如果需要使用这些结构，应通过正式边界导入，或者由宿主层转换成更适合界面的 ViewModel。
 
 ---
 
-## Common Patterns
+## 如果未来新增前端类型
 
-<!-- Type utilities, generics, type guards -->
-
-(To be filled by the team)
+- UI 本地类型优先留在 UI 层
+- 跨层共享类型优先从正式边界导入
+- 对外部数据仍需运行时校验，不能只依赖 TypeScript
 
 ---
 
-## Forbidden Patterns
+## 推荐模式
 
-<!-- any, type assertions, etc. -->
+- 前端使用明确的 ViewModel，而不是直接消费桥接内部对象
+- 宿主层负责把桥接核心数据转换成 UI 友好结构
+- 可空、可选字段保持诚实，不通过断言掩盖不确定性
 
-(To be filled by the team)
+---
+
+## 禁止事项
+
+- 直接把 `internal/` 中的内部类型当共享协议使用
+- 在 UI 层复制一份与桥接核心略有差异的“假共享类型”
+- 滥用 `any` 或无依据类型断言
+
+---
+
+## 当前最相关的参考
+
+- `src/lib/bridge/types.ts`：共享类型集中位置
+- `src/lib/bridge/host.ts`：宿主契约集中位置
+- `src/lib/bridge/security/validators.ts`：说明类型声明不能替代运行时校验
