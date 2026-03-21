@@ -552,3 +552,59 @@ Fix two design defects in /workflow command: (1) unify basePath across start/res
 ### Next Steps
 
 - None - task complete
+
+---
+
+## Session 13 — 2026-03-21
+
+### Title
+
+Workflow Engine Spec/Plan R4: 全部 9 个独立问题闭环 + 代码增强
+
+### Summary
+
+完成 Workflow Engine Spec/Plan 审查流程的 R4 Claude Decision 轮。修复了 R1-R3 Codex 盲审累计发现的全部 9 个独立问题（28 个 issue 条目全部 resolved），并提交了对应的代码增强。
+
+### Changes
+
+#### Spec/Plan 协议修复（9 个独立问题 → 全部 resolved）
+
+| # | 问题 | 严重性 | 修复方案 |
+|---|------|--------|---------|
+| 1 | Step C 恢复非幂等 | Critical | C-parse/C-commit 两阶段 + `R{N}-claude-decision.json` 提交标记 + 幂等突变 |
+| 2 | 补丁失败与 issue resolved 脱钩 | High | Patch-Resolution Binding (failedSections 阻止 resolved) |
+| 3 | 终止条件未扫描全部未解决状态 | High | Unresolved High/Critical Guard (open/accepted/deferred) |
+| 4 | ContextCompressor 接口不兼容 | High | 返回 `compressedRoundSummary` 映射 `SpecReviewPack.round_summary` |
+| 5 | Claude 解析失败降级不完整 | High | Conservative Degradation (full/partial 两层降级协议) |
+| 6 | contextFiles 持久化不一致 | High | 删除独立参数，统一到 `config.context_files` |
+| 7 | 模板被实际内容污染 | High | Template Purity Rule + P0 验收条件 |
+| 8 | 配置项 auto_terminate 未消费 | Medium | TerminationJudge 消费两个配置项 |
+| 9 | CLI pause 时序 + 决策产物 + exports | Medium×3 | `StartResult { runId, completion }` + decision.json + `./workflow/*` |
+
+#### 代码变更 (d4633fc)
+
+| 文件 | 变更 |
+|------|------|
+| `src/lib/workflow/types.ts` | 新增 `ModelInvocationError` 类 + 默认模型调整为 claude-sonnet-4 |
+| `src/lib/workflow/model-invoker.ts` | 4xx 错误分类为不可重试，直接抛出而非耗尽重试 |
+| `src/lib/workflow/workflow-engine.ts` | 处理 ModelInvocationError + 事件载荷丰富化（决策统计、完成摘要） |
+| `src/lib/bridge/internal/workflow-command.ts` | IM 消息展示丰富事件数据（严重度分布、状态分布） |
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d4633fc` | fix(workflow): add ModelInvocationError for non-retryable API errors, enrich event payloads |
+
+### Testing
+
+- [OK] Spec/Plan 协议一致性 — 28 个 issue 条目全部 resolved
+- [OK] 代码编译通过 — git commit 成功
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Spec + Plan 协议已完全收敛，可进入 P0 实现阶段

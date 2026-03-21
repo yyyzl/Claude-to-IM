@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 12
+- **Total Sessions**: 13
 - **Last Active**: 2026-03-21
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~554 | Active |
+| `journal-1.md` | ~620 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits |
 |---|------|-------|---------|
+| 13 | 2026-03-21 | Workflow Engine Spec/Plan R4: 全部 9 个独立问题闭环 + 代码增强 | `d4633fc` |
 | 12 | 2026-03-21 | Workflow 引擎稳健性增强：系统提示、可配置模型、背压写入与诊断 | `fe0d2e3`, `e418522`, `a165532` |
 | 11 | 2026-03-21 | fix(workflow): store path consistency & event message accuracy | `e418522` |
 | 10 | 2026-03-21 | Workflow Engine 改进: system prompt + 模型可配置 + 超时调优 | `fe0d2e3` |
