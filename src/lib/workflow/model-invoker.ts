@@ -1,19 +1,18 @@
 /**
- * ModelInvoker — Unified invocation layer for Codex CLI and Claude API.
+ * ModelInvoker — Unified invocation layer for Codex CLI and Claude Agent SDK.
  *
- * Encapsulates child-process management (Codex) and HTTP API calls (Claude)
+ * Encapsulates child-process management (Codex) and Agent SDK calls (Claude)
  * behind a consistent `Promise<string>` interface with timeout, retry, and
  * AbortSignal support.
+ *
+ * Claude invocations use `@anthropic-ai/claude-agent-sdk` (local Claude Code
+ * process) instead of the HTTP API, eliminating the need for ANTHROPIC_API_KEY.
  *
  * @module workflow/model-invoker
  */
 
 import { spawn } from 'node:child_process';
 import { TimeoutError, AbortError, ModelInvocationError } from './types.js';
-
-// Type declarations for @anthropic-ai/sdk are provided by vendor-types.d.ts
-// in this directory. The package is loaded via dynamic import() at runtime
-// to avoid a hard dependency when it is not installed.
 
 // ── Public types ──────────────────────────────────────────────────
 
@@ -73,16 +72,16 @@ export class ModelInvoker {
   }
 
   /**
-   * Invoke Claude API for decision-making.
+   * Invoke Claude via local Agent SDK for decision-making.
    *
-   * Uses `@anthropic-ai/sdk` via dynamic import (lazy-loaded to avoid hard
-   * dependency when the package is not yet installed). Sends a single user
-   * message and returns the full completion text.
+   * Uses `@anthropic-ai/claude-agent-sdk` (local Claude Code process) instead
+   * of the HTTP API, so no ANTHROPIC_API_KEY is needed. The Agent SDK is
+   * lazy-loaded via dynamic import.
    *
+   * - All built-in tools are disabled (`tools: []`) — pure text generation.
+   * - Session is ephemeral (`persistSession: false`).
    * - Timeout and retry logic mirrors {@link invokeCodex}.
-   * - AbortSignal is forwarded to the SDK's `signal` option.
-   * - If the SDK does not support `signal`, a `Promise.race` with a timeout
-   *   promise is used as a fallback.
+   * - AbortSignal is forwarded to the SDK's `abortController` option.
    *
    * @param prompt - The prompt text to send to Claude.
    * @param opts   - Invocation options (timeout, retries, model, signal).
@@ -104,9 +103,14 @@ export class ModelInvoker {
    * Error classification:
    * - {@link AbortError} — never retried (immediately re-thrown).
    * - {@link ModelInvocationError} — non-retryable API/config errors
-   *   (e.g. 400/401/404/422); immediately re-thrown without retry.
+   *   (e.g. auth failures, invalid model, missing executable);
+   *   immediately re-thrown without retry.
    * - All other errors (timeouts, transient 5xx, network) — retried
    *   up to `maxRetries` times; throws {@link TimeoutError} when exhausted.
+   *
+   * Additionally, errors whose message matches known non-retryable patterns
+   * (e.g. authentication, API key, ENOENT) are promoted to
+   * {@link ModelInvocationError} on the spot, preventing wasteful retries.
    *
    * @param model      - Model identifier for error messages.
    * @param maxRetries - Maximum number of retry attempts.
@@ -154,6 +158,19 @@ export class ModelInvoker {
             `${errMsg} (status=${err.statusCode ?? 'n/a'})`,
           );
           throw err;
+        }
+
+        // Heuristic: promote plain errors that match known non-retryable
+        // patterns (auth failures, missing executables, etc.) to
+        // ModelInvocationError so they are never retried.
+        if (isNonRetryableError(errMsg)) {
+          console.error(
+            `[ModelInvoker] ${model} NON-RETRYABLE (detected by pattern) on attempt ` +
+            `${attempt + 1}/${totalAttempts}: ${errMsg}`,
+          );
+          throw new ModelInvocationError(model, undefined, err,
+            `${model} non-retryable error: ${errMsg}`,
+          );
         }
 
         // Last attempt — throw TimeoutError
@@ -384,38 +401,36 @@ export class ModelInvoker {
     });
   }
 
-  // ── Private: Claude API execution ─────────────────────────────
+  // ── Private: Claude Agent SDK execution ──────────────────────
 
   /**
-   * Execute a single Claude API request via `@anthropic-ai/sdk`.
+   * Execute a single Claude query via `@anthropic-ai/claude-agent-sdk`.
    *
-   * The SDK is loaded dynamically to avoid hard dependency failures
-   * when it is not installed. Timeout is enforced via `Promise.race`
-   * with AbortController (forwarded to the SDK when supported).
+   * Spawns a local Claude Code process with all tools disabled — the model
+   * only produces text output. Timeout is enforced via AbortController.
    *
    * @param prompt - Prompt text to send as a user message.
    * @param opts   - Invocation options (timeout, model, signal).
-   * @returns The full completion text extracted from the response.
+   * @returns The full completion text from the result message.
    */
   private async executeClaudeRequest(
     prompt: string,
     opts: ModelInvokerOptions,
   ): Promise<string> {
-    // Dynamic import — the package may not be installed at dev time.
-    // Ambient types are provided by vendor-types.d.ts in this directory.
-    const { default: Anthropic } = await import('@anthropic-ai/sdk');
+    // Dynamic import — loaded at runtime to keep the dependency lazy.
+    const sdk = await import('@anthropic-ai/claude-agent-sdk');
+    const queryFn = sdk.query;
 
-    const client = new Anthropic();
+    const startTime = Date.now();
     const model = opts.model ?? 'claude-sonnet-4-20250514';
-    const maxTokens = opts.maxOutputTokens ?? 200_000;
 
     // Create an internal AbortController for timeout management.
-    // If the caller also provides an external signal, we listen on
-    // both and abort whichever fires first.
+    // If the caller also provides an external signal, we link them so
+    // whichever fires first aborts the query.
     const internalController = new AbortController();
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
 
-    // Link external signal to internal controller
+    // Link external signal → internal abort
     const onExternalAbort = (): void => {
       internalController.abort();
     };
@@ -427,51 +442,104 @@ export class ModelInvoker {
       opts.signal.addEventListener('abort', onExternalAbort, { once: true });
     }
 
-    // Set up timeout
+    // Enforce timeout
     timeoutTimer = setTimeout(() => {
+      console.error(
+        `[ModelInvoker] Claude Agent SDK TIMEOUT — elapsed=${Date.now() - startTime}ms, ` +
+        `limit=${opts.timeoutMs}ms. Aborting query.`,
+      );
       internalController.abort();
     }, opts.timeoutMs);
 
-    try {
-      const createParams: Record<string, unknown> = {
-        model,
-        max_tokens: maxTokens,
-        messages: [{ role: 'user', content: prompt }],
-      };
+    console.log(
+      `[ModelInvoker] Claude Agent SDK query starting ` +
+      `(model=${model}, timeout=${opts.timeoutMs}ms, promptLen=${prompt.length} chars)`,
+    );
 
-      // Only add system field when a system prompt is provided
-      if (opts.systemPrompt) {
-        createParams.system = opts.systemPrompt;
+    // Clean env: prevent "nested session" detection when running inside Claude Code
+    const cleanEnv: Record<string, string | undefined> = { ...process.env };
+    delete cleanEnv.CLAUDECODE;
+
+    try {
+      const q = queryFn({
+        prompt,
+        options: {
+          model,
+          systemPrompt: opts.systemPrompt,
+          abortController: internalController,
+          tools: [],                // Disable all tools — pure text generation
+          persistSession: false,    // Ephemeral: no session persistence needed
+          maxTurns: 1,              // Single-turn: send prompt, get response
+          settingSources: [],       // SDK isolation: don't load filesystem settings
+          env: cleanEnv,
+        },
+      });
+
+      // Consume the async generator and collect the result message.
+      // The SDK yields various message types; we only need the final `result`.
+      let resultText = '';
+      let hasResult = false;
+
+      for await (const msg of q) {
+        if (!msg || typeof msg !== 'object') continue;
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const m = msg as any;
+
+        if (m.type === 'result') {
+          hasResult = true;
+          if (m.subtype === 'success') {
+            resultText = typeof m.result === 'string' ? m.result : '';
+            const elapsed = Date.now() - startTime;
+            console.log(
+              `[ModelInvoker] Claude Agent SDK completed OK — elapsed=${elapsed}ms, ` +
+              `resultLen=${resultText.length} chars, ` +
+              `cost=$${m.total_cost_usd?.toFixed(4) ?? '?'}`,
+            );
+          } else {
+            // result.subtype === 'error'
+            const errors: string[] = Array.isArray(m.errors) ? m.errors : [];
+            const errMsg = errors.length > 0
+              ? errors.join('\n')
+              : 'Claude Agent SDK returned error result';
+            throw new ModelInvocationError('claude', undefined, new Error(errMsg), errMsg);
+          }
+        }
       }
 
-      const response = await client.messages.create(
-        createParams as Parameters<typeof client.messages.create>[0],
-        { signal: internalController.signal },
-      );
+      if (!hasResult) {
+        throw new Error('Claude Agent SDK session ended without a result message');
+      }
 
-      // Extract text from the response content blocks
-      return extractTextFromResponse(response);
+      return resultText;
     } catch (err: unknown) {
       // Distinguish between external abort and timeout
       if (opts.signal?.aborted) {
         throw new AbortError('claude');
       }
 
-      // Internal controller aborted means timeout (or external abort handled above)
       if (internalController.signal.aborted) {
-        // If external signal is not aborted, this was a timeout
-        throw new Error(`Claude request timed out after ${opts.timeoutMs}ms`);
-      }
-
-      // Classify SDK errors: 4xx client errors are non-retryable
-      const statusCode = extractHttpStatus(err);
-      if (statusCode !== undefined && statusCode >= 400 && statusCode < 500) {
-        throw new ModelInvocationError('claude', statusCode, err,
-          `Claude API returned HTTP ${statusCode}: ${err instanceof Error ? err.message : String(err)}`,
+        // Internal abort not from external signal → timeout
+        throw new Error(
+          `Claude Agent SDK timed out after ${Date.now() - startTime}ms ` +
+          `(limit=${opts.timeoutMs}ms, promptLen=${prompt.length})`,
         );
       }
 
-      // Re-throw other SDK errors (5xx, network errors, etc.) — these are retryable
+      // Already classified errors — propagate as-is
+      if (err instanceof AbortError || err instanceof ModelInvocationError) {
+        throw err;
+      }
+
+      // Detect non-retryable configuration/auth errors from the SDK process
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (isNonRetryableError(errMsg)) {
+        throw new ModelInvocationError('claude', undefined, err,
+          `Claude Agent SDK non-retryable error: ${errMsg}`,
+        );
+      }
+
+      // All other errors — retryable (transient SDK/process failures)
       throw err;
     } finally {
       clearTimeout(timeoutTimer);
@@ -485,39 +553,27 @@ export class ModelInvoker {
 // ── Private helpers ───────────────────────────────────────────────
 
 /**
- * Extract concatenated text from Claude API response content blocks.
+ * Heuristic patterns that indicate a non-retryable configuration or
+ * authentication error from the Claude Agent SDK / child process.
  *
- * The Anthropic SDK returns an array of content blocks. We extract
- * all `text`-type blocks and join them into a single string.
- *
- * @param response - The raw message response from the Anthropic SDK.
- * @returns Concatenated text content.
+ * These errors will NOT be resolved by retrying the same request.
  */
-function extractTextFromResponse(
-  response: { content: Array<{ type: string; text?: string }> },
-): string {
-  return response.content
-    .filter(
-      (block): block is { type: 'text'; text: string } =>
-        block.type === 'text' && typeof block.text === 'string',
-    )
-    .map((block) => block.text)
-    .join('');
-}
+const NON_RETRYABLE_PATTERNS = [
+  /authenticat/i,
+  /api[_\s-]?key/i,
+  /auth[_\s-]?token/i,
+  /not[_\s-]?found.*executable/i,
+  /ENOENT/,
+  /permission denied/i,
+  /invalid.*model/i,
+] as const;
 
 /**
- * Extract HTTP status code from an SDK error.
+ * Check whether an error message matches known non-retryable patterns.
  *
- * The Anthropic SDK throws errors with a `status` property for HTTP errors.
- * This helper safely extracts it from any error shape.
- *
- * @param err - The caught error.
- * @returns The HTTP status code, or `undefined` if not available.
+ * @param message - The error message to inspect.
+ * @returns `true` if the error should NOT be retried.
  */
-function extractHttpStatus(err: unknown): number | undefined {
-  if (err && typeof err === 'object' && 'status' in err) {
-    const status = (err as Record<string, unknown>).status;
-    if (typeof status === 'number') return status;
-  }
-  return undefined;
+function isNonRetryableError(message: string): boolean {
+  return NON_RETRYABLE_PATTERNS.some((re) => re.test(message));
 }
