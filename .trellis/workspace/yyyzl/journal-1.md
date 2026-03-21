@@ -897,3 +897,65 @@ P1+TP1 批次实施 + 跨 AI 审核修复。包含 5 个代码安全网补全 + 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 19: Review /git、/usage、卡片通知 + 重构重复代码
+
+**Date**: 2026-03-22
+**Task**: Review /git、/usage、卡片通知 + 重构重复代码
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+## 本次工作
+
+### 1. Code Review：三个功能确认完成
+
+| 功能 | 文件 | 测试 | 结论 |
+|------|------|------|------|
+| `/git` 命令 | `git-command.ts` + `git-llm.ts` + bridge-manager | 21 pass | ✅ 完成 |
+| `/usage` 命令 | `usage-command.ts` + `usage-summary.ts` + bridge-manager | 6 pass | ✅ 完成 |
+| 卡片完成通知 | `feishu-adapter.ts` finalizeCard() | 3 pass | ✅ 完成 |
+
+### 2. 重构：消除 bridge-manager.ts 重复代码
+
+提取 2 个辅助函数，替换 6 处 IIFE / 内联重复块：
+
+- `buildChangeSummaryBlock(stagedFiles, diffStatText)` — diffStat 截断 + 文件列表兜底
+- `buildSemanticSummaryBlock(summaryLines)` — LLM 语义摘要要点列表
+
+净减 71 行（+63 / -134），行为完全不变，30 个相关测试全部通过。
+
+### 3. P2B 飞书深度集成确认已实现
+
+发现设计文档 `docs/feishu-v2-streaming-cards.md` 状态为"待开始"，但代码已全部实现：
+- ✅ CardKit v1 流式卡片（streaming_mode）
+- ✅ 工具进度实时渲染
+- ✅ 权限内联按钮（card.action.trigger + WSClient monkey-patch）
+- ✅ Thinking 状态 + Footer 耗时
+- ✅ 速率限制保护 + 并发防护
+
+**Updated Files**:
+- `src/lib/bridge/bridge-manager.ts`
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `47d45a8` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
