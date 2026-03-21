@@ -43,6 +43,10 @@ const CODEX_COMMAND = 'codeagent-wrapper';
 // ── ModelInvoker ──────────────────────────────────────────────────
 
 export class ModelInvoker {
+  constructor(
+    private readonly spawnImpl: typeof spawn = spawn,
+  ) {}
+
   // ── Public API ────────────────────────────────────────────────
 
   /**
@@ -113,26 +117,47 @@ export class ModelInvoker {
     signal: AbortSignal | undefined,
     fn: () => Promise<string>,
   ): Promise<string> {
+    const totalAttempts = maxRetries + 1;
+
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       // Check abort before each attempt
       if (signal?.aborted) {
+        console.warn(`[ModelInvoker] ${model} aborted before attempt ${attempt + 1}/${totalAttempts}`);
         throw new AbortError(model);
+      }
+
+      if (attempt > 0) {
+        console.warn(
+          `[ModelInvoker] ${model} retry ${attempt}/${maxRetries} — ` +
+          `starting attempt ${attempt + 1}/${totalAttempts}`,
+        );
       }
 
       try {
         return await fn();
       } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+
         // AbortError is never retried
         if (err instanceof AbortError) {
+          console.warn(`[ModelInvoker] ${model} aborted during attempt ${attempt + 1}/${totalAttempts}`);
           throw err;
         }
 
         // Last attempt — throw TimeoutError
         if (attempt >= maxRetries) {
+          console.error(
+            `[ModelInvoker] ${model} FAILED — exhausted all ${totalAttempts} attempts. ` +
+            `Last error: ${errMsg}`,
+          );
           throw new TimeoutError(model, maxRetries);
         }
 
-        // Otherwise, retry (next iteration)
+        // Otherwise, log and retry (next iteration)
+        console.warn(
+          `[ModelInvoker] ${model} attempt ${attempt + 1}/${totalAttempts} failed: ${errMsg}. ` +
+          `Will retry (${maxRetries - attempt} remaining)…`,
+        );
       }
     }
 
@@ -160,8 +185,17 @@ export class ModelInvoker {
     backend?: string,
   ): Promise<string> {
     return new Promise<string>((resolve, reject) => {
-      const args = ['--backend', backend ?? 'codex'];
-      const child = spawn(CODEX_COMMAND, args, {
+      // `-` is required for codeagent-wrapper stdin mode; without it the wrapper
+      // exits early with "task required" and large prompts can trigger pipe EOFs.
+      const args = ['--backend', backend ?? 'codex', '-'];
+      const startTime = Date.now();
+
+      console.log(
+        `[ModelInvoker] Spawning: ${CODEX_COMMAND} ${args.join(' ')} ` +
+        `(timeout=${timeoutMs}ms, promptLen=${prompt.length} chars)`,
+      );
+
+      const child = this.spawnImpl(CODEX_COMMAND, args, {
         stdio: ['pipe', 'pipe', 'pipe'],
         // Ensure the child process inherits PATH so codeagent-wrapper is found
         env: process.env,
@@ -193,13 +227,22 @@ export class ModelInvoker {
       // ── Timeout ──
 
       const timer = setTimeout(() => {
+        const elapsed = Date.now() - startTime;
+        console.error(
+          `[ModelInvoker] Codex TIMEOUT — elapsed=${elapsed}ms, limit=${timeoutMs}ms. ` +
+          `Killing child process (SIGTERM). promptLen=${prompt.length} chars`,
+        );
         child.kill('SIGTERM');
-        settle('reject', new Error(`Codex process timed out after ${timeoutMs}ms`));
+        settle('reject', new Error(
+          `Codex process timed out after ${elapsed}ms (limit=${timeoutMs}ms, promptLen=${prompt.length})`,
+        ));
       }, timeoutMs);
 
       // ── AbortSignal handling ──
 
       const onAbort = (): void => {
+        const elapsed = Date.now() - startTime;
+        console.warn(`[ModelInvoker] Codex ABORTED via signal after ${elapsed}ms. Killing child (SIGTERM).`);
         child.kill('SIGTERM');
         settle('reject', new AbortError('codex'));
       };
@@ -207,6 +250,7 @@ export class ModelInvoker {
       if (signal) {
         if (signal.aborted) {
           // Already aborted before spawn — kill immediately
+          console.warn('[ModelInvoker] Codex abort signal already raised before spawn. Killing immediately.');
           child.kill('SIGTERM');
           settle('reject', new AbortError('codex'));
           return;
@@ -235,36 +279,96 @@ export class ModelInvoker {
       // ── Process error (e.g. command not found) ──
 
       child.on('error', (err: Error) => {
+        const elapsed = Date.now() - startTime;
+        console.error(
+          `[ModelInvoker] Codex child process ERROR after ${elapsed}ms: ${err.message}` +
+          `${(err as NodeJS.ErrnoException).code ? ` (code=${(err as NodeJS.ErrnoException).code})` : ''}`,
+        );
+        settle('reject', err);
+      });
+
+      // If the child exits before consuming stdin, Node emits an error on the
+      // writable side. Treat it as a failed invocation instead of crashing.
+      child.stdin.on('error', (err: Error) => {
+        const elapsed = Date.now() - startTime;
+        console.warn(
+          `[ModelInvoker] Codex stdin pipe error after ${elapsed}ms: ${err.message}` +
+          `${(err as NodeJS.ErrnoException).code ? ` (code=${(err as NodeJS.ErrnoException).code})` : ''}`,
+        );
         settle('reject', err);
       });
 
       // ── Process exit ──
 
       child.on('close', (code: number | null) => {
+        const elapsed = Date.now() - startTime;
         const stderr = Buffer.concat(stderrChunks).toString('utf-8').trim();
+        const stdoutLen = Buffer.concat(stdoutChunks).length;
 
         if (stderr.length > 0) {
-          console.warn(`[ModelInvoker] Codex stderr: ${stderr}`);
+          console.warn(`[ModelInvoker] Codex stderr (elapsed=${elapsed}ms): ${stderr.substring(0, 1000)}`);
         }
 
         if (code !== 0 && code !== null) {
-          settle(
-            'reject',
-            new Error(
-              `Codex process exited with code ${code}${stderr ? `: ${stderr}` : ''}`,
-            ),
-          );
+          const errDetail =
+            `Codex process exited with code ${code} after ${elapsed}ms` +
+            ` (promptLen=${prompt.length}, stdoutLen=${stdoutLen})` +
+            `${stderr ? `\n  stderr: ${stderr.substring(0, 500)}` : ''}`;
+          console.error(`[ModelInvoker] ${errDetail}`);
+          settle('reject', new Error(errDetail));
           return;
         }
 
         const stdout = Buffer.concat(stdoutChunks).toString('utf-8').trim();
+        console.log(
+          `[ModelInvoker] Codex completed OK — elapsed=${elapsed}ms, ` +
+          `stdoutLen=${stdout.length} chars`,
+        );
         settle('resolve', stdout);
       });
 
-      // ── Write prompt to stdin and close ──
+      // ── Write prompt to stdin with backpressure handling ──
+      //
+      // Node.js pipe buffers are small (4-64 KB on Windows, 64 KB-1 MB on
+      // Linux). A large spec + plan prompt can easily exceed this, so we
+      // chunk the data and respect the 'drain' event to avoid silent
+      // truncation or pipe EOF errors.
 
-      child.stdin.write(prompt, 'utf-8');
-      child.stdin.end();
+      const STDIN_CHUNK_SIZE = 32 * 1024; // 32 KB — safe for all OS pipe buffers
+      let writeOffset = 0;
+
+      const drainWrite = (): void => {
+        try {
+          let ok = true;
+          while (writeOffset < prompt.length && ok) {
+            const chunk = prompt.slice(writeOffset, writeOffset + STDIN_CHUNK_SIZE);
+            writeOffset += chunk.length;
+
+            ok = child.stdin.write(chunk, 'utf-8');
+
+            if (writeOffset >= prompt.length) {
+              // All data written — close the stream
+              child.stdin.end();
+              return;
+            }
+          }
+
+          if (writeOffset < prompt.length) {
+            // Internal buffer full — wait for drain, then resume
+            child.stdin.once('drain', drainWrite);
+          }
+        } catch (err: unknown) {
+          const elapsed = Date.now() - startTime;
+          const e = err instanceof Error ? err : new Error(String(err));
+          console.error(
+            `[ModelInvoker] Codex stdin.write() threw after ${elapsed}ms: ${e.message}` +
+            ` (promptLen=${prompt.length}, written=${writeOffset})`,
+          );
+          settle('reject', e);
+        }
+      };
+
+      drainWrite();
     });
   }
 

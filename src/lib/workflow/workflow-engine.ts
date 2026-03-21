@@ -284,15 +284,29 @@ export class WorkflowEngine {
             });
           } catch (err: unknown) {
             if (err instanceof AbortError) {
+              console.warn(
+                `[WorkflowEngine] Codex review aborted (run=${runId}, round=${round}). Saving checkpoint.`,
+              );
               await this.saveCheckpoint(runId, round, 'codex_review');
               return; // Exit loop -- workflow has been paused
             }
             if (err instanceof TimeoutError) {
-              await this.emit(runId, round, 'codex_review_timeout', { round });
+              console.error(
+                `[WorkflowEngine] Codex review TIMEOUT (run=${runId}, round=${round}, ` +
+                `retries=${err.retriesExhausted}). Skipping to next round.`,
+              );
+              await this.emit(runId, round, 'codex_review_timeout', {
+                round,
+                retries_exhausted: err.retriesExhausted,
+                message: err.message,
+              });
 
               // TIMEOUT GUARD: skip to next round
               round++;
               if (round > config.max_rounds) {
+                console.error(
+                  `[WorkflowEngine] Max rounds (${config.max_rounds}) reached after Codex timeout. Terminating workflow.`,
+                );
                 await this.terminateWorkflow(runId, round - 1, 'max_rounds_reached');
                 return;
               }
@@ -308,6 +322,12 @@ export class WorkflowEngine {
               continue;
             }
             // Unexpected error -- mark workflow as failed
+            const errMsg = err instanceof Error ? err.message : String(err);
+            const errStack = err instanceof Error ? err.stack : undefined;
+            console.error(
+              `[WorkflowEngine] Codex review UNEXPECTED ERROR (run=${runId}, round=${round}): ${errMsg}` +
+              `${errStack ? `\n${errStack}` : ''}`,
+            );
             await this.terminateWorkflowWithError(runId, round, err);
             return;
           }
@@ -474,15 +494,29 @@ export class WorkflowEngine {
             });
           } catch (err: unknown) {
             if (err instanceof AbortError) {
+              console.warn(
+                `[WorkflowEngine] Claude decision aborted (run=${runId}, round=${round}). Saving checkpoint.`,
+              );
               await this.saveCheckpoint(runId, round, 'claude_decision');
               return; // Exit loop -- workflow has been paused
             }
             if (err instanceof TimeoutError) {
-              await this.emit(runId, round, 'claude_decision_timeout', { round });
+              console.error(
+                `[WorkflowEngine] Claude decision TIMEOUT (run=${runId}, round=${round}, ` +
+                `retries=${err.retriesExhausted}). Skipping to next round.`,
+              );
+              await this.emit(runId, round, 'claude_decision_timeout', {
+                round,
+                retries_exhausted: err.retriesExhausted,
+                message: err.message,
+              });
 
               // TIMEOUT GUARD: skip Claude decision, advance to next round
               round++;
               if (round > config.max_rounds) {
+                console.error(
+                  `[WorkflowEngine] Max rounds (${config.max_rounds}) reached after Claude timeout. Terminating workflow.`,
+                );
                 await this.terminateWorkflow(runId, round - 1, 'max_rounds_reached');
                 return;
               }
@@ -497,6 +531,12 @@ export class WorkflowEngine {
               continue;
             }
             // Unexpected error
+            const errMsg = err instanceof Error ? err.message : String(err);
+            const errStack = err instanceof Error ? err.stack : undefined;
+            console.error(
+              `[WorkflowEngine] Claude decision UNEXPECTED ERROR (run=${runId}, round=${round}): ${errMsg}` +
+              `${errStack ? `\n${errStack}` : ''}`,
+            );
             await this.terminateWorkflowWithError(runId, round, err);
             return;
           }
@@ -768,9 +808,16 @@ export class WorkflowEngine {
     err: unknown,
   ): Promise<void> {
     const message = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : undefined;
+
+    console.error(
+      `[WorkflowEngine] Workflow FAILED (run=${runId}, round=${round}): ${message}` +
+      `${stack ? `\n${stack}` : ''}`,
+    );
 
     await this.emit(runId, round, 'workflow_failed', {
       error: message,
+      stack: stack?.substring(0, 2000),
       round,
     });
 

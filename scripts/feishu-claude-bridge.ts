@@ -29,6 +29,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { loadDotEnvFile } from "./claude-to-im-bridge/settings.ts";
+import { isClaudeToImDistStale } from "../src/lib/bridge/internal/build-freshness.ts";
 import { InMemoryPermissionGateway } from "./claude-to-im-bridge/permissions.ts";
 import { ClaudeCodeLLMProvider } from "./claude-to-im-bridge/llm.ts";
 import { CodexAppServerLLMProvider } from "./claude-to-im-bridge/codex-llm.ts";
@@ -190,36 +191,7 @@ function pickExistingPath(candidates: Array<string | undefined>, mustContainRela
 }
 
 function ensureClaudeToImBuild(claudeToImRoot: string): void {
-  const distContext = path.join(claudeToImRoot, "dist/lib/bridge/context.js");
-  const distBridgeManager = path.join(claudeToImRoot, "dist/lib/bridge/bridge-manager.js");
-  const srcBridgeManager = path.join(claudeToImRoot, "src/lib/bridge/bridge-manager.ts");
-
-  const distMissing = !fs.existsSync(distContext) || !fs.existsSync(distBridgeManager);
-
-  const distOlderThanSrc = (() => {
-    try {
-      if (!fs.existsSync(srcBridgeManager)) return false;
-      if (!fs.existsSync(distBridgeManager)) return true;
-      const srcStat = fs.statSync(srcBridgeManager);
-      const distStat = fs.statSync(distBridgeManager);
-      return srcStat.mtimeMs > distStat.mtimeMs;
-    } catch {
-      return false;
-    }
-  })();
-
-  const distLooksOutdated = (() => {
-    try {
-      if (!fs.existsSync(distBridgeManager)) return true;
-      const text = fs.readFileSync(distBridgeManager, "utf8");
-      // 旧版 dist 会固定用 5 分钟作为默认队列超时，导致 turn 超时改成 90 分钟也不生效。
-      return text.includes("bridge_session_queue_timeout_ms')) ?? 5 * 60_000");
-    } catch {
-      return false;
-    }
-  })();
-
-  if (!distMissing && !distOlderThanSrc && !distLooksOutdated) return;
+  if (!isClaudeToImDistStale(claudeToImRoot)) return;
 
   console.log("[bridge-runner] 检测到 Claude-to-IM dist 可能过期，正在执行 npm run build...");
   const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
@@ -517,6 +489,40 @@ async function main() {
 
   process.on("SIGINT", () => { void shutdown("SIGINT"); });
   process.on("SIGTERM", () => { void shutdown("SIGTERM"); });
+
+  // ── Guard: transient socket errors (write EOF / ECONNRESET / EPIPE) ──
+  // The Feishu SDK WSClient's underlying TCP socket can emit 'error' events
+  // that are not fully proxied to the WebSocket 'error' handler (race during
+  // reconnect, idle-timeout, ping on a half-closed connection, etc.).
+  // Without this guard the process crashes with "Unhandled 'error' event on
+  // Socket instance".  We log and let the SDK's own reconnect logic recover.
+  const TRANSIENT_SOCKET_CODES = new Set(["EOF", "ECONNRESET", "EPIPE", "ETIMEDOUT", "ECONNABORTED"]);
+
+  process.on("uncaughtException", (err: NodeJS.ErrnoException) => {
+    if (TRANSIENT_SOCKET_CODES.has(err.code ?? "")) {
+      console.warn(
+        `[bridge-runner] Transient socket error caught (code=${err.code}, syscall=${(err as any).syscall ?? "?"}), ignoring:`,
+        err.message,
+      );
+      return; // swallow — SDK reconnect will handle recovery
+    }
+    // Non-transient: log and exit as usual
+    console.error("[bridge-runner] Uncaught exception (fatal):", err);
+    void shutdown("UNCAUGHT_EXCEPTION");
+  });
+
+  process.on("unhandledRejection", (reason) => {
+    const err = reason instanceof Error ? reason : new Error(String(reason));
+    if (TRANSIENT_SOCKET_CODES.has((err as NodeJS.ErrnoException).code ?? "")) {
+      console.warn(
+        `[bridge-runner] Transient socket rejection caught (code=${(err as NodeJS.ErrnoException).code}), ignoring:`,
+        err.message,
+      );
+      return;
+    }
+    console.error("[bridge-runner] Unhandled rejection (fatal):", reason);
+    void shutdown("UNHANDLED_REJECTION");
+  });
 
   if (heartbeatMs > 0) {
     heartbeatTimer = setInterval(() => writeHeartbeat("running"), heartbeatMs);

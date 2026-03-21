@@ -23,6 +23,7 @@ import type {
   RoundData,
 } from './types.js';
 import { SPEC_REVIEW_OVERRIDES } from './types.js';
+import { estimateTokens } from './context-compressor.js';
 
 // ── Context Compressor interface ────────────────────────────────
 
@@ -91,12 +92,14 @@ export class PackBuilder {
     // Context files come from config (already inlined)
     const contextFiles = config.context_files;
 
-    // Attempt context compression if conditions are met
-    this.tryCompress(spec, plan, ledger, round, config);
+    // Attempt context compression if conditions are met.
+    // When triggered, the compressor returns a condensed version of spec+plan
+    // that fits within the Codex context window budget.
+    const compressed = this.tryCompress(spec, plan, ledger, round, config);
 
     return {
-      spec,
-      plan,
+      spec: compressed.spec,
+      plan: compressed.plan,
       unresolved_issues: unresolvedIssues,
       rejected_issues: rejectedIssues,
       context_files: contextFiles,
@@ -300,19 +303,22 @@ export class PackBuilder {
   // ── Private: context compression ────────────────────────────────
 
   /**
-   * Attempt context compression if conditions are met.
+   * Attempt context compression when the spec + plan payload grows too large.
    *
    * Triggers when:
    * - Round >= `SPEC_REVIEW_OVERRIDES.context_compress_round` (4), OR
    * - Estimated tokens > `context_compress_threshold` (60%) of `codex_context_window_tokens`
    *
-   * This is a side-effect call: the compressor may log or cache compression
-   * results. The actual pack fields (spec, plan) are not modified here
-   * because compression affects the overall context, not individual fields.
+   * When compression fires, the compressor drops intermediate round data and
+   * filters the ledger to open+accepted issues only, producing a condensed
+   * text blob.  We inject that blob as a replacement `spec` (the condensed
+   * text already contains spec + plan + ledger summary) and blank out `plan`
+   * to avoid double-injection.
    *
-   * Note: In the current implementation, compression is logged but the
-   * compressed text is not substituted into the pack — the prompt assembler
-   * and model invoker handle the final context window management.
+   * When compression is NOT triggered, the original spec and plan are
+   * returned verbatim.
+   *
+   * @returns `{ spec, plan }` — possibly compressed.
    */
   private tryCompress(
     spec: string,
@@ -320,38 +326,43 @@ export class PackBuilder {
     ledger: IssueLedger,
     round: number,
     config: WorkflowConfig,
-  ): void {
+  ): { spec: string; plan: string } {
     const windowTokens = config.codex_context_window_tokens;
-    const estimatedTokens = this.estimateTokens(spec + plan);
+    const estimatedTokens = estimateTokens(spec + plan);
     const threshold = windowTokens * SPEC_REVIEW_OVERRIDES.context_compress_threshold;
 
     const shouldCompress =
       round >= SPEC_REVIEW_OVERRIDES.context_compress_round ||
       estimatedTokens > threshold;
 
-    if (shouldCompress) {
-      // Build round data for compressor (best-effort, sync-safe)
-      // Round data loading is async in theory, but the compressor
-      // receives what we have available synchronously.
-      this.compressor.compress({
-        spec,
-        plan,
-        ledger,
-        rounds: [], // Rounds data would be loaded async; empty for now
-        currentRound: round,
-        windowTokens,
-      });
+    if (!shouldCompress) {
+      return { spec, plan };
     }
-  }
 
-  /**
-   * Rough token estimation: characters / 4.
-   *
-   * This is a simple heuristic for English text. Good enough for
-   * threshold comparison without pulling in a tokenizer dependency.
-   */
-  private estimateTokens(text: string): number {
-    return Math.ceil(text.length / 4);
+    const result = this.compressor.compress({
+      spec,
+      plan,
+      ledger,
+      rounds: [], // Rounds data would be loaded async; empty for now
+      currentRound: round,
+      windowTokens,
+    });
+
+    if (result.droppedRounds.length > 0) {
+      console.log(
+        `[PackBuilder] Context compressed: ${estimatedTokens} → ${result.estimatedTokens} est. tokens ` +
+        `(dropped rounds: ${result.droppedRounds.join(', ')})`,
+      );
+    }
+
+    // The compressed text is a self-contained blob (spec + plan + ledger
+    // summary + last round).  Inject it as `spec` and blank `plan` so the
+    // prompt template's {{spec}} placeholder carries the full compressed
+    // context without duplicating content via {{plan}}.
+    return {
+      spec: result.text,
+      plan: '(included in compressed context above)',
+    };
   }
 
   // ── Private: artifact summary extraction ────────────────────────

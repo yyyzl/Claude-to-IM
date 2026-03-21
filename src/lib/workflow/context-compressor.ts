@@ -111,10 +111,30 @@ export class ContextCompressor {
 // ── Private helpers ──────────────────────────────────────────────
 
 /**
- * Estimate token count using the simple heuristic: chars / 4.
+ * Regex matching CJK Unified Ideographs, common CJK symbols, Hangul,
+ * Hiragana/Katakana, and fullwidth forms.  Each matched character typically
+ * maps to 1-2 BPE tokens rather than the ~0.25 ratio of ASCII text.
  */
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
+const CJK_REGEX =
+  // eslint-disable-next-line no-control-regex
+  /[\u2E80-\u9FFF\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFFEF\uAC00-\uD7AF\u3040-\u309F\u30A0-\u30FF]/g;
+
+/**
+ * Estimate token count with CJK-aware heuristic.
+ *
+ * - ASCII / Latin text: ~4 chars per token  (ratio 0.25)
+ * - CJK characters:     ~1.5 chars per token (ratio ~0.67)
+ *
+ * We count CJK characters separately and apply a higher per-char weight,
+ * then use the standard 1/4 ratio for the remaining ASCII portion.
+ */
+export function estimateTokens(text: string): number {
+  const cjkMatches = text.match(CJK_REGEX);
+  const cjkCount = cjkMatches ? cjkMatches.length : 0;
+  const asciiCount = text.length - cjkCount;
+
+  // CJK: ~0.67 tokens/char;  ASCII: ~0.25 tokens/char
+  return Math.ceil(cjkCount * 0.67 + asciiCount / 4);
 }
 
 /**

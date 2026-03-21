@@ -102,6 +102,19 @@ describe('parseWorkflowArgs', () => {
       });
     });
 
+    it('handles spec and plan in different subdirectories', () => {
+      // /workflow start docs/spec.md plans/plan.md  ✅ 可以不同子目录
+      const result = parseWorkflowArgs('start docs/spec.md plans/plan.md');
+      assert.deepStrictEqual(result, {
+        kind: 'start',
+        specPath: 'docs/spec.md',
+        planPath: 'plans/plan.md',
+        contextPaths: [],
+        claudeModel: undefined,
+        codexBackend: undefined,
+      });
+    });
+
     it('ignores --context without value', () => {
       const result = parseWorkflowArgs('start spec.md plan.md --context');
       assert.deepStrictEqual(result, {
@@ -265,6 +278,11 @@ describe('resolveSafePath', () => {
 
     it('rejects deep parent traversal (../../)', () => {
       assert.equal(_resolveSafePath(cwd, '../../etc/passwd'), null);
+    });
+
+    it('rejects cross-repo traversal as spec path', () => {
+      // /workflow start ../../other-repo/spec.md plan.md  ❌ 被路径遍历保护拦住
+      assert.equal(_resolveSafePath(cwd, '../../other-repo/spec.md'), null);
     });
 
     it('rejects traversal via subdirectory (sub/../../out)', () => {
