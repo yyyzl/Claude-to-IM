@@ -776,3 +776,71 @@ Agent SDK 配置：`tools: []`（纯文本）、`persistSession: false`、`maxTu
 ### Next Steps
 
 - None - task complete
+
+
+## Session 17: Workflow P1+TP1 + cross-AI review fixes
+
+**Date**: 2026-03-22
+**Task**: Workflow P1+TP1 + cross-AI review fixes
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+## 变更概览
+
+P1+TP1 批次实施 + 跨 AI 审核修复。包含 5 个代码安全网补全 + 1 个模板去重优化 + 3 个审核发现的 bug 修复。
+
+## P1 代码修复（5 项）
+
+| # | 问题 | 修复 |
+|---|------|------|
+| H-NEW-2 | accept_and_resolve 绕过 hasPatchFailure | 延迟 resolve 到 patch 后，失败时降级为 accepted |
+| H-NEW-3 | ContextCompressor 收到空 rounds | 加载真实 round 历史数据 |
+| H-NEW-4 | DecisionValidator 不存在 | 新建 decision-validator.ts + 5 项校验 + 引擎集成 |
+| 元问题 | last_processed_round / switch default | Issue 幂等字段 + default 分支 |
+| 元问题 | auto_terminate / human_review_on_deadlock | 配置项落地到引擎和 judge |
+
+## TP1 模板优化
+
+| # | 问题 | 修复 |
+|---|------|------|
+| T3+T6 | Codex 缺少 resolved/accepted 上下文 | 新增模板章节 + DEDUP RULES |
+
+## 跨 AI 审核修复（3 个真 bug）
+
+| Finding | 问题 | 修复 |
+|---------|------|------|
+| F2(高) | LGTM 短路只查 open/accepted，漏了 deferred | 改为 open/accepted/deferred 三态 |
+| F3(中) | 零进展用 i.round（首次提出轮次）而非本轮决策 | 改为统计 thisRoundDecided |
+| F4(中) | DecisionValidator 检测 duplicate 但 engine 没过滤 | filter 加 seenIds 去重 |
+
+## 验证
+
+- TypeScript 编译零错误
+- 269/270 测试通过（1 个失败是已有的 untracked bridge-stop-command.test.ts）
+- 新增 1 个测试：LGTM+deferred → continue
+- 新增文件：decision-validator.ts
+- 总变更：15 文件 +512 行
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c07c85c` | (see git log) |
+| `c8c51b2` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
