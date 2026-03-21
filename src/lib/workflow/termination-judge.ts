@@ -51,6 +51,7 @@ export class TerminationJudge {
     latestOutput: CodexReviewOutput;
     previousRoundHadNewHighCritical: boolean;
     isSkippedRound?: boolean;
+    isPreTermination?: boolean;
   }): TerminationResult | null {
     const { round, config, ledger, latestOutput, previousRoundHadNewHighCritical, isSkippedRound } = ctx;
 
@@ -142,7 +143,9 @@ export class TerminationJudge {
     }
 
     // ── Check 5: Max rounds reached ──────────────────────────
-    if (round >= config.max_rounds) {
+    // Only check max_rounds in post_decision (D), not pre_termination (B2).
+    // This ensures the last round's Claude decision gets a chance to execute.
+    if (!ctx.isPreTermination && round >= config.max_rounds) {
       return {
         reason: 'max_rounds_reached',
         action: 'terminate',

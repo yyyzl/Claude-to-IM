@@ -1,0 +1,13 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": "src/lib/workflow/workflow-engine.ts", "reason": "Core engine with parse failure + timeout + zero-progress fixes"}
+{"file": "src/lib/workflow/termination-judge.ts", "reason": "max_rounds check location fix"}
+{"file": "src/lib/workflow/json-parser.ts", "reason": "New parseDecisionsAndPatches method"}
+{"file": "src/lib/workflow/types.ts", "reason": "termination_state new fields"}
+{"file": "src/lib/workflow/model-invoker.ts", "reason": "Codex output SESSION_ID cleanup"}
+{"file": "src/lib/workflow/pack-builder.ts", "reason": "R1 round_summary fix"}
+{"file": ".claude-workflows/templates/claude-decision.md", "reason": "JSON/Patch split + budget"}
+{"file": ".claude-workflows/templates/claude-decision-system.md", "reason": "Decision budget + reject guidance"}
+{"file": ".claude-workflows/templates/spec-review-pack.md", "reason": "Severity defs + output rules"}
+{"file": ".claude-workflows/reports/workflow-engine-deep-audit.md", "reason": "Audit reference"}
+{"file": ".claude-workflows/reports/prompt-optimization-plan.md", "reason": "Template optimization reference"}

@@ -208,6 +208,7 @@ interface Issue {
   decision_reason?: string;
   resolved_in_round?: number;
   repeat_count: number;            // Times re-raised after rejection (deadlock detection)
+  last_processed_round?: number;   // Last round in which this issue was created/updated by IssueMatcher (idempotency marker)
 }
 ```
 
@@ -321,6 +322,10 @@ interface WorkflowMeta {
     round: number;
     step: WorkflowStep;
   } | null;
+  termination_state: {             // Durable state for TerminationJudge (persisted across rounds/resumes)
+    consecutive_no_new_high_rounds: number;  // Consecutive rounds with no new critical/high issues (reset on skip or new high)
+    last_round_was_skipped: boolean;         // Whether last round was a timeout skip
+  };
 }
 
 /**
@@ -346,6 +351,7 @@ interface WorkflowConfig {
   codex_max_retries: number;       // Default 1 (retry once on timeout)
   claude_max_retries: number;      // Default 1
   codex_context_window_tokens: number; // Default 128000; used by ContextCompressor threshold
+  max_deferred_issues: number;     // Default 10; max deferred issues sent to Codex (oldest dropped from prompt)
   context_files: ContextFile[];    // Global reference files (path + inlined content)
 }
 ```
@@ -371,6 +377,8 @@ type WorkflowEventType =
   | 'claude_parse_error'                                   // Claude output JSON parse failed
   | 'issue_created'       | 'issue_status_changed'
   | 'issue_matching_completed'                             // Step B1 finished (checkpoint marker)
+  | 'claude_decisions_validated'                           // Step C2 finished (sub-checkpoint marker)
+  | 'decision_validation_failed'                           // DecisionValidator found errors
   | 'spec_updated'        | 'plan_updated'
   | 'patch_apply_failed'                                   // PatchApplier heading match failed
   | 'resolves_issues_missing'                              // Claude omitted resolves_issues field
@@ -427,6 +435,7 @@ class WorkflowEngine {
     jsonParser: JsonParser,
     issueMatcher: IssueMatcher,
     patchApplier: PatchApplier,
+    decisionValidator: DecisionValidator,
   );
 
   /** Start new Spec-Review workflow, returns run_id */
@@ -580,12 +589,13 @@ class TerminationJudge {
     config: WorkflowConfig;
     ledger: IssueLedger;
     latestOutput: CodexReviewOutput;
-    previousRoundHadNewHighCritical: boolean; // Was there any new high/critical issue in the PREVIOUS round?
-                                              // Used for "2 consecutive rounds with no new high/critical" check.
-                                              // First round: true (assume previous had issues, so round 1 alone can't trigger).
-    isSkippedRound?: boolean;       // True if this round was skipped (timeout). Skipped rounds do NOT count
-                                    // toward "2 consecutive" — they reset the consecutive counter.
-  }): TerminationResult | null;
+    terminationState: {             // Durable state from WorkflowMeta.termination_state (persisted across rounds/resumes)
+      consecutive_no_new_high_rounds: number;
+      last_round_was_skipped: boolean;
+    };
+    isSkippedRound?: boolean;       // True if this round was skipped (timeout). Skipped rounds reset
+                                    // consecutive_no_new_high_rounds to 0.
+  }): { result: TerminationResult | null; updatedState: typeof ctx.terminationState };
 }
 
 interface TerminationResult {
@@ -600,13 +610,13 @@ interface TerminationResult {
 >
 > | Reason | Action | How computed |
 > |--------|--------|-------|
-> | `lgtm` | `terminate` | `overall_assessment = 'lgtm'` AND no open/accepted issues in ledger |
-> | `no_new_high_severity` | `terminate` | Judge scans ledger for issues with `round === currentRound` AND `severity in ['critical','high']`; if count = 0 AND `previousRoundHadNewHighCritical === false` → 2 consecutive rounds confirmed. Skipped rounds (`isSkippedRound`) reset the counter. |
-> | `only_style_issues` | `terminate` | All open issues `severity <= low` |
+> | `lgtm` | `terminate` | `overall_assessment = 'lgtm'` AND no unresolved issues (open \| accepted \| deferred) in ledger |
+> | `no_new_high_severity` | `terminate` | Judge scans ledger for issues with `round === currentRound` AND `severity in ['critical','high']`; if count = 0, increments `terminationState.consecutive_no_new_high_rounds`; if count > 0, resets to 0. When `consecutive_no_new_high_rounds >= 2` → terminate. Skipped rounds (`isSkippedRound`) reset to 0. State is persisted to `WorkflowMeta.termination_state`. |
+> | `only_style_issues` | `terminate` | All **unresolved** issues (open \| accepted \| deferred) have `severity <= low` |
 > | `deadlock_detected` | `pause_for_human` | Any rejected issue with `repeat_count >= 2` |
 > | `max_rounds_reached` | `terminate` | `round >= config.max_rounds` |
 >
-> **LGTM with open issues**: When `overall_assessment = 'lgtm'` but ledger has open/accepted issues,
+> **LGTM with open issues**: When `overall_assessment = 'lgtm'` but ledger has unresolved issues (open/accepted/deferred),
 > `judge()` returns `null` (continue). The engine proceeds to Claude to address remaining issues.
 
 ### 6.6 ContextCompressor
@@ -628,12 +638,21 @@ class ContextCompressor {
    * includes full context in each Claude prompt (stateless calls).
    * If Claude prompt also grows too large, a separate compression strategy
    * should be added to PromptAssembler (future enhancement).
+   *
+   * Interface design: Input and output are both structured `SpecReviewPack` fields,
+   * NOT raw text. This ensures compatibility with the Pack→Prompt pipeline.
+   * PackBuilder constructs a draft SpecReviewPack, passes it through compress()
+   * which returns a trimmed version of the same structure.
    */
   compress(ctx: {
-    spec: string; plan: string; ledger: IssueLedger;
-    rounds: RoundData[]; currentRound: number;
+    pack: SpecReviewPack;          // Draft pack assembled by PackBuilder (before compression)
+    rounds: RoundData[];           // Historical round data for drop-middle-rounds strategy
     windowTokens: number;          // From config.codex_context_window_tokens
-  }): { text: string; estimatedTokens: number; droppedRounds: number[] };
+  }): {
+    pack: SpecReviewPack;          // Compressed pack (same structure, truncated round_summary/issues)
+    estimatedTokens: number;
+    droppedRounds: number[];
+  };
 }
 ```
 
@@ -674,6 +693,23 @@ class WorkflowStore {
   // Templates
   async loadTemplate(name: string): Promise<string>;  // throws if template not found (critical)
 }
+
+/**
+ * Atomic Write Protocol (for crash-safe persistence):
+ *
+ * All critical file writes (meta.json, issue-ledger.json, spec-v{N}.md, plan-v{N}.md)
+ * MUST use the following atomic write sequence:
+ *   1. Write to a temporary file (e.g., `meta.json.tmp`) in the same directory
+ *   2. Call fsync on the file descriptor to ensure data is flushed to disk
+ *   3. Rename (atomic on POSIX) the temporary file to the target path
+ *
+ * This prevents truncated/corrupt files from partial writes on crash.
+ * Events (ndjson append) are append-only and tolerate partial last lines —
+ * on load, the reader MUST skip malformed trailing lines gracefully.
+ *
+ * Implementation: use a shared `atomicWriteFile(path, content)` helper
+ * that encapsulates steps 1-3. WorkflowStore uses this for all critical writes.
+ */
 ```
 
 ### 6.8 JsonParser
@@ -702,6 +738,27 @@ class JsonParser {
     planPatch: string | null;
   };
 }
+
+/**
+ * Claude Parse Failure Safety Protocol:
+ *
+ * When `jsonParser.parse()` returns null for Claude output (no valid JSON):
+ *   1. Save raw output to R{N}-claude-raw.md (never lose data)
+ *   2. Emit `claude_parse_error` event
+ *   3. Attempt `extractPatches()` for marker-based fallback
+ *   4. **CRITICAL**: If `decisions[]` cannot be extracted:
+ *      - Do NOT apply any patches (even if marker-based patches exist)
+ *      - Do NOT update IssueLedger status
+ *      - Transition workflow to `status: 'human_review'` with reason 'claude_parse_failure'
+ *      - Log: "Cannot safely apply patches without validated decisions"
+ *   5. If `decisions[]` CAN be extracted (e.g., from partial JSON):
+ *      - Validate via DecisionValidator before any side effects
+ *      - Only then proceed with normal flow
+ *
+ * Rationale: Applying patches without knowing which issues they address
+ * would corrupt the ledger ↔ document consistency. Better to pause for
+ * human intervention than to silently corrupt state.
+ */
 ```
 
 ### 6.9 IssueMatcher
@@ -730,6 +787,13 @@ class IssueMatcher {
    * - matched + status=deferred: keep deferred, do NOT increment repeat_count
    * - matched + status=open/accepted: skip (already tracked)
    * - no match: create new Issue (status=open, repeat_count=0)
+   *
+   * Idempotency mechanism:
+   * - Each created/updated issue gets `last_processed_round = round`
+   * - On re-run (crash resume), if an issue already has `last_processed_round === round`,
+   *   skip the create/update entirely (prevents duplicate repeat_count++, duplicate reopen, etc.)
+   * - This is more robust than just checking "if issue exists for this round",
+   *   because it also guards reopen/repeat_count operations on matched issues.
    *
    * Returns structured result for engine consumption.
    */
@@ -773,6 +837,47 @@ class PatchApplier {
     appliedSections: string[];     // Headings successfully replaced
     failedSections: string[];      // Headings not found in current doc
   };
+}
+```
+
+> **Patch-Resolve Consistency Rule**:
+>
+> When `PatchApplier.apply()` returns `failedSections.length > 0`:
+> - Issues listed in `resolves_issues` that correspond to the failed patch sections
+>   MUST NOT be transitioned to `resolved`. They remain `accepted`.
+> - The engine emits a `patch_apply_failed` event for each failed section.
+> - Only issues whose patches were **fully and successfully applied** may be resolved.
+> - If ALL patch sections failed, the workflow transitions to `human_review`.
+
+### 6.11 DecisionValidator
+
+```typescript
+class DecisionValidator {
+  /**
+   * Validate Claude's decision output before any side effects (ledger/patch/spec/plan).
+   *
+   * Checks:
+   * 1. All `issue_id` values reference known issues in the ledger
+   * 2. No duplicate `issue_id` in decisions array
+   * 3. Every current-round finding has a corresponding decision (coverage check)
+   * 4. `resolves_issues` entries (if present) only reference issues with action=accept
+   *    (cannot resolve a rejected/deferred issue)
+   * 5. `resolves_issues` entries reference existing, valid issue IDs
+   *
+   * On validation failure:
+   * - Return detailed error list (which checks failed, with specifics)
+   * - Engine MUST NOT apply any side effects
+   * - Workflow transitions to `human_review` with validation error details
+   *
+   * On success: return validated decisions (same data, type-narrowed)
+   */
+  validate(
+    decisions: Decision[],
+    resolves_issues: string[] | undefined,
+    ledger: IssueLedger,
+    currentRoundFindings: Array<{ issueId: string; finding: Finding }>,
+  ): { valid: true; decisions: Decision[] }
+     | { valid: false; errors: string[] };
 }
 ```
 
@@ -828,8 +933,10 @@ start(spec, plan, config)
 |  |-- if action='pause_for_human' -> pause, break         |
 |  |-- if no_new_high for 2 consecutive -> terminate       |
 |                                                          |
-|  Step C: Claude decision                                 |
+|  Step C: Claude decision (with sub-checkpoints for idempotent resume) |
 |  |-- meta.current_step = 'claude_decision'               |
+|  |                                                       |
+|  |  Sub-step C1: Invoke Claude                           |
 |  |-- packBuilder.buildClaudeDecisionInput(...)           |  <-- Includes issue IDs from B1 + previous_decisions
 |  |-- promptAssembler.renderClaudeDecisionPrompt(input)   |  <-- Handles empty-findings variant
 |  |-- modelInvoker.invokeClaude(prompt, {signal})         |
@@ -837,27 +944,48 @@ start(spec, plan, config)
 |  |     |-- on 2nd timeout: appendEvent(claude_timeout),  |
 |  |     |   skip to TIMEOUT GUARD below                   |
 |  |     |-- on abort (pause): save checkpoint, break      |
-|  |-- store.saveRoundArtifact(R{N}-claude-raw.md)         |  <-- Persist raw output FIRST
+|  |-- store.saveRoundArtifact(R{N}-claude-raw.md)         |  <-- Persist raw output FIRST (sub-checkpoint: raw_saved)
+|  |                                                       |
+|  |  Sub-step C2: Parse + Validate                        |
 |  |-- jsonParser.parse -> ClaudeDecisionOutput            |
-|  |     |-- on parse failure: appendEvent(claude_parse_error), |
-|  |     |   save raw, use extractPatches fallback         |
-|  |-- jsonParser.extractPatches -> spec/plan patches      |
-|  |-- update IssueLedger from decisions:                  |
+|  |     |-- on parse failure:                             |
+|  |     |   appendEvent(claude_parse_error)               |
+|  |     |   IF decisions[] unrecoverable:                 |
+|  |     |     → prohibit all side effects                 |
+|  |     |     → transition to human_review                |
+|  |     |     → break (do NOT proceed to C3/C4)           |
+|  |-- decisionValidator.validate(decisions, resolves_issues, ledger, findings) |
+|  |     |-- on validation failure:                        |
+|  |     |   → emit decision_validation_failed event       |
+|  |     |   → transition to human_review with error details |
+|  |     |   → break (do NOT proceed to C3/C4)             |
+|  |-- appendEvent(claude_decisions_validated)             |  <-- Sub-checkpoint: decisions_validated
+|  |                                                       |
+|  |  Sub-step C3: Apply decisions + patches               |
+|  |-- update IssueLedger from validated decisions:        |
 |  |     |-- action=accept: status=accepted                |
-|  |     |-- action=accept_and_resolve: status=resolved    |  <-- NEW: direct resolution
+|  |     |-- action=accept_and_resolve: status=resolved    |
 |  |     |-- action=reject: status=rejected                |
 |  |     |-- action=defer: status=deferred                 |
+|  |-- jsonParser.extractPatches -> spec/plan patches      |
 |  |-- if spec_updated:                                    |
 |  |     |-- patchApplier.apply(currentSpec, specPatch)    |
 |  |     |-- store.saveSpec(v{N+1})                        |
 |  |-- if plan_updated:                                    |
 |  |     |-- patchApplier.apply(currentPlan, planPatch)    |
 |  |     |-- store.savePlan(v{N+1})                        |
-|  |-- resolve issues:                                     |
-|  |     |-- if resolves_issues present → mark those as resolved |
+|  |-- resolve issues (with patch-resolve consistency):    |
+|  |     |-- collect failedSections from spec+plan patches |
+|  |     |-- if resolves_issues present:                   |
+|  |     |     → for each issue_id in resolves_issues:     |
+|  |     |       if related patch sections ALL succeeded → mark resolved |
+|  |     |       if related patch sections had failures → keep accepted, emit warning |
 |  |     |-- if resolves_issues ABSENT → emit 'resolves_issues_missing' warning, |
 |  |     |     accepted issues stay accepted (NOT auto-resolved) |
-|  |-- store.saveLedger / saveRoundArtifact                |
+|  |-- store.saveLedger                                    |  <-- Sub-checkpoint: ledger_updated
+|  |                                                       |
+|  |  Sub-step C4: Commit                                  |
+|  |-- store.saveRoundArtifact(R{N}-claude-decision.md)    |
 |  |-- appendEvent(claude_decision_completed)              |
 |  |-- updateMeta(current_step='post_decision')            |  <-- Checkpoint: Claude done
 |                                                          |
@@ -884,11 +1012,11 @@ workflow_completed / workflow_failed
 
 | Priority | Condition | Action | Checked in | Notes |
 |----------|-----------|--------|------------|-------|
-| 1 | Codex `overall_assessment = 'lgtm'` AND no open/accepted issues in ledger | `terminate`, skip Claude | B2 | |
-| 2 | Codex `overall_assessment = 'lgtm'` BUT open/accepted issues exist | Continue to Claude (do NOT skip) | B2 | `judge()` returns null |
+| 1 | Codex `overall_assessment = 'lgtm'` AND no unresolved issues (open/accepted/deferred) in ledger | `terminate`, skip Claude | B2 | |
+| 2 | Codex `overall_assessment = 'lgtm'` BUT unresolved issues (open \| accepted \| deferred) exist | Continue to Claude (do NOT skip) | B2 | `judge()` returns null |
 | 3 | Any issue with `repeat_count >= 2` and `status = rejected` | `pause_for_human` (deadlock) | B2, D | |
 | 4 | No new high/critical issues for 2 consecutive rounds (judge computes from ledger, not a pre-computed count) | `terminate` | B2, D | Skipped rounds (`isSkippedRound`) reset the consecutive counter |
-| 5 | All open issues `severity <= low` | `terminate` | B2, D | |
+| 5 | All unresolved issues (open \| accepted \| deferred) have `severity <= low` | `terminate` | B2, D | |
 | 6 | `round >= config.max_rounds` | `terminate` (force) | B2, D, TIMEOUT GUARD | |
 
 > **B2 vs D division of responsibility**:
@@ -916,9 +1044,14 @@ When `status = paused/failed/human_review`, calling `resume(runId)`:
      - If exists → ledger is up-to-date, skip to `pre_termination`
      - If not → re-run IssueMatcher (idempotent: processFindings re-derives from raw findings + current ledger)
    - `pre_termination`: B1 done, skip to B2 check
-   - `claude_decision`: Check if `R{N}-claude-raw.md` exists:
-     - If exists → reuse saved output, skip to decision processing
-     - If not → re-invoke Claude
+   - `claude_decision`: Resume uses sub-checkpoint events to determine precise re-entry:
+     - Check if `R{N}-claude-raw.md` exists:
+       - If not → re-invoke Claude (sub-step C1)
+     - Check if `claude_decisions_validated` event exists for this round:
+       - If not → reuse raw output, re-parse and re-validate (sub-step C2; idempotent)
+     - Check if ledger has been updated for this round (via `last_processed_round` on decisions):
+       - If not → reuse validated decisions, apply to ledger + patches (sub-step C3)
+     - If all above exist → skip to C4 (commit)
    - `post_decision`: Claude done, skip to D check
 3. Reload `issue-ledger.json` and latest spec/plan version
 
@@ -934,8 +1067,12 @@ When `status = paused/failed/human_review`, calling `resume(runId)`:
 > 1. Save raw LLM output (round artifact) — always first, never lose data
 > 2. Update issue-ledger.json
 > 3. Save spec/plan new version (if updated)
-> 4. Append checkpoint event (e.g., `issue_matching_completed`)
+> 4. Append checkpoint event (e.g., `issue_matching_completed`, `claude_decisions_validated`)
 > 5. Update meta.json (`current_step`) — always last, serves as commit marker
+>
+> **Atomic write protocol**: All critical writes (meta.json, issue-ledger.json, spec/plan versions)
+> use the atomic write helper: write-tmp → fsync → rename. See §6.7 for details.
+> Events (ndjson) are append-only; malformed trailing lines are skipped on load.
 
 ---
 
@@ -1005,7 +1142,8 @@ Each finding below has an assigned issue ID. Use these IDs in your decisions.
 {{codex_findings_with_ids}}
 
 (If no findings above: Codex found no new issues. Please review and address the remaining
-open/accepted issues in the ledger below. You may reject, defer, or accept_and_resolve them.)
+unresolved issues (open/accepted/deferred) in the ledger below. You may accept (with spec/plan
+patches and resolves_issues), reject, defer, or accept_and_resolve them.)
 
 ## Previous Rounds Decisions (for context continuity)
 {{previous_decisions}}
@@ -1050,21 +1188,22 @@ If JSON output is not possible, wrap modified sections in markers:
 ```typescript
 const DEFAULT_CONFIG: WorkflowConfig = {
   max_rounds: 3,
-  auto_terminate: true,
-  human_review_on_deadlock: true,
+  auto_terminate: true,             // When true, workflow auto-terminates on convergence conditions
+  human_review_on_deadlock: true,   // When true, deadlock (repeat_count >= 2) transitions to human_review instead of terminate
   codex_timeout_ms: 180_000,             // 3 min (large specs may take 2-5 min)
   claude_timeout_ms: 120_000,
   codex_max_retries: 1,
   claude_max_retries: 1,
   codex_context_window_tokens: 128_000,  // Codex model context window (for compression threshold)
+  max_deferred_issues: 10,               // Max deferred issues sent to Codex prompt (oldest dropped; all remain in ledger)
   context_files: [],
 };
 
+/** Extended overrides for architecture-level reviews (user applies manually) */
 const SPEC_REVIEW_OVERRIDES = {
-  max_rounds_extended: 5,          // For architecture-level changes
-  context_compress_threshold: 0.6, // Codex window percentage
-  context_compress_round: 4,       // Trigger round
-  max_deferred_issues: 10,         // Max deferred issues sent to Codex (oldest dropped from prompt)
+  max_rounds_extended: 5,          // Override max_rounds for architecture-level changes
+  context_compress_threshold: 0.6, // Codex window percentage (used by ContextCompressor)
+  context_compress_round: 4,       // Trigger round for compression
 };
 ```
 
@@ -1077,7 +1216,7 @@ const SPEC_REVIEW_OVERRIDES = {
 | Codex CLI timeout | Retry once -> still timeout: log event, skip round via TIMEOUT GUARD (`isSkippedRound=true`) | `codex_review_timeout` |
 | Claude timeout | Retry once -> still timeout: log event, skip round via TIMEOUT GUARD (`isSkippedRound=true`) | `claude_decision_timeout` |
 | Codex invalid JSON output | `JsonParser.parse()` best-effort; fallback: save raw + log event | `codex_parse_error` |
-| Claude invalid JSON output | `JsonParser.parse()` + `extractPatches()` best-effort; fallback: save raw + log event | `claude_parse_error` |
+| Claude invalid JSON output | `JsonParser.parse()` returns null → save raw + log event. **If `decisions[]` unrecoverable: prohibit patch/ledger changes, transition to `human_review`**. If `decisions[]` partially recovered: validate via `DecisionValidator` then proceed. | `claude_parse_error` |
 | Patch apply heading mismatch | `PatchApplier` appends unmatched section, logs failed headings | `patch_apply_failed` |
 | Claude omits `resolves_issues` | Emit warning, accepted issues stay accepted (NOT auto-resolved) | `resolves_issues_missing` |
 | Filesystem write failure | Throw, `status=failed`, resumable | `workflow_failed` |
@@ -1130,8 +1269,9 @@ const SPEC_REVIEW_OVERRIDES = {
 - [ ] Schemas exist: `issue-ledger.schema.json`, `meta.schema.json`, `event.schema.json` in `.claude-workflows/schemas/`
 - [ ] Template placeholders cover all SpecReviewPack fields (`spec`, `plan`, `unresolved_issues`, `rejected_issues`, `round_summary`, `round`, `context_files`)
 - [ ] Claude decision template includes `{{previous_decisions}}` placeholder and empty-findings guidance
-- [ ] Event schema includes `codex_parse_error`, `claude_parse_error`, `patch_apply_failed`, `resolves_issues_missing`, `issue_matching_completed` event types
+- [ ] Event schema includes `codex_parse_error`, `claude_parse_error`, `patch_apply_failed`, `resolves_issues_missing`, `issue_matching_completed`, `claude_decisions_validated`, `decision_validation_failed` event types
 - [ ] Meta schema includes all 5 `WorkflowStep` values for `current_step`
+- [ ] Meta schema includes `termination_state` object with `consecutive_no_new_high_rounds` and `last_round_was_skipped`
 - [ ] `.gitignore` updated: `.claude-workflows/runs/` ignored, `templates/` and `schemas/` tracked
 
 ### P1a
@@ -1150,9 +1290,11 @@ const SPEC_REVIEW_OVERRIDES = {
 - [ ] Missing `resolves_issues` emits warning, does NOT auto-resolve accepted issues
 - [ ] Deferred issues re-raised by Codex stay deferred (no repeat_count increment)
 - [ ] Deferred issues subject to `max_deferred_issues` limit in Codex prompt
-- [ ] All termination conditions work (LGTM with open-issue guard / no new high/critical / deadlock / max rounds)
+- [ ] All termination conditions work (LGTM with unresolved-issue guard / no new high/critical / deadlock / only-low / max rounds)
 - [ ] TerminationJudge computes high/critical count from ledger (not from pre-computed number)
-- [ ] Skipped rounds reset "2 consecutive" counter via `isSkippedRound` flag
+- [ ] TerminationJudge uses durable `termination_state` from WorkflowMeta (not transient params)
+- [ ] `only_style_issues` checks ALL unresolved issues (open | accepted | deferred), not just open
+- [ ] Skipped rounds reset `consecutive_no_new_high_rounds` to 0 via `isSkippedRound` flag
 - [ ] `TerminationResult.action` correctly maps to terminate vs pause_for_human
 - [ ] TIMEOUT GUARD: skip-round checks max_rounds directly (no infinite skip loop)
 - [ ] Timeout handling: retry once -> skip round (both Codex and Claude)
@@ -1162,14 +1304,22 @@ const SPEC_REVIEW_OVERRIDES = {
 - [ ] All artifacts persisted (meta / spec / plan / ledger / rounds / events)
 - [ ] `current_step` updated at each step boundary (5 states: codex_review → issue_matching → pre_termination → claude_decision → post_decision)
 - [ ] Checkpoint resume: uses `current_step` + artifact checks for precise re-entry
-- [ ] `IssueMatcher.processFindings()` is idempotent on re-run
+- [ ] `IssueMatcher.processFindings()` is idempotent on re-run (via `last_processed_round` guard)
+- [ ] `DecisionValidator` validates all decisions before any side effects
+- [ ] `DecisionValidator` rejects unknown/duplicate issue_ids, missing coverage, invalid resolves_issues targets
+- [ ] Claude parse failure with unrecoverable `decisions[]` → `human_review`, no side effects
+- [ ] Patch-resolve consistency: `failedSections` prevents affected issues from being resolved
+- [ ] Step C sub-checkpoints enable precise resume at C1/C2/C3/C4 boundaries
 - [ ] Write ordering for crash safety: raw output → ledger → spec/plan → checkpoint event → meta (last)
+- [ ] Critical files use atomic write protocol (write-tmp → fsync → rename)
+- [ ] Events ndjson reader skips malformed trailing lines gracefully
 - [ ] File versioning uses consistent naming: spec-v1.md, spec-v2.md, spec-v3.md
 - [ ] WorkflowStore returns `null` for missing files (not throw)
 - [ ] Unit tests cover all `TerminationJudge` branches (including high/critical filtering from ledger, isSkippedRound)
 - [ ] Unit tests cover `IssueMatcher` exact/evidence/no-match/deferred-re-raise/idempotency paths
 - [ ] Unit tests cover `JsonParser` all 4 strategies + `extractPatches`
-- [ ] Unit tests cover `PatchApplier` multi-level heading matching + heading mismatch
+- [ ] Unit tests cover `PatchApplier` multi-level heading matching + heading mismatch + patch-resolve consistency
+- [ ] Unit tests cover `DecisionValidator` all 5 validation checks + error cases
 - [ ] Integration test: full 2-3 round spec-review loop (mock ModelInvoker OK)
 - [ ] `package.json`: `@anthropic-ai/sdk` added as dependency
 - [ ] `package.json`: test script pattern includes `workflow-*.test.ts`

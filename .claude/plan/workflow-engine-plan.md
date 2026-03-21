@@ -61,7 +61,7 @@ Create `.claude-workflows/schemas/event.schema.json`:
 - Validate by manually reviewing that all SpecReviewPack fields have corresponding template placeholders
 - Verify: 7 placeholders in spec-review-pack template match 7 SpecReviewPack fields (including `rejected_issues`)
 - Verify: claude-decision template has 6 placeholders including `{{previous_decisions}}` and empty-findings guidance
-- Verify: event schema includes `codex_parse_error`, `claude_parse_error`, `patch_apply_failed`, `resolves_issues_missing`, `issue_matching_completed`
+- Verify: event schema includes `codex_parse_error`, `claude_parse_error`, `patch_apply_failed`, `resolves_issues_missing`, `issue_matching_completed`, `claude_decisions_validated`, `decision_validation_failed`
 - Verify: meta schema `current_step` enum has 5 values
 
 ---
@@ -79,11 +79,11 @@ Create `src/lib/workflow/types.ts`:
   - `ClaudeDecisionOutput` (with `spec_patch`/`plan_patch` + `resolves_issues?: string[]`)
   - `Decision` (issue_id references IDs from IssueMatcher, action: `accept | reject | defer | accept_and_resolve`)
   - `WorkflowStep` type (5 values: `codex_review | issue_matching | pre_termination | claude_decision | post_decision`)
-  - `WorkflowMeta` (using `WorkflowStep` for `current_step` and `last_completed.step`)
-  - `WorkflowConfig` (including `codex_context_window_tokens`, `context_files: ContextFile[]`)
-  - `WorkflowEvent`, `WorkflowEventType` (including `codex_parse_error`, `claude_parse_error`, `patch_apply_failed`, `resolves_issues_missing`, `issue_matching_completed`)
+  - `WorkflowMeta` (using `WorkflowStep` for `current_step` and `last_completed.step`, plus `termination_state: { consecutive_no_new_high_rounds, last_round_was_skipped }`)
+  - `WorkflowConfig` (including `codex_context_window_tokens`, `max_deferred_issues`, `context_files: ContextFile[]`)
+  - `WorkflowEvent`, `WorkflowEventType` (including `codex_parse_error`, `claude_parse_error`, `patch_apply_failed`, `resolves_issues_missing`, `issue_matching_completed`, `claude_decisions_validated`, `decision_validation_failed`)
   - `ClaudeDecisionInput` (structured data for PromptAssembler, includes `hasNewFindings` flag and `previousDecisions`)
-- Export DEFAULT_CONFIG and SPEC_REVIEW_OVERRIDES constants (including `max_deferred_issues`)
+- Export DEFAULT_CONFIG (with `max_deferred_issues`) and SPEC_REVIEW_OVERRIDES constants
 - RoundData type for ContextCompressor input
 - TerminationResult type with `action: 'terminate' | 'pause_for_human'` field
 
@@ -93,8 +93,9 @@ Create `src/lib/workflow/workflow-store.ts`:
 - Constructor takes basePath (default `.claude-workflows/`)
 - Implement all CRUD methods from spec section 6.7
 - File I/O: use Node.js fs/promises
+- **Atomic write protocol**: Implement `atomicWriteFile(path, content)` helper that writes to `.tmp` → fsync → rename. Use for all critical files (meta.json, issue-ledger.json, spec-v{N}.md, plan-v{N}.md)
 - Spec/Plan versioning: spec-v1.md, spec-v2.md, spec-v3.md pattern (consistent v-prefix)
-- Events: ndjson append (one JSON per line)
+- Events: ndjson append (one JSON per line); on load, skip malformed trailing lines gracefully
 - Error handling: throw on write failure and missing templates; return `null` on read missing (spec/plan/ledger/artifacts/meta)
 
 Unit tests:
@@ -115,6 +116,7 @@ Create `src/lib/workflow/json-parser.ts`:
   1. Read `spec_patch`/`plan_patch` from parsed JSON object
   2. Fallback: scan for `--- SPEC UPDATE ---` / `--- PLAN UPDATE ---` markers
   3. Return null if neither found
+- **Claude parse failure safety**: When `parse()` returns null and `decisions[]` cannot be recovered, engine MUST NOT apply patches or update ledger — transition to `human_review` (see spec §6.8)
 
 Unit tests (critical — this is a non-trivial utility):
 - Clean JSON input
@@ -135,7 +137,7 @@ Create `src/lib/workflow/issue-matcher.ts`:
 - Strategy 3: no match -> return null (caller creates new Issue)
 - Special handling for deferred issues: if matched and status=deferred, return match but caller does NOT increment repeat_count
 - `processFindings(findings, ledger, round)`: batch method (extends spec §6.9) that processes all findings, returns `{ newIssues, matchedIssues, newHighCriticalCount, newTotalCount }`
-  - **Idempotency**: if re-run for the same round, detects existing issues by round and skips them (safe for crash resume)
+  - **Idempotency via `last_processed_round`**: Each created/updated issue gets `last_processed_round = round`. On re-run, issues with `last_processed_round === round` are skipped entirely (prevents duplicate `repeat_count++`, duplicate reopen, etc.)
 
 Unit tests:
 - Exact description match (different casing/whitespace)
@@ -214,24 +216,26 @@ Unit tests (with mocks):
 
 Create `src/lib/workflow/termination-judge.ts`:
 - Implement `judge()` with priority-ordered checks from spec section 7.2:
-  1. LGTM check (overall_assessment) — LGTM with no open/accepted issues -> terminate; LGTM with open/accepted issues -> returns null (engine proceeds to Claude)
+  1. LGTM check (overall_assessment) — LGTM with no unresolved issues (open/accepted/deferred) -> terminate; LGTM with unresolved issues -> returns null (engine proceeds to Claude)
   2. Deadlock detection (repeat_count >= 2 on rejected issues) -> `action: 'pause_for_human'`
-  3. No new high/critical for 2 consecutive rounds — **judge computes from ledger** (filter `round === currentRound` + `severity in ['critical','high']`), NOT from a pre-computed count -> `action: 'terminate'`
-  4. Only low-severity remaining -> `action: 'terminate'`
+  3. No new high/critical for 2 consecutive rounds — **judge computes from ledger** (filter `round === currentRound` + `severity in ['critical','high']`), uses `terminationState.consecutive_no_new_high_rounds` from `WorkflowMeta` (durable state) -> `action: 'terminate'`
+  4. Only low-severity remaining among ALL unresolved issues (open | accepted | deferred) -> `action: 'terminate'`
   5. Max rounds reached -> `action: 'terminate'`
-- Input `ctx` includes `previousRoundHadNewHighCritical: boolean` and `isSkippedRound?: boolean`
-- Skipped rounds (`isSkippedRound=true`) reset the "2 consecutive" counter
-- Return TerminationResult with `reason`, `action`, and `details`, or null to continue
+- Input `ctx` includes `terminationState` from `WorkflowMeta.termination_state` (durable) and `isSkippedRound?: boolean`
+- Skipped rounds (`isSkippedRound=true`) reset `consecutive_no_new_high_rounds` to 0
+- Returns `{ result: TerminationResult | null; updatedState }` — engine persists `updatedState` back to `WorkflowMeta.termination_state`
 
 Unit tests (critical -- cover ALL branches):
-- LGTM + no open/accepted issues -> terminate
+- LGTM + no unresolved issues (open/accepted/deferred) -> terminate
 - LGTM with open issues -> null (engine proceeds to Claude)
 - LGTM with accepted (unresolved) issues -> null (engine proceeds to Claude)
+- LGTM with deferred issues -> null (engine proceeds to Claude)
 - Deadlock detected (repeat_count >= 2, action=pause_for_human)
-- No new high/critical issues for 2 consecutive rounds (computed from ledger) -> terminate
-- 1 round with no new high/critical only -> null (not yet 2 consecutive)
-- Skipped round resets consecutive counter -> null
-- Only low issues remain (action=terminate)
+- No new high/critical issues for 2 consecutive rounds (from durable terminationState) -> terminate
+- 1 round with no new high/critical only -> null (not yet 2 consecutive); updatedState.consecutive_no_new_high_rounds === 1
+- Skipped round resets consecutive_no_new_high_rounds to 0 -> null
+- Resume after crash: terminationState correctly restored from meta.json
+- Only low issues remain among all unresolved (open/accepted/deferred) -> terminate
 - Max rounds reached (action=terminate)
 - Continue when ledger has new high-severity issue in current round
 - Edge case: first round (`previousRoundHadNewHighCritical=true` by convention)
@@ -239,9 +243,11 @@ Unit tests (critical -- cover ALL branches):
 ### Step 9: ContextCompressor (Day 4, ~1h)
 
 Create `src/lib/workflow/context-compressor.ts`:
-- `compress()`: check trigger conditions (round >= 4 or estimated tokens > 60% of `windowTokens` param)
+- `compress(ctx)`: takes `{ pack: SpecReviewPack, rounds: RoundData[], windowTokens }` — structurally typed input/output (same `SpecReviewPack` type in and out)
 - `windowTokens` comes from `config.codex_context_window_tokens` (passed by PackBuilder)
-- If triggered: keep latest spec/plan, ledger summary (open+accepted only), latest round, drop middle rounds
+- Trigger conditions: round >= 4 or estimated tokens > 60% of `windowTokens`
+- If triggered: keep latest spec/plan, ledger summary (open+accepted only), latest round, drop middle rounds from `round_summary`
+- Returns `{ pack: SpecReviewPack, estimatedTokens, droppedRounds }` — compressed pack with same structure
 - Rough token estimation: chars / 4
 - **Called INTERNALLY by PackBuilder during buildSpecReviewPack()** (NOT by WorkflowEngine directly, NOT during Claude decision step)
 - Claude context is managed separately — PromptAssembler always includes full context in each stateless Claude prompt
@@ -274,10 +280,31 @@ Unit tests:
 - Verify: replacing `### X` does NOT affect sibling `### Y`
 - Verify: heading level mismatch (`## Foo` vs `### Foo`) → failedSections
 
+### Step 10.5: DecisionValidator (Day 5, ~1.5h)
+
+Create `src/lib/workflow/decision-validator.ts`:
+- `validate(decisions, resolves_issues, ledger, currentRoundFindings)`:
+  - Check 1: All `issue_id` values reference known issues in ledger
+  - Check 2: No duplicate `issue_id` in decisions array
+  - Check 3: Every current-round finding has a corresponding decision (coverage check)
+  - Check 4: `resolves_issues` entries only reference issues with action=accept
+  - Check 5: `resolves_issues` entries reference existing issue IDs
+- Returns `{ valid: true, decisions }` or `{ valid: false, errors: string[] }`
+- On validation failure: engine transitions to `human_review` with error details
+
+Unit tests:
+- Valid decisions → passes
+- Unknown issue_id → fails with specific error
+- Duplicate issue_id → fails
+- Missing decision for a finding → fails
+- resolves_issues references rejected issue → fails
+- resolves_issues references non-existent issue → fails
+- Empty decisions array with no findings → passes
+
 ### Step 11: WorkflowEngine (Day 5-6, ~7h)
 
 Create `src/lib/workflow/workflow-engine.ts`:
-- Constructor: inject all 9 dependencies (store, packBuilder, promptAssembler, modelInvoker, terminationJudge, contextCompressor, jsonParser, issueMatcher, **patchApplier**)
+- Constructor: inject all 10 dependencies (store, packBuilder, promptAssembler, modelInvoker, terminationJudge, contextCompressor, jsonParser, issueMatcher, **patchApplier**, **decisionValidator**)
   - Note: contextCompressor is injected into PackBuilder (not directly used by engine)
 - Internal: `abortController: AbortController | null` for graceful pause
 - `start()`: create run, save initial artifacts (spec-v1.md, plan-v1.md), enter round loop
@@ -292,17 +319,21 @@ Create `src/lib/workflow/workflow-engine.ts`:
     - **Idempotent on re-run** (crash-safe)
   - **Step B2** (`pre_termination`): terminationJudge.judge({previousRoundHadNewHighCritical}) — pre-check
     - LGTM guard: proceed to Claude if open/accepted issues remain
-  - **Step C** (`claude_decision`): buildClaudeDecisionInput -> renderClaudeDecisionPrompt -> invokeClaude({signal}) -> jsonParser -> extractPatches -> patchApplier.apply()
+  - **Step C** (`claude_decision`): Sub-checkpointed for idempotent resume:
+    - **C1**: buildClaudeDecisionInput -> renderClaudeDecisionPrompt -> invokeClaude({signal}) -> save R{N}-claude-raw.md (sub-checkpoint: raw_saved)
+    - **C2**: jsonParser.parse -> **decisionValidator.validate()** -> if invalid: emit `decision_validation_failed`, transition to `human_review`, break. If valid: emit `claude_decisions_validated` (sub-checkpoint)
+    - **C3**: Update ledger from validated decisions + extractPatches -> patchApplier.apply() with **patch-resolve consistency check** (failedSections → keep affected issues as accepted) -> save ledger (sub-checkpoint: ledger_updated)
+    - **C4**: Save round artifact + emit `claude_decision_completed` + updateMeta(current_step='post_decision')
+    - **Claude parse failure safety**: If `decisions[]` unrecoverable → prohibit all side effects → transition to `human_review` (see spec §6.8)
     - Handle `accept_and_resolve` action: directly transition to resolved (no patch needed)
     - Handle missing `resolves_issues`: emit `resolves_issues_missing`, do NOT auto-resolve
-    - Save raw output FIRST, then ledger, then spec/plan, then updateMeta(current_step='post_decision')
     - On timeout skip -> TIMEOUT GUARD
     - On abort -> save checkpoint, break
   - **Step D** (`post_decision`): terminationJudge.judge({...}) — post-check
   - round++
 - Write ordering for crash safety: raw output → ledger → spec/plan → checkpoint event → meta (last)
 - Event emission: emit events through registered callbacks
-- `resume()`: read meta `current_step`, check partially-saved artifacts per step, determine precise re-entry point (see spec §7.3)
+- `resume()`: read meta `current_step` + `termination_state`, check partially-saved artifacts per step + sub-checkpoint events for Step C (raw_saved → decisions_validated → ledger_updated), determine precise re-entry point (see spec §7.3)
 - `pause()`: abort in-flight LLM calls via abortController.abort(), wait for safe checkpoint, update meta
 
 Integration tests:
@@ -311,7 +342,12 @@ Integration tests:
 - LGTM with no findings but open issues (Claude receives alternate prompt)
 - Resume from checkpoint after Step A crash (reuses saved Codex output, current_step='issue_matching')
 - Resume from checkpoint after B1 crash (idempotent processFindings, current_step='issue_matching')
-- Resume from checkpoint after Step C crash (reuses saved Claude output, current_step='claude_decision')
+- Resume from checkpoint after Step C crash at C1 (reuses saved raw output, re-validates)
+- Resume from checkpoint after Step C crash at C2 (decisions validated, re-applies to ledger)
+- Resume from checkpoint after Step C crash at C3 (ledger updated, re-commits)
+- DecisionValidator: invalid issue_id → human_review transition
+- DecisionValidator: resolves_issues referencing rejected issue → human_review
+- Patch-resolve consistency: failedSections → affected issues stay accepted
 - Deadlock detection (same issue rejected twice -> pause_for_human)
 - Timeout skip + TIMEOUT GUARD (Codex times out -> round++ -> isSkippedRound resets consecutive counter)
 - Issue lifecycle: accepted -> resolved via explicit resolves_issues mapping
@@ -320,6 +356,7 @@ Integration tests:
 - Deferred issue re-raised: stays deferred, no repeat_count increment
 - Graceful pause: abort during Codex call -> checkpoint saved -> resume works
 - Parse error: codex_parse_error event logged, raw output preserved
+- Claude parse failure: decisions[] unrecoverable → human_review, no side effects
 - current_step transitions through all 5 states correctly
 
 ### Step 12: CLI Entry Point (Day 7, ~1.5h)
@@ -341,16 +378,17 @@ Unit tests:
 ### Step 13: Index + Wiring + Package Config (Day 7, ~1h)
 
 Create `src/lib/workflow/index.ts`:
-- Export all public types and classes (including PatchApplier, ClaudeDecisionInput, WorkflowStep)
-- Factory function: `createSpecReviewEngine(basePath?)` that wires all 9 dependencies together
+- Export all public types and classes (including PatchApplier, DecisionValidator, ClaudeDecisionInput, WorkflowStep)
+- Factory function: `createSpecReviewEngine(basePath?)` that wires all 10 dependencies together
   - ContextCompressor injected into PackBuilder (not directly into engine)
+  - DecisionValidator injected into engine
 
 Update `package.json`:
 - Add `@anthropic-ai/sdk` to dependencies
 - Update test script pattern to include `workflow-*.test.ts` (not just `bridge-*.test.ts`)
 - Add `exports` entry (correct format matching existing pattern):
   ```json
-  "./src/lib/workflow/*.js": {
+  "./workflow/*": {
     "types": "./dist/lib/workflow/*.d.ts",
     "import": "./dist/lib/workflow/*.js"
   }
@@ -361,7 +399,7 @@ Update `package.json`:
 
 - Full integration test with mock Codex and Claude responses
 - Verify: all files created in .claude-workflows/runs/{id}/ (spec-v1.md naming)
-- Verify: events.ndjson has correct event sequence (including timeout/retry/parse_error/resolves_issues_missing/issue_matching_completed events)
+- Verify: events.ndjson has correct event sequence (including timeout/retry/parse_error/resolves_issues_missing/issue_matching_completed/claude_decisions_validated/decision_validation_failed events)
 - Verify: issue-ledger.json tracks all decisions with full lifecycle (including resolves_issues mapping + accept_and_resolve)
 - Verify: termination triggers correctly (all 6 priority conditions + TIMEOUT GUARD + isSkippedRound)
 - Verify: spec_patch/plan_patch content delivery via PatchApplier works (multi-level headings)
@@ -370,7 +408,13 @@ Update `package.json`:
 - Verify: Claude receives alternate prompt when no new findings but open issues exist
 - Verify: graceful pause + resume preserves state (using 5-state current_step)
 - Verify: write ordering (raw -> ledger -> spec/plan -> checkpoint event -> meta)
-- Verify: resume after B1 crash is idempotent (no duplicate issues)
+- Verify: resume after B1 crash is idempotent (no duplicate issues, `last_processed_round` guard)
+- Verify: resume after Step C crash at each sub-checkpoint (C1/C2/C3/C4)
+- Verify: DecisionValidator blocks invalid decisions → human_review
+- Verify: patch-resolve consistency (failedSections → issues stay accepted)
+- Verify: atomic writes (meta.json uses write-tmp → rename)
+- Verify: Claude parse failure with unrecoverable decisions → human_review, no side effects
+- Verify: termination_state persisted and restored correctly on resume
 
 ---
 
@@ -383,8 +427,9 @@ Update `package.json`:
 | 2 | 3-5 | json-parser.ts + issue-matcher.ts + prompt-assembler.ts | Unit | ~6.5h |
 | 3 | 6-7 | pack-builder.ts + model-invoker.ts (start) | Unit | ~6h |
 | 4 | 7-9 | model-invoker.ts (finish) + termination-judge.ts + context-compressor.ts | Unit (critical) | ~7h |
-| 5 | 10 | patch-applier.ts (multi-level heading) | Unit | ~2h |
-| 5-6 | 11 | workflow-engine.ts (5-state machine, idempotent resume) | Integration | ~7h |
+| 5 | 10 | patch-applier.ts (multi-level heading + resolve consistency) | Unit | ~2h |
+| 5 | 10.5 | decision-validator.ts (semantic validation) | Unit | ~1.5h |
+| 5-6 | 11 | workflow-engine.ts (5-state machine, sub-checkpointed Step C, idempotent resume) | Integration | ~7h |
 | 7 | 12-13 | cli.ts + index.ts + package.json updates | Unit | ~2.5h |
 | 8 | 14 | E2E test + bug fixes | E2E | ~3h |
 
@@ -433,7 +478,9 @@ Update `package.json`:
 | Windows path issues | Use path.join() consistently; normalize separators |
 | spec_patch/plan_patch extraction fails | Dual strategy: JSON field -> marker scan -> save raw + mark error; never lose data |
 | Issue re-identification across rounds | IssueMatcher with normalized + evidence matching; log unmatched as new issues |
-| Crash during step (partial writes) | Write ordering: raw → ledger → spec/plan → checkpoint event → meta; 5-state current_step + artifact checks ensure precise resume; IssueMatcher.processFindings is idempotent |
+| Crash during step (partial writes) | Atomic write protocol (write-tmp → fsync → rename) for critical files; write ordering: raw → ledger → spec/plan → checkpoint event → meta; 5-state current_step + sub-checkpoint events for Step C + artifact checks ensure precise resume; IssueMatcher uses `last_processed_round` for idempotency |
+| Claude returns invalid decisions | DecisionValidator catches unknown/duplicate issue_ids, missing coverage, invalid resolves_issues targets → transitions to human_review instead of corrupting state |
+| Patch applied but heading not found | Patch-resolve consistency rule: failedSections prevent affected issues from being marked resolved; all failures trigger human_review if ALL sections fail |
 | Codex persistent timeout (infinite loop) | TIMEOUT GUARD checks max_rounds after each skip; also AbortSignal for SIGINT |
 | @anthropic-ai/sdk not installed | Explicit dependency in package.json; fail-fast on import if missing |
 | Test scripts don't cover workflow tests | Updated test pattern to include `workflow-*.test.ts` |

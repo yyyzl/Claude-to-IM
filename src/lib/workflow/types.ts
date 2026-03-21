@@ -323,6 +323,13 @@ export interface WorkflowMeta {
     /** The step that was completed. */
     step: WorkflowStep;
   } | null;
+  /** Counters for detecting stuck/spinning workflows. */
+  termination_state: {
+    /** Consecutive Claude parse failures (triggers pause_for_human at 2). */
+    consecutive_parse_failures: number;
+    /** Consecutive rounds with zero progress (triggers pause_for_human at 2). */
+    zero_progress_rounds: number;
+  };
 }
 
 // === Workflow Event ===

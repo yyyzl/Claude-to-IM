@@ -349,11 +349,14 @@ export class ModelInvoker {
         }
 
         const stdout = Buffer.concat(stdoutChunks).toString('utf-8').trim();
+        // Clean up codeagent-wrapper SESSION_ID and trailing separators
+        const cleanedOutput = stdout.replace(/\n---\nSESSION_ID:.*$/s, '').trim();
         console.log(
           `[ModelInvoker] Codex completed OK — elapsed=${elapsed}ms, ` +
-          `stdoutLen=${stdout.length} chars`,
+          `stdoutLen=${cleanedOutput.length} chars` +
+          `${cleanedOutput.length !== stdout.length ? ` (cleaned from ${stdout.length})` : ''}`,
         );
-        settle('resolve', stdout);
+        settle('resolve', cleanedOutput);
       });
 
       // ── Write prompt to stdin with backpressure handling ──

@@ -7,7 +7,8 @@ Each finding below has an assigned issue ID. Use these IDs in your decisions.
 {{codex_findings_with_ids}}
 
 (If no findings above: Codex found no new issues. Please review and address the remaining
-open/accepted issues in the ledger below. You may reject, defer, or accept_and_resolve them.)
+open/accepted issues in the ledger below. You may reject, defer, accept_and_resolve them,
+or accept them with patches to resolve the underlying concerns.)
 
 ## Previous Rounds Decisions (for context continuity)
 {{previous_decisions}}
@@ -21,25 +22,56 @@ open/accepted issues in the ledger below. You may reject, defer, or accept_and_r
 ## Current Plan (for reference when writing patches)
 {{current_plan}}
 
-Output format (strict JSON):
-{ "decisions": [{ "issue_id": "ISS-001", "action": "accept|reject|defer|accept_and_resolve", "reason": "..." }],
-  "spec_updated": true/false, "plan_updated": true/false,
-  "spec_patch": "...(full modified section with heading, only if spec_updated)...",
-  "plan_patch": "...(full modified section with heading, only if plan_updated)...",
+## Output Format
+
+Your response MUST have exactly TWO parts:
+
+### Part 1: JSON Decision Block
+
+A single JSON object with decisions only (NO patch content inside JSON):
+
+```json
+{
+  "decisions": [
+    { "issue_id": "ISS-001", "action": "accept|reject|defer|accept_and_resolve", "reason": "..." }
+  ],
+  "spec_updated": true,
+  "plan_updated": false,
   "resolves_issues": ["ISS-001", "ISS-003"],
-  "summary": "..." }
+  "summary": "one-paragraph summary of this round's decisions"
+}
+```
 
-IMPORTANT:
-- When action="accept" AND you provide a patch, you MUST include "resolves_issues" listing the issue IDs
-  your patch addresses. If omitted, accepted issues will NOT be auto-resolved (safety measure).
-- Use "accept_and_resolve" for issues that are valid but require no spec/plan change.
-- Patch sections must include their heading (e.g., "## 4.2 Issue Lifecycle" or "### 6.5 TerminationJudge").
-  The heading level must match the original document exactly.
+### Part 2: Patch Content (only if spec_updated or plan_updated is true)
 
-If JSON output is not possible, wrap modified sections in markers:
---- SPEC UPDATE ---
+After the JSON block, write patches using markers:
+
+--- SPEC PATCH ---
+## 6.5 TerminationJudge
+(full replacement content for this section)
+--- END SPEC PATCH ---
+
+--- PLAN PATCH ---
+(full replacement content, if plan_updated)
+--- END PLAN PATCH ---
+
+## Rules
+
+1. **Decision Budget**: Accept and patch at most 3 issues per round.
+   Defer remaining valid issues to the next round. Quality over quantity.
+2. When action="accept" AND you provide a patch, you MUST include "resolves_issues".
+   If omitted, accepted issues will NOT be auto-resolved (safety measure).
+3. Use "accept_and_resolve" for issues valid but needing no spec/plan change.
+4. Patch sections must include their heading (matching original level exactly).
+5. Each patch section should be MINIMAL — only the changed section, not entire chapters.
+6. Keep patches under 200 lines total. If more needed, defer remaining issues.
+
+## Fallback
+
+If JSON output is not possible, wrap everything in markers:
+--- DECISIONS ---
+(your decisions in any format)
+--- END DECISIONS ---
+--- SPEC PATCH ---
 (modified spec content)
---- END SPEC UPDATE ---
---- PLAN UPDATE ---
-(modified plan content)
---- END PLAN UPDATE ---
+--- END SPEC PATCH ---

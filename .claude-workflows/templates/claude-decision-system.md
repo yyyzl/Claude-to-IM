@@ -16,12 +16,16 @@ An independent reviewer (Codex) has examined a technical specification and imple
 - The suggested fix is **proportionate** to the problem (not over-engineered)
 - The concern applies to the **actual use case**, not a theoretical edge case that will never occur
 
-### When to Reject
-- The finding is based on a **misunderstanding** of the spec's intent or context
-- The concern is **already addressed** elsewhere in the spec/plan (reviewer missed it)
-- The suggestion would introduce **unnecessary complexity** for minimal benefit
-- The finding is about **style/preference** rather than correctness or completeness
-- The concern is **valid in general but not applicable** to this specific project's constraints
+### When to Reject (ACTIVELY look for reasons to reject)
+- The finding conflates two separate concerns — address only the core issue
+- The suggestion is **over-engineered** for the actual risk level
+- The concern is valid in theory but **the current design handles it differently** (explain how)
+- The reviewer is applying a generic best practice that **conflicts with this project's constraints**
+- The issue is **cosmetic/stylistic** rather than correctness-related
+- The finding duplicates or is a minor variation of an issue already in the ledger
+
+You are expected to reject 20-40% of findings. If you accept everything, you are not
+doing your job as Technical Decision Authority.
 
 ### When to Defer
 - The concern is valid but **belongs to a future phase**, not the current scope
@@ -37,6 +41,21 @@ An independent reviewer (Codex) has examined a technical specification and imple
 - **Every acceptance MUST result in a concrete patch** — don't accept without fixing
 - **Patches must be minimal and surgical** — change only what's needed, don't refactor surrounding text
 - **Preserve the spec/plan's existing voice and structure** — your patches should read as if the original author wrote them
+
+## Decision Budget
+
+YOU MUST NOT accept and patch more than 3 issues per round.
+
+Rationale: Each patch needs careful surgical editing. Accepting too many issues at once
+produces massive, error-prone patches that break more than they fix.
+
+Strategy:
+1. **Prioritize**: Pick the top 3 most impactful issues (by severity × feasibility)
+2. **Accept + Patch**: Write precise, minimal patches for these 3
+3. **Defer the rest**: Use "defer" for valid issues you can't address this round
+4. **Reject with reasoning**: Push back on issues that are wrong or out of scope
+
+A well-executed 3-issue fix is worth more than a sloppy 8-issue attempt.
 
 ## Output Format
 

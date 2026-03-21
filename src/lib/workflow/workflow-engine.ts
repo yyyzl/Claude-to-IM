@@ -127,6 +127,7 @@ export class WorkflowEngine {
       updated_at: now,
       config,
       last_completed: null,
+      termination_state: { consecutive_parse_failures: 0, zero_progress_rounds: 0 },
     };
 
     // Persist initial state (order: meta -> spec -> plan -> ledger)
@@ -331,8 +332,8 @@ export class WorkflowEngine {
                 await this.terminateWorkflow(runId, round - 1, 'max_rounds_reached');
                 return;
               }
-              // A skipped round resets the consecutive counter
-              previousRoundHadNewHighCritical = true;
+              // Timeout round: DO NOT modify previousRoundHadNewHighCritical
+              // Skipped rounds should not affect the "2 consecutive no-high" termination logic
               step = 'codex_review';
               meta.current_round = round;
               meta.current_step = 'codex_review';
@@ -367,8 +368,8 @@ export class WorkflowEngine {
           // Create a fallback empty output so subsequent steps can proceed
           codexOutput = {
             findings: [],
-            overall_assessment: 'lgtm',
-            summary: 'Failed to parse Codex output',
+            overall_assessment: 'major_issues',
+            summary: 'Failed to parse Codex output (conservative fallback — not LGTM)',
           };
         }
 
@@ -457,6 +458,7 @@ export class WorkflowEngine {
           latestOutput: codexOutput,
           previousRoundHadNewHighCritical,
           isSkippedRound: false,
+          isPreTermination: true,
         });
 
         if (termResult) {
@@ -554,7 +556,8 @@ export class WorkflowEngine {
                 await this.terminateWorkflow(runId, round - 1, 'max_rounds_reached');
                 return;
               }
-              previousRoundHadNewHighCritical = true;
+              // Timeout round: DO NOT modify previousRoundHadNewHighCritical
+              // Skipped rounds should not affect the "2 consecutive no-high" termination logic
               step = 'codex_review';
               meta.current_round = round;
               meta.current_step = 'codex_review';
@@ -585,6 +588,54 @@ export class WorkflowEngine {
           await this.emit(runId, round, 'claude_parse_error', {
             round,
             raw: claudeRaw.substring(0, 500),
+          });
+
+          // Track consecutive parse failures (P0 fix: prevent silent empty loops)
+          const currentMeta = await this.store.getMeta(runId);
+          const parseFailures = (currentMeta?.termination_state?.consecutive_parse_failures ?? 0) + 1;
+          await this.store.updateMeta(runId, {
+            termination_state: {
+              ...(currentMeta?.termination_state ?? { consecutive_parse_failures: 0, zero_progress_rounds: 0 }),
+              consecutive_parse_failures: parseFailures,
+            },
+          });
+
+          if (parseFailures >= 2) {
+            console.error(
+              `[WorkflowEngine] Claude parse failed ${parseFailures} consecutive times (run=${runId}). Pausing for human review.`,
+            );
+            await this.pauseForHuman(runId, round, {
+              reason: 'deadlock_detected',
+              action: 'pause_for_human',
+              details: `Claude output parse failed ${parseFailures} consecutive times. Manual intervention required.`,
+            });
+            return;
+          }
+
+          // Skip to next round (single parse failure is tolerable)
+          round++;
+          if (round > config.max_rounds) {
+            await this.terminateWorkflow(runId, round - 1, 'max_rounds_reached');
+            return;
+          }
+          step = 'codex_review';
+          meta.current_round = round;
+          meta.current_step = 'codex_review';
+          await this.store.updateMeta(runId, {
+            current_round: round,
+            current_step: 'codex_review',
+          });
+          continue;
+        }
+
+        // Parse succeeded — reset consecutive parse failure counter
+        const currentMetaForReset = await this.store.getMeta(runId);
+        if (currentMetaForReset?.termination_state?.consecutive_parse_failures) {
+          await this.store.updateMeta(runId, {
+            termination_state: {
+              ...currentMetaForReset.termination_state,
+              consecutive_parse_failures: 0,
+            },
           });
         }
 
@@ -774,6 +825,44 @@ export class WorkflowEngine {
           if (termResult.action === 'pause_for_human') {
             await this.pauseForHuman(runId, round, termResult);
             return;
+          }
+        }
+
+        // Zero-progress safety net (P0 fix: prevent wasting API calls)
+        const thisRoundAccepted = ledger.issues.filter(
+          (i) => i.decided_by === 'claude' && i.round === round &&
+            (i.status === 'accepted' || i.status === 'resolved'),
+        ).length;
+        const thisRoundResolved = ledger.issues.filter(
+          (i) => i.resolved_in_round === round,
+        ).length;
+
+        const currentMetaZP = await this.store.getMeta(runId);
+        const ts = currentMetaZP?.termination_state ?? { consecutive_parse_failures: 0, zero_progress_rounds: 0 };
+
+        if (thisRoundAccepted === 0 && thisRoundResolved === 0) {
+          const zeroProgressCount = ts.zero_progress_rounds + 1;
+          await this.store.updateMeta(runId, {
+            termination_state: { ...ts, zero_progress_rounds: zeroProgressCount },
+          });
+
+          if (zeroProgressCount >= 2) {
+            console.error(
+              `[WorkflowEngine] Zero progress for ${zeroProgressCount} consecutive rounds (run=${runId}). Pausing.`,
+            );
+            await this.pauseForHuman(runId, round, {
+              reason: 'deadlock_detected',
+              action: 'pause_for_human',
+              details: `No issues accepted or resolved for ${zeroProgressCount} consecutive rounds.`,
+            });
+            return;
+          }
+        } else {
+          // Reset counter on progress
+          if (ts.zero_progress_rounds > 0) {
+            await this.store.updateMeta(runId, {
+              termination_state: { ...ts, zero_progress_rounds: 0 },
+            });
           }
         }
 
@@ -999,8 +1088,8 @@ export class WorkflowEngine {
       // return a safe fallback rather than crashing.
       return {
         findings: [],
-        overall_assessment: 'lgtm',
-        summary: 'No Codex output found for this round',
+        overall_assessment: 'major_issues',
+        summary: 'No Codex output found for this round (conservative fallback — not LGTM)',
       };
     }
 
@@ -1008,8 +1097,8 @@ export class WorkflowEngine {
     if (!parsed) {
       return {
         findings: [],
-        overall_assessment: 'lgtm',
-        summary: 'Failed to parse Codex output on reload',
+        overall_assessment: 'major_issues',
+        summary: 'Failed to parse Codex output on reload (conservative fallback — not LGTM)',
       };
     }
 

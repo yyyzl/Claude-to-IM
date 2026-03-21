@@ -264,7 +264,7 @@ export class PackBuilder {
    */
   private generateRoundSummary(round: number, ledger: IssueLedger): string {
     if (round === 1) {
-      return '';
+      return 'First review round. No prior issues or decisions exist. Focus on comprehensive coverage of the entire spec and plan.';
     }
 
     const stats = this.computeLedgerStats(ledger.issues);

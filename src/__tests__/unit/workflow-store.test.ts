@@ -52,6 +52,7 @@ function createDefaultMeta(overrides: Partial<WorkflowMeta> = {}): WorkflowMeta 
     updated_at: now,
     config: { ...DEFAULT_CONFIG },
     last_completed: null,
+    termination_state: { consecutive_parse_failures: 0, zero_progress_rounds: 0 },
     ...overrides,
   };
 }
