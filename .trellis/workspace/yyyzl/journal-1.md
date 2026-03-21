@@ -458,3 +458,97 @@ Fix two design defects in /workflow command: (1) unify basePath across start/res
 ### Next Steps
 
 - None - task complete
+
+
+## Session 12: Workflow 引擎稳健性增强：系统提示、可配置模型、背压写入与诊断
+
+**Date**: 2026-03-21
+**Task**: Workflow 引擎稳健性增强：系统提示、可配置模型、背压写入与诊断
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+## 变更概览
+
+本次 session 围绕 **Spec Review Workflow 引擎**进行了三轮迭代，从功能增强到路径统一再到可靠性加固：
+
+| 阶段 | Commit | 说明 |
+|------|--------|------|
+| 功能增强 | `fe0d2e3` | 添加 Claude 决策系统提示、可配置模型/超时参数 |
+| 路径修复 | `e418522` | 统一 store basePath，修正事件消息措辞 |
+| 稳健性加固 | `a165532` | 背压 stdin 写入、丰富诊断日志、CJK token 估算、压缩结果应用 |
+
+## 核心功能
+
+### 1. Claude 决策系统提示 (fe0d2e3)
+- 新增 `claude-decision-system.md` 模板，定义 Technical Decision Authority 角色
+- `ClaudePromptParts` 接口支持 system/user prompt 分离
+- prompt-assembler 重构以产出结构化 prompt 对象
+
+### 2. 可配置模型与参数 (fe0d2e3)
+- `WorkflowConfig` 新增 `claude_model`, `claude_max_output_tokens`, `codex_backend` 字段
+- `/workflow start --model <model> --codex-backend <backend>` 命令行支持
+- 默认超时从 3min/2min 提升至 90min；Claude max_tokens 提升至 200K
+
+### 3. Store 路径统一 (e418522)
+- `handleStart/handleResume/deliverRunStatus` 均传入 cwd-based basePath
+- 移除过时的 `getWorkflowStore()` 单例
+- 修正超时/解析错误的进度消息措辞
+
+### 4. 背压 stdin 写入与诊断 (a165532)
+- model-invoker: 32KB 分块写入 + drain 背压，防止大 prompt 管道溢出
+- model-invoker: spawn/timeout/exit/retry/abort/stdin-error 全路径诊断日志
+- model-invoker: DI 构造函数 (spawnFn) 提升可测试性
+- model-invoker: 添加 `-` 参数启用 codeagent-wrapper stdin 模式
+
+### 5. 压缩与 Token 估算修复 (a165532)
+- pack-builder: 压缩结果实际应用到 spec/plan（修复死代码）
+- context-compressor: CJK 感知 token 估算 (CJK 0.67 vs ASCII 0.25)
+- pack-builder: 复用 context-compressor 的 estimateTokens
+
+### 6. 错误处理增强 (a165532)
+- workflow-engine: 所有 catch 块添加详细 stack trace 日志
+- bridge-runner: 提取 build-freshness 检查为独立模块
+- bridge-runner: unhandledRejection 对非瞬态错误调用 shutdown
+
+## 新增测试
+- `bridge-build-freshness.test.ts` — 构建新鲜度检查
+- `workflow-model-invoker.test.ts` — DI spawn、背压、超时测试
+- `workflow-command.test.ts` — 新增 --model/--codex-backend 参数解析测试
+- `workflow-engine.test.ts` — 新增引擎错误处理测试
+
+## 变更文件 (17 files, +877 -141)
+- `src/lib/workflow/model-invoker.ts` — 核心: 背压写入 + 诊断日志
+- `src/lib/workflow/pack-builder.ts` — 压缩结果应用 + token 估算复用
+- `src/lib/workflow/workflow-engine.ts` — 错误日志增强
+- `src/lib/workflow/prompt-assembler.ts` — 结构化 prompt 输出
+- `src/lib/workflow/types.ts` — 配置参数扩展
+- `src/lib/workflow/context-compressor.ts` — CJK token 估算
+- `src/lib/bridge/internal/workflow-command.ts` — 路径统一 + CLI 参数
+- `src/lib/bridge/internal/build-freshness.ts` — 新模块
+- `scripts/feishu-claude-bridge.ts` — 错误处理重构
+- `.trellis/templates/claude-decision-system.md` — 新模板
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fe0d2e3` | (see git log) |
+| `e418522` | (see git log) |
+| `a165532` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

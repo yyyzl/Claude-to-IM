@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 11
+- **Total Sessions**: 12
 - **Last Active**: 2026-03-21
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~460 | Active |
+| `journal-1.md` | ~554 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits |
 |---|------|-------|---------|
+| 12 | 2026-03-21 | Workflow 引擎稳健性增强：系统提示、可配置模型、背压写入与诊断 | `fe0d2e3`, `e418522`, `a165532` |
 | 11 | 2026-03-21 | fix(workflow): store path consistency & event message accuracy | `e418522` |
 | 10 | 2026-03-21 | Workflow Engine 改进: system prompt + 模型可配置 + 超时调优 | `fe0d2e3` |
 | 9 | 2026-03-21 | 修复飞书最终卡片展示 | `fe316e8e91f90c191485afd2afa5481df42f8f99` |
