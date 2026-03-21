@@ -110,16 +110,33 @@ export class TerminationJudge {
     }
 
     // ── Check 4: Only low-severity issues remaining ───────────
-    const openIssues = ledger.issues.filter(
-      (issue) => issue.status === 'open',
+    // Consider ALL unresolved statuses (open + accepted + deferred) to avoid
+    // prematurely terminating when high/critical issues have been acknowledged
+    // but not yet resolved (ISS-003).
+    const unresolvedIssues = ledger.issues.filter(
+      (issue) =>
+        issue.status === 'open' ||
+        issue.status === 'accepted' ||
+        issue.status === 'deferred',
     );
 
-    if (openIssues.length > 0 && openIssues.every((issue) => issue.severity === 'low')) {
+    // Guard: never terminate if there are unresolved high/critical issues
+    const unresolvedHighCritical = unresolvedIssues.filter(
+      (issue) => issue.severity === 'critical' || issue.severity === 'high',
+    );
+
+    if (unresolvedHighCritical.length > 0) {
+      // High/critical issues still unresolved — do NOT terminate early
+      // Fall through to max_rounds check
+    } else if (
+      unresolvedIssues.length > 0 &&
+      unresolvedIssues.every((issue) => issue.severity === 'low')
+    ) {
       return {
         reason: 'only_style_issues',
         action: 'terminate',
         details:
-          `All ${openIssues.length} remaining open issue(s) are low severity (style/cosmetic). ` +
+          `All ${unresolvedIssues.length} remaining unresolved issue(s) are low severity (style/cosmetic). ` +
           `Terminating — these can be addressed separately.`,
       };
     }
@@ -131,7 +148,11 @@ export class TerminationJudge {
         action: 'terminate',
         details:
           `Maximum number of rounds (${config.max_rounds}) reached. ` +
-          `Terminating with ${openIssues.length} open issue(s) remaining.`,
+          `Terminating with ${unresolvedIssues.length} unresolved issue(s) remaining` +
+          (unresolvedHighCritical.length > 0
+            ? ` (including ${unresolvedHighCritical.length} high/critical)`
+            : '') +
+          `.`,
       };
     }
 

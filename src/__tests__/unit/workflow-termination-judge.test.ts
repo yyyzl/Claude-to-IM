@@ -247,7 +247,7 @@ describe('TerminationJudge', () => {
       assert.ok(result, 'Expected a TerminationResult, got null');
       assert.equal(result.reason, 'only_style_issues');
       assert.equal(result.action, 'terminate');
-      assert.ok(result.details.includes('2 remaining open issue(s)'));
+      assert.ok(result.details.includes('2 remaining unresolved issue(s)'));
       assert.ok(result.details.includes('low severity'));
     });
   });

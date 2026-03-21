@@ -87,6 +87,10 @@ export class WorkflowEngine {
    * @param params.plan - The plan document to review.
    * @param params.config - Optional partial config overrides.
    * @param params.contextFiles - Optional additional context files.
+   *   **Deprecated**: prefer `config.context_files` instead. If both are
+   *   provided, they are merged (contextFiles first, then config.context_files).
+   *   This ensures consistency with resume(), which only reads from
+   *   `meta.config.context_files`.
    * @returns The generated `run_id`.
    */
   async start(params: {
@@ -97,11 +101,18 @@ export class WorkflowEngine {
   }): Promise<string> {
     const runId = generateRunId();
 
-    // Merge config: defaults <- user overrides <- context_files
+    // Merge context files from both sources into config.context_files
+    // so that resume() will have the same set available (ISS-025).
+    const mergedContextFiles = [
+      ...(params.contextFiles ?? []),
+      ...(params.config?.context_files ?? []),
+    ];
+
+    // Merge config: defaults <- user overrides <- unified context_files
     const config: WorkflowConfig = {
       ...DEFAULT_CONFIG,
       ...params.config,
-      context_files: params.contextFiles ?? params.config?.context_files ?? [],
+      context_files: mergedContextFiles,
     };
 
     // Create initial meta
@@ -612,7 +623,9 @@ export class WorkflowEngine {
           }
         }
 
-        // Apply spec patch
+        // Apply spec patch — track whether any sections failed
+        let hasPatchFailure = false;
+
         if (patches.specPatch) {
           const currentSpec = await this.store.loadSpec(runId);
           if (currentSpec) {
@@ -623,6 +636,7 @@ export class WorkflowEngine {
               failed_sections: result.failedSections,
             });
             if (result.failedSections.length > 0) {
+              hasPatchFailure = true;
               await this.emit(runId, round, 'patch_apply_failed', {
                 target: 'spec',
                 failed_sections: result.failedSections,
@@ -642,6 +656,7 @@ export class WorkflowEngine {
               failed_sections: result.failedSections,
             });
             if (result.failedSections.length > 0) {
+              hasPatchFailure = true;
               await this.emit(runId, round, 'patch_apply_failed', {
                 target: 'plan',
                 failed_sections: result.failedSections,
@@ -650,21 +665,35 @@ export class WorkflowEngine {
           }
         }
 
-        // Handle resolves_issues
+        // Handle resolves_issues — block resolution when patches failed
         if (claudeOutput?.resolves_issues) {
-          for (const issueId of claudeOutput.resolves_issues) {
-            const issue = ledger.issues.find(
-              (i) => i.id === issueId && i.status === 'accepted',
+          if (hasPatchFailure) {
+            // Patches partially failed — do NOT mark issues as resolved
+            // to prevent ledger/document state divergence (ISS-002)
+            console.warn(
+              `[WorkflowEngine] Skipping resolves_issues (run=${runId}, round=${round}): ` +
+              `patch apply had failures, cannot confirm issues are truly resolved`,
             );
-            if (issue) {
-              issue.status = 'resolved';
-              issue.resolved_in_round = round;
+            await this.emit(runId, round, 'resolves_issues_missing', {
+              round,
+              reason: 'patch_apply_failed',
+              blocked_issue_ids: claudeOutput.resolves_issues,
+            });
+          } else {
+            for (const issueId of claudeOutput.resolves_issues) {
+              const issue = ledger.issues.find(
+                (i) => i.id === issueId && i.status === 'accepted',
+              );
+              if (issue) {
+                issue.status = 'resolved';
+                issue.resolved_in_round = round;
 
-              await this.emit(runId, round, 'issue_status_changed', {
-                issue_id: issue.id,
-                new_status: 'resolved',
-                action: 'resolve_via_patch',
-              });
+                await this.emit(runId, round, 'issue_status_changed', {
+                  issue_id: issue.id,
+                  new_status: 'resolved',
+                  action: 'resolve_via_patch',
+                });
+              }
             }
           }
         } else if (claudeOutput?.decisions?.some((d) => d.action === 'accept')) {
