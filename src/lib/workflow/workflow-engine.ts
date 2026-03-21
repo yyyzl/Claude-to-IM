@@ -27,6 +27,7 @@ import { PatchApplier } from './patch-applier.js';
 import {
   TimeoutError,
   AbortError,
+  ModelInvocationError,
   DEFAULT_CONFIG,
   type WorkflowMeta,
   type WorkflowConfig,
@@ -290,6 +291,15 @@ export class WorkflowEngine {
               await this.saveCheckpoint(runId, round, 'codex_review');
               return; // Exit loop -- workflow has been paused
             }
+            // Non-retryable API/config error — terminate immediately with clear message
+            if (err instanceof ModelInvocationError) {
+              console.error(
+                `[WorkflowEngine] Codex review API ERROR (run=${runId}, round=${round}, ` +
+                `status=${err.statusCode ?? 'n/a'}): ${err.message}`,
+              );
+              await this.terminateWorkflowWithError(runId, round, err);
+              return;
+            }
             if (err instanceof TimeoutError) {
               console.error(
                 `[WorkflowEngine] Codex review TIMEOUT (run=${runId}, round=${round}, ` +
@@ -351,7 +361,11 @@ export class WorkflowEngine {
           };
         }
 
-        await this.emit(runId, round, 'codex_review_completed', { round });
+        await this.emit(runId, round, 'codex_review_completed', {
+          round,
+          findings_count: codexOutput.findings.length,
+          overall_assessment: codexOutput.overall_assessment,
+        });
 
         // Advance to next step
         step = 'issue_matching';
@@ -499,6 +513,15 @@ export class WorkflowEngine {
               );
               await this.saveCheckpoint(runId, round, 'claude_decision');
               return; // Exit loop -- workflow has been paused
+            }
+            // Non-retryable API/config error — terminate immediately with clear message
+            if (err instanceof ModelInvocationError) {
+              console.error(
+                `[WorkflowEngine] Claude decision API ERROR (run=${runId}, round=${round}, ` +
+                `status=${err.statusCode ?? 'n/a'}): ${err.message}`,
+              );
+              await this.terminateWorkflowWithError(runId, round, err);
+              return;
             }
             if (err instanceof TimeoutError) {
               console.error(
@@ -657,7 +680,30 @@ export class WorkflowEngine {
         // Persist updated ledger (crash-safe ordering: ledger -> spec/plan -> meta)
         await this.store.saveLedger(runId, ledger);
 
-        await this.emit(runId, round, 'claude_decision_completed', { round });
+        // Compute decision statistics for the event payload
+        const decisionStats = {
+          accepted: 0,
+          rejected: 0,
+          deferred: 0,
+          resolved: 0,
+        };
+        if (claudeOutput?.decisions) {
+          for (const d of claudeOutput.decisions) {
+            switch (d.action) {
+              case 'accept': decisionStats.accepted++; break;
+              case 'accept_and_resolve': decisionStats.resolved++; break;
+              case 'reject': decisionStats.rejected++; break;
+              case 'defer': decisionStats.deferred++; break;
+            }
+          }
+        }
+
+        await this.emit(runId, round, 'claude_decision_completed', {
+          round,
+          ...decisionStats,
+          spec_updated: !!patches.specPatch,
+          plan_updated: !!patches.planPatch,
+        });
 
         // Advance to next step
         step = 'post_decision';
@@ -784,7 +830,32 @@ export class WorkflowEngine {
     reason: string,
   ): Promise<void> {
     await this.emit(runId, round, 'termination_triggered', { reason, round });
-    await this.emit(runId, round, 'workflow_completed', { reason, final_round: round });
+
+    // Load ledger for final summary statistics
+    const finalLedger = await this.store.loadLedger(runId);
+    const allIssues = finalLedger?.issues ?? [];
+    const severityCounts = {
+      critical: allIssues.filter((i) => i.severity === 'critical').length,
+      high: allIssues.filter((i) => i.severity === 'high').length,
+      medium: allIssues.filter((i) => i.severity === 'medium').length,
+      low: allIssues.filter((i) => i.severity === 'low').length,
+    };
+    const statusCounts = {
+      open: allIssues.filter((i) => i.status === 'open').length,
+      accepted: allIssues.filter((i) => i.status === 'accepted').length,
+      rejected: allIssues.filter((i) => i.status === 'rejected').length,
+      deferred: allIssues.filter((i) => i.status === 'deferred').length,
+      resolved: allIssues.filter((i) => i.status === 'resolved').length,
+    };
+
+    await this.emit(runId, round, 'workflow_completed', {
+      reason,
+      final_round: round,
+      total_rounds: round,
+      total_issues: allIssues.length,
+      severity: severityCounts,
+      status: statusCounts,
+    });
 
     await this.store.updateMeta(runId, {
       status: 'completed',

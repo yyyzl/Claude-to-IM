@@ -440,8 +440,8 @@ export const DEFAULT_CONFIG: WorkflowConfig = {
   codex_max_retries: 2,
   claude_max_retries: 2,
   codex_context_window_tokens: 1_000_000,
-  claude_model: 'claude-opus-4-6[1m]',
-  claude_max_output_tokens: 1_000_000,
+  claude_model: 'claude-sonnet-4-20250514',
+  claude_max_output_tokens: 64_000,
   codex_backend: 'codex',
   context_files: [],
 };
@@ -494,5 +494,32 @@ export class AbortError extends Error {
   ) {
     super(message ?? `${model} call aborted`);
     this.name = 'AbortError';
+  }
+}
+
+/**
+ * Thrown when a model API call fails with a non-retryable client error
+ * (e.g. 400 Bad Request, 401 Unauthorized, 404 Not Found, 422 Unprocessable).
+ *
+ * These errors indicate a configuration or authentication problem that will
+ * NOT be resolved by retrying the same request.
+ */
+export class ModelInvocationError extends Error {
+  constructor(
+    /** Which model's call failed. */
+    public readonly model: 'codex' | 'claude',
+    /** HTTP status code (if available). */
+    public readonly statusCode: number | undefined,
+    /** The original error that caused this failure. */
+    public readonly cause: unknown,
+    message?: string,
+  ) {
+    super(
+      message ??
+        `${model} invocation failed` +
+        `${statusCode ? ` (HTTP ${statusCode})` : ''}: ` +
+        `${cause instanceof Error ? cause.message : String(cause)}`,
+    );
+    this.name = 'ModelInvocationError';
   }
 }

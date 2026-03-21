@@ -9,7 +9,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { TimeoutError, AbortError } from './types.js';
+import { TimeoutError, AbortError, ModelInvocationError } from './types.js';
 
 // Type declarations for @anthropic-ai/sdk are provided by vendor-types.d.ts
 // in this directory. The package is loaded via dynamic import() at runtime
@@ -101,9 +101,12 @@ export class ModelInvoker {
   /**
    * Generic retry loop shared by both Codex and Claude invocations.
    *
-   * - AbortError is never retried (immediately re-thrown).
-   * - All other errors are retried up to `maxRetries` times.
-   * - If retries are exhausted, throws {@link TimeoutError}.
+   * Error classification:
+   * - {@link AbortError} — never retried (immediately re-thrown).
+   * - {@link ModelInvocationError} — non-retryable API/config errors
+   *   (e.g. 400/401/404/422); immediately re-thrown without retry.
+   * - All other errors (timeouts, transient 5xx, network) — retried
+   *   up to `maxRetries` times; throws {@link TimeoutError} when exhausted.
    *
    * @param model      - Model identifier for error messages.
    * @param maxRetries - Maximum number of retry attempts.
@@ -141,6 +144,15 @@ export class ModelInvoker {
         // AbortError is never retried
         if (err instanceof AbortError) {
           console.warn(`[ModelInvoker] ${model} aborted during attempt ${attempt + 1}/${totalAttempts}`);
+          throw err;
+        }
+
+        // Non-retryable API/config errors — surface immediately
+        if (err instanceof ModelInvocationError) {
+          console.error(
+            `[ModelInvoker] ${model} NON-RETRYABLE ERROR on attempt ${attempt + 1}/${totalAttempts}: ` +
+            `${errMsg} (status=${err.statusCode ?? 'n/a'})`,
+          );
           throw err;
         }
 
@@ -451,7 +463,15 @@ export class ModelInvoker {
         throw new Error(`Claude request timed out after ${opts.timeoutMs}ms`);
       }
 
-      // Re-throw other SDK errors (auth errors, rate limits, etc.)
+      // Classify SDK errors: 4xx client errors are non-retryable
+      const statusCode = extractHttpStatus(err);
+      if (statusCode !== undefined && statusCode >= 400 && statusCode < 500) {
+        throw new ModelInvocationError('claude', statusCode, err,
+          `Claude API returned HTTP ${statusCode}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+
+      // Re-throw other SDK errors (5xx, network errors, etc.) — these are retryable
       throw err;
     } finally {
       clearTimeout(timeoutTimer);
@@ -483,4 +503,21 @@ function extractTextFromResponse(
     )
     .map((block) => block.text)
     .join('');
+}
+
+/**
+ * Extract HTTP status code from an SDK error.
+ *
+ * The Anthropic SDK throws errors with a `status` property for HTTP errors.
+ * This helper safely extracts it from any error shape.
+ *
+ * @param err - The caught error.
+ * @returns The HTTP status code, or `undefined` if not available.
+ */
+function extractHttpStatus(err: unknown): number | undefined {
+  if (err && typeof err === 'object' && 'status' in err) {
+    const status = (err as Record<string, unknown>).status;
+    if (typeof status === 'number') return status;
+  }
+  return undefined;
 }

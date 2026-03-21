@@ -451,9 +451,31 @@ function bindProgressEvents(
   });
 
   engine.on('codex_review_completed', (e: WorkflowEvent) => {
-    const data = e.data as { findings_count?: number };
+    const data = e.data as {
+      findings_count?: number;
+      overall_assessment?: string;
+    };
     const count = data.findings_count ?? '?';
-    push(`✅ Codex 审查完成，发现 <b>${count}</b> 个问题`);
+    const assessment = data.overall_assessment ?? '';
+    const assessLabel =
+      assessment === 'lgtm' ? ' 👍' :
+      assessment === 'major_issues' ? ' ⚠️' : '';
+    push(`✅ Codex 审查完成，发现 <b>${count}</b> 个问题${assessLabel}`);
+  });
+
+  engine.on('issue_matching_completed', (e: WorkflowEvent) => {
+    const data = e.data as {
+      new_issues?: number;
+      new_high_critical?: number;
+    };
+    const newCount = data.new_issues ?? 0;
+    const hcCount = data.new_high_critical ?? 0;
+    if (newCount > 0) {
+      push(
+        `📊 新增 <b>${newCount}</b> 个问题` +
+        (hcCount > 0 ? ` (🔴 Critical/High: <b>${hcCount}</b>)` : ''),
+      );
+    }
   });
 
   engine.on('claude_decision_started', () => {
@@ -465,11 +487,13 @@ function bindProgressEvents(
       accepted?: number;
       rejected?: number;
       deferred?: number;
+      resolved?: number;
       spec_updated?: boolean;
       plan_updated?: boolean;
     };
     const parts: string[] = [];
     if (data.accepted) parts.push(`accepted: ${data.accepted}`);
+    if (data.resolved) parts.push(`resolved: ${data.resolved}`);
     if (data.rejected) parts.push(`rejected: ${data.rejected}`);
     if (data.deferred) parts.push(`deferred: ${data.deferred}`);
     const updates: string[] = [];
@@ -491,13 +515,44 @@ function bindProgressEvents(
   });
 
   engine.on('workflow_completed', (e: WorkflowEvent) => {
-    const data = e.data as { total_rounds?: number; total_issues?: number };
-    push(
-      `🎉 <b>工作流完成！</b>\n` +
-      `Run: <code>${esc(e.run_id)}</code>\n` +
-      (data.total_rounds ? `轮次: ${data.total_rounds}\n` : '') +
-      (data.total_issues != null ? `Issue 总数: ${data.total_issues}` : ''),
-    );
+    const data = e.data as {
+      total_rounds?: number;
+      total_issues?: number;
+      reason?: string;
+      severity?: { critical?: number; high?: number; medium?: number; low?: number };
+      status?: { open?: number; accepted?: number; rejected?: number; deferred?: number; resolved?: number };
+    };
+
+    const lines: string[] = [`🎉 <b>工作流完成！</b>`];
+    lines.push(`Run: <code>${esc(e.run_id)}</code>`);
+    if (data.reason) lines.push(`终止原因: ${esc(data.reason)}`);
+    if (data.total_rounds) lines.push(`轮次: ${data.total_rounds}`);
+    if (data.total_issues != null) lines.push(`Issue 总数: <b>${data.total_issues}</b>`);
+
+    // Severity distribution
+    if (data.severity) {
+      const s = data.severity;
+      const sevParts: string[] = [];
+      if (s.critical) sevParts.push(`🔴 Critical: ${s.critical}`);
+      if (s.high) sevParts.push(`🟠 High: ${s.high}`);
+      if (s.medium) sevParts.push(`🟡 Medium: ${s.medium}`);
+      if (s.low) sevParts.push(`🟢 Low: ${s.low}`);
+      if (sevParts.length > 0) lines.push(`严重度: ${sevParts.join(' · ')}`);
+    }
+
+    // Status distribution
+    if (data.status) {
+      const st = data.status;
+      const stParts: string[] = [];
+      if (st.open) stParts.push(`open: ${st.open}`);
+      if (st.resolved) stParts.push(`resolved: ${st.resolved}`);
+      if (st.accepted) stParts.push(`accepted: ${st.accepted}`);
+      if (st.rejected) stParts.push(`rejected: ${st.rejected}`);
+      if (st.deferred) stParts.push(`deferred: ${st.deferred}`);
+      if (stParts.length > 0) lines.push(`状态: ${stParts.join(' · ')}`);
+    }
+
+    push(lines.join('\n'));
   });
 
   engine.on('workflow_failed', (e: WorkflowEvent) => {
