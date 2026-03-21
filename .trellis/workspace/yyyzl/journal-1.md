@@ -663,3 +663,54 @@ Agent SDK 配置：`tools: []`（纯文本）、`persistSession: false`、`maxTu
 ### Next Steps
 
 - None - task complete
+
+
+## Session 15: fix(bridge): /stop 无法终止跨 session 的活跃任务
+
+**Date**: 2026-03-21
+**Task**: fix(bridge): /stop 无法终止跨 session 的活跃任务
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+## Bug 修复
+
+**问题**：飞书派发任务后输入 `/stop`，返回 "No task is currently running."，但旧任务仍在流式输出。
+
+**根因**：`/stop` 通过 `router.resolve()` 获取当前 session ID 查找活跃任务，但任务运行期间 session 可能已切换（`/new`/`/bind`），导致用新 session ID 查不到旧任务。
+
+**修复方案**：引入 `activeTasksByChat` Map（key = `channelType:chatId`），按 chat 维度追踪活跃任务，不再依赖可能已变化的 session ID。
+
+| 改动点 | 说明 |
+|--------|------|
+| `registerActiveTask()` | 双写 session + chat 两个 Map |
+| `clearActiveTask()` | 用 `=== abort` 引用比较防止竞态误删 |
+| `/stop` | 改用 `getActiveTaskForChat()` 查找 + 主动清理 chat 索引 |
+| `/new` | 统一为 `abortActiveTaskForChat()`，消除两段冗余 abort |
+| `/bind` | 新增切换前 abort，防止旧任务"失联" |
+| `/status` | 按 chat 维度查找，显示跨 session 任务信息 |
+
+**Updated Files**:
+- `src/lib/bridge/bridge-manager.ts`
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cfe2f4b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
