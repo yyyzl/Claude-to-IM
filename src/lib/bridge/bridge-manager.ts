@@ -381,6 +381,61 @@ function parseBooleanSetting(raw: string | null, defaultValue: boolean): boolean
   return defaultValue;
 }
 
+/**
+ * 构建变更摘要 HTML 块（diffStat 优先，文件列表兜底）。
+ */
+function buildChangeSummaryBlock(stagedFiles: string[], diffStatText: string): string | null {
+  const stat = (diffStatText || '').trim();
+  if (stat) {
+    const allLines = stat.split('\n').map(l => l.trimEnd()).filter(Boolean);
+    const maxLines = 12;
+    let shownLines = allLines;
+    if (allLines.length > maxLines) {
+      const headCount = Math.max(1, maxLines - 2);
+      const omitted = allLines.length - headCount - 1;
+      const tail = allLines[allLines.length - 1];
+      shownLines = [
+        ...allLines.slice(0, headCount),
+        `...（已省略 ${omitted} 行）`,
+        tail,
+      ];
+    }
+    const raw = shownLines.join('\n');
+    const clipped = raw.length > 1800 ? raw.slice(0, 1800) + '…' : raw;
+    return [
+      `<b>变更摘要</b>`,
+      `Files: <code>${stagedFiles.length}</code>`,
+      `<code>${escapeHtml(clipped)}</code>`,
+    ].join('\n');
+  }
+
+  if (stagedFiles.length === 0) return null;
+
+  const maxFiles = 20;
+  const shown = stagedFiles.slice(0, maxFiles);
+  const omitted = stagedFiles.length - shown.length;
+  const raw = shown.join('\n') + (omitted > 0 ? `\n...（已省略 ${omitted} 个文件）` : '');
+  const clipped = raw.length > 1800 ? raw.slice(0, 1800) + '…' : raw;
+  return [
+    `<b>变更摘要</b>`,
+    `Files: <code>${stagedFiles.length}</code>`,
+    `<code>${escapeHtml(clipped)}</code>`,
+  ].join('\n');
+}
+
+/**
+ * 构建语义摘要 HTML 块（LLM 生成的要点列表）。
+ */
+function buildSemanticSummaryBlock(summaryLines: string[]): string | null {
+  const lines = (summaryLines || [])
+    .map((l) => l.replace(/^\s*[-*]\s*/, '').trim())
+    .filter(Boolean)
+    .slice(0, 5)
+    .map((l) => `- ${escapeHtml(l).slice(0, 200)}`);
+  if (lines.length === 0) return null;
+  return ['<b>语义摘要</b>', ...lines].join('\n');
+}
+
 function formatTimeoutMs(ms: number): string {
   if (ms <= 0) return 'disabled';
   const mins = Math.max(1, Math.ceil(ms / 60_000));
@@ -1649,52 +1704,8 @@ async function handleCommand(
           const hash = (await runGit(['rev-parse', '--short', 'HEAD'])).stdout.trim();
           const branch = (await runGit(['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim();
 
-          const changeSummary = (() => {
-            const diffStatText = (draft.diffStatText || '').trim();
-            if (diffStatText) {
-              const allLines = diffStatText.split('\n').map(l => l.trimEnd()).filter(Boolean);
-              const maxLines = 12;
-              let shownLines = allLines;
-              if (allLines.length > maxLines) {
-                const headCount = Math.max(1, maxLines - 2);
-                const omitted = allLines.length - headCount - 1;
-                const tail = allLines[allLines.length - 1];
-                shownLines = [
-                  ...allLines.slice(0, headCount),
-                  `...（已省略 ${omitted} 行）`,
-                  tail,
-                ];
-              }
-              const raw = shownLines.join('\n');
-              const clipped = raw.length > 1800 ? raw.slice(0, 1800) + '…' : raw;
-              return [
-                `<b>变更摘要</b>`,
-                `Files: <code>${draft.stagedFiles.length}</code>`,
-                `<code>${escapeHtml(clipped)}</code>`,
-              ].join('\n');
-            }
-
-            const maxFiles = 20;
-            const shown = draft.stagedFiles.slice(0, maxFiles);
-            const omitted = draft.stagedFiles.length - shown.length;
-            const raw = shown.join('\n') + (omitted > 0 ? `\n...（已省略 ${omitted} 个文件）` : '');
-            const clipped = raw.length > 1800 ? raw.slice(0, 1800) + '…' : raw;
-            return [
-              `<b>变更摘要</b>`,
-              `Files: <code>${draft.stagedFiles.length}</code>`,
-              `<code>${escapeHtml(clipped)}</code>`,
-            ].join('\n');
-          })();
-
-          const semanticSummaryBlock = (() => {
-            const lines = (draft.summaryLines || [])
-              .map((l) => l.replace(/^\s*[-*]\s*/, '').trim())
-              .filter(Boolean)
-              .slice(0, 5)
-              .map((l) => `- ${escapeHtml(l).slice(0, 200)}`);
-            if (lines.length === 0) return null;
-            return ['<b>语义摘要</b>', ...lines].join('\n');
-          })();
+          const changeSummary = buildChangeSummaryBlock(draft.stagedFiles, draft.diffStatText || '');
+          const semanticSummaryBlock = buildSemanticSummaryBlock(draft.summaryLines || []);
 
           response = [
             '<b>提交完成。</b>',
@@ -1759,41 +1770,8 @@ async function handleCommand(
           let diffStatText = '';
           let changeSummary: string | null = null;
           try {
-            const stat = (await runGit(['diff', '--cached', '--stat'])).stdout.trim();
-            diffStatText = stat;
-            if (stat) {
-              const allLines = stat.split('\n').map(l => l.trimEnd()).filter(Boolean);
-              const maxLines = 12;
-              let shownLines = allLines;
-              if (allLines.length > maxLines) {
-                const headCount = Math.max(1, maxLines - 2);
-                const omitted = allLines.length - headCount - 1;
-                const tail = allLines[allLines.length - 1];
-                shownLines = [
-                  ...allLines.slice(0, headCount),
-                  `...（已省略 ${omitted} 行）`,
-                  tail,
-                ];
-              }
-              const raw = shownLines.join('\n');
-              const clipped = raw.length > 1800 ? raw.slice(0, 1800) + '…' : raw;
-              changeSummary = [
-                `<b>变更摘要</b>`,
-                `Files: <code>${stagedFiles.length}</code>`,
-                `<code>${escapeHtml(clipped)}</code>`,
-              ].join('\n');
-            } else {
-              const maxFiles = 20;
-              const shown = stagedFiles.slice(0, maxFiles);
-              const omitted = stagedFiles.length - shown.length;
-              const raw = shown.join('\n') + (omitted > 0 ? `\n...（已省略 ${omitted} 个文件）` : '');
-              const clipped = raw.length > 1800 ? raw.slice(0, 1800) + '…' : raw;
-              changeSummary = [
-                `<b>变更摘要</b>`,
-                `Files: <code>${stagedFiles.length}</code>`,
-                `<code>${escapeHtml(clipped)}</code>`,
-              ].join('\n');
-            }
+            diffStatText = (await runGit(['diff', '--cached', '--stat'])).stdout.trim();
+            changeSummary = buildChangeSummaryBlock(stagedFiles, diffStatText);
           } catch {
             changeSummary = null;
           }
@@ -1860,15 +1838,7 @@ async function handleCommand(
             summaryLines,
           });
 
-          const semanticSummaryBlock = (() => {
-            const lines = summaryLines
-              .map((l) => l.replace(/^\s*[-*]\s*/, '').trim())
-              .filter(Boolean)
-              .slice(0, 5)
-              .map((l) => `- ${escapeHtml(l).slice(0, 200)}`);
-            if (lines.length === 0) return null;
-            return ['<b>语义摘要</b>', ...lines].join('\n');
-          })();
+          const semanticSummaryBlock = buildSemanticSummaryBlock(summaryLines);
 
           response = [
             '<b>Draft 已生成（未提交）。</b>',
@@ -1930,41 +1900,8 @@ async function handleCommand(
         let diffStatText = '';
         let changeSummary: string | null = null;
         try {
-          const stat = (await runGit(['diff', '--cached', '--stat'])).stdout.trim();
-          diffStatText = stat;
-          if (stat) {
-            const allLines = stat.split('\n').map(l => l.trimEnd()).filter(Boolean);
-            const maxLines = 12; // keep IM message compact
-            let shownLines = allLines;
-            if (allLines.length > maxLines) {
-              const headCount = Math.max(1, maxLines - 2);
-              const omitted = allLines.length - headCount - 1;
-              const tail = allLines[allLines.length - 1];
-              shownLines = [
-                ...allLines.slice(0, headCount),
-                `...（已省略 ${omitted} 行）`,
-                tail,
-              ];
-            }
-            const raw = shownLines.join('\n');
-            const clipped = raw.length > 1800 ? raw.slice(0, 1800) + '…' : raw;
-            changeSummary = [
-              `<b>变更摘要</b>`,
-              `Files: <code>${stagedFiles.length}</code>`,
-              `<code>${escapeHtml(clipped)}</code>`,
-            ].join('\n');
-          } else {
-            const maxFiles = 20;
-            const shown = stagedFiles.slice(0, maxFiles);
-            const omitted = stagedFiles.length - shown.length;
-            const raw = shown.join('\n') + (omitted > 0 ? `\n...（已省略 ${omitted} 个文件）` : '');
-            const clipped = raw.length > 1800 ? raw.slice(0, 1800) + '…' : raw;
-            changeSummary = [
-              `<b>变更摘要</b>`,
-              `Files: <code>${stagedFiles.length}</code>`,
-              `<code>${escapeHtml(clipped)}</code>`,
-            ].join('\n');
-          }
+          diffStatText = (await runGit(['diff', '--cached', '--stat'])).stdout.trim();
+          changeSummary = buildChangeSummaryBlock(stagedFiles, diffStatText);
         } catch {
           // ignore (do not block commit)
           changeSummary = null;
@@ -2076,15 +2013,7 @@ async function handleCommand(
         const hash = (await runGit(['rev-parse', '--short', 'HEAD'])).stdout.trim();
         const branch = (await runGit(['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim();
 
-        const semanticSummaryBlock = (() => {
-          const lines = (llmSummaryLines || [])
-            .map((l) => l.replace(/^\s*[-*]\s*/, '').trim())
-            .filter(Boolean)
-            .slice(0, 5)
-            .map((l) => `- ${escapeHtml(l).slice(0, 200)}`);
-          if (lines.length === 0) return null;
-          return ['<b>语义摘要</b>', ...lines].join('\n');
-        })();
+        const semanticSummaryBlock = buildSemanticSummaryBlock(llmSummaryLines);
 
         const llmParticipationLine = (() => {
           if (!gitLlmEnabled) return null;
