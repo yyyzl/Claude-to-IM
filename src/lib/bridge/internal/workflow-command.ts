@@ -21,7 +21,7 @@ import * as path from 'node:path';
 import { createSpecReviewEngine } from '../../workflow/index.js';
 import type { WorkflowEngine } from '../../workflow/workflow-engine.js';
 import { WorkflowStore } from '../../workflow/workflow-store.js';
-import type { WorkflowEvent, WorkflowMeta } from '../../workflow/types.js';
+import type { WorkflowConfig, WorkflowEvent, WorkflowMeta } from '../../workflow/types.js';
 import type { BaseChannelAdapter } from '../channel-adapter.js';
 import type { InboundMessage, ChannelBinding } from '../types.js';
 import { deliver } from '../delivery-layer.js';
@@ -41,7 +41,7 @@ function getWorkflowStore(): WorkflowStore {
 /** Parsed `/workflow` subcommand. */
 export type WorkflowSubcommand =
   | { kind: 'help' }
-  | { kind: 'start'; specPath: string; planPath: string; contextPaths: string[] }
+  | { kind: 'start'; specPath: string; planPath: string; contextPaths: string[]; claudeModel?: string; codexBackend?: string }
   | { kind: 'status'; runId?: string }
   | { kind: 'resume'; runId: string }
   | { kind: 'stop'; runId?: string };
@@ -89,18 +89,30 @@ export function parseWorkflowArgs(argsRaw: string): WorkflowSubcommand {
 
   switch (sub) {
     case 'start': {
-      // Expect: start <spec> <plan> [--context file1,file2]
+      // Expect: start <spec> <plan> [--context file1,file2] [--model <model>] [--codex-backend <backend>]
       if (parts.length < 3) return { kind: 'help' };
       const specPath = parts[1];
       const planPath = parts[2];
       let contextPaths: string[] = [];
+      let claudeModel: string | undefined;
+      let codexBackend: string | undefined;
 
       const ctxIdx = parts.indexOf('--context');
       if (ctxIdx !== -1 && parts[ctxIdx + 1]) {
         contextPaths = parts[ctxIdx + 1].split(',').filter(Boolean);
       }
 
-      return { kind: 'start', specPath, planPath, contextPaths };
+      const modelIdx = parts.indexOf('--model');
+      if (modelIdx !== -1 && parts[modelIdx + 1]) {
+        claudeModel = parts[modelIdx + 1];
+      }
+
+      const backendIdx = parts.indexOf('--codex-backend');
+      if (backendIdx !== -1 && parts[backendIdx + 1]) {
+        codexBackend = parts[backendIdx + 1];
+      }
+
+      return { kind: 'start', specPath, planPath, contextPaths, claudeModel, codexBackend };
     }
 
     case 'status':
@@ -281,8 +293,13 @@ async function handleStart(
       (contextFiles.length > 0 ? `\nContext: ${contextFiles.length} 个文件` : ''),
     );
 
+    // ── Build config overrides from command-line options ──
+    const configOverrides: Partial<WorkflowConfig> = {};
+    if (cmd.claudeModel) configOverrides.claude_model = cmd.claudeModel;
+    if (cmd.codexBackend) configOverrides.codex_backend = cmd.codexBackend;
+
     // ── Launch workflow in background (fire-and-forget) ──
-    void engine.start({ spec, plan, contextFiles }).then(() => {
+    void engine.start({ spec, plan, contextFiles, config: configOverrides }).then(() => {
       // Only delete if this engine still owns the slot
       const current = activeWorkflows.get(key);
       if (current && current.engine === engine) activeWorkflows.delete(key);
@@ -589,6 +606,12 @@ function buildHelpText(): string {
     '',
     '<code>/workflow start &lt;spec&gt; &lt;plan&gt; --context f1,f2</code>',
     '  启动并附加上下文文件',
+    '',
+    '<code>/workflow start &lt;spec&gt; &lt;plan&gt; --model &lt;model-id&gt;</code>',
+    '  指定 Claude 模型（默认: claude-sonnet-4-20250514）',
+    '',
+    '<code>/workflow start &lt;spec&gt; &lt;plan&gt; --codex-backend &lt;backend&gt;</code>',
+    '  指定 Codex CLI 后端（默认: codex）',
     '',
     '<code>/workflow status [run-id]</code>',
     '  查看当前/指定工作流状态',

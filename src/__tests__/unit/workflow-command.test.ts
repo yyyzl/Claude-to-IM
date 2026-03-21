@@ -51,6 +51,8 @@ describe('parseWorkflowArgs', () => {
         specPath: 'spec.md',
         planPath: 'plan.md',
         contextPaths: [],
+        claudeModel: undefined,
+        codexBackend: undefined,
       });
     });
 
@@ -61,6 +63,8 @@ describe('parseWorkflowArgs', () => {
         specPath: 'spec.md',
         planPath: 'plan.md',
         contextPaths: ['a.md', 'b.md'],
+        claudeModel: undefined,
+        codexBackend: undefined,
       });
     });
 
@@ -71,6 +75,8 @@ describe('parseWorkflowArgs', () => {
         specPath: 'spec.md',
         planPath: 'plan.md',
         contextPaths: ['readme.md'],
+        claudeModel: undefined,
+        codexBackend: undefined,
       });
     });
 
@@ -91,6 +97,8 @@ describe('parseWorkflowArgs', () => {
         specPath: '.claude/plan/spec.md',
         planPath: '.claude/plan/plan.md',
         contextPaths: [],
+        claudeModel: undefined,
+        codexBackend: undefined,
       });
     });
 
@@ -101,6 +109,44 @@ describe('parseWorkflowArgs', () => {
         specPath: 'spec.md',
         planPath: 'plan.md',
         contextPaths: [],
+        claudeModel: undefined,
+        codexBackend: undefined,
+      });
+    });
+
+    it('parses --model flag', () => {
+      const result = parseWorkflowArgs('start spec.md plan.md --model claude-opus-4-20250514');
+      assert.deepStrictEqual(result, {
+        kind: 'start',
+        specPath: 'spec.md',
+        planPath: 'plan.md',
+        contextPaths: [],
+        claudeModel: 'claude-opus-4-20250514',
+        codexBackend: undefined,
+      });
+    });
+
+    it('parses --codex-backend flag', () => {
+      const result = parseWorkflowArgs('start spec.md plan.md --codex-backend gemini');
+      assert.deepStrictEqual(result, {
+        kind: 'start',
+        specPath: 'spec.md',
+        planPath: 'plan.md',
+        contextPaths: [],
+        claudeModel: undefined,
+        codexBackend: 'gemini',
+      });
+    });
+
+    it('parses all flags together', () => {
+      const result = parseWorkflowArgs('start spec.md plan.md --context a.md --model claude-opus-4-20250514 --codex-backend gemini');
+      assert.deepStrictEqual(result, {
+        kind: 'start',
+        specPath: 'spec.md',
+        planPath: 'plan.md',
+        contextPaths: ['a.md'],
+        claudeModel: 'claude-opus-4-20250514',
+        codexBackend: 'gemini',
       });
     });
   });
@@ -165,6 +211,8 @@ describe('parseWorkflowArgs', () => {
         specPath: 'spec.md',
         planPath: 'plan.md',
         contextPaths: [],
+        claudeModel: undefined,
+        codexBackend: undefined,
       });
     });
 

@@ -27,18 +27,18 @@ export interface ModelInvokerOptions {
   model?: string;
   /** Signal to abort the invocation early (e.g. workflow cancellation). */
   signal?: AbortSignal;
+  /** System prompt for Claude (used as the `system` parameter in messages.create). */
+  systemPrompt?: string;
+  /** Maximum output tokens for Claude (default: 200_000). */
+  maxOutputTokens?: number;
+  /** Backend name for Codex CLI (default: 'codex'). Passed as --backend <value>. */
+  backend?: string;
 }
 
 // ── Constants ─────────────────────────────────────────────────────
 
-/** Default Claude model used when `opts.model` is not specified. */
-const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-20250514';
-
 /** Command invoked for Codex CLI calls. */
 const CODEX_COMMAND = 'codeagent-wrapper';
-
-/** Arguments passed to the Codex CLI command. */
-const CODEX_ARGS = ['--backend', 'codex'];
 
 // ── ModelInvoker ──────────────────────────────────────────────────
 
@@ -64,7 +64,7 @@ export class ModelInvoker {
     const maxRetries = opts.maxRetries ?? 1;
 
     return this.withRetry('codex', maxRetries, opts.signal, () =>
-      this.executeCodexProcess(prompt, opts.timeoutMs, opts.signal),
+      this.executeCodexProcess(prompt, opts.timeoutMs, opts.signal, opts.backend),
     );
   }
 
@@ -150,15 +150,18 @@ export class ModelInvoker {
    * @param prompt    - Prompt text to write to stdin.
    * @param timeoutMs - Maximum duration before the process is killed.
    * @param signal    - Optional abort signal for external cancellation.
+   * @param backend   - Codex CLI backend name (default: 'codex').
    * @returns Collected stdout as a string.
    */
   private executeCodexProcess(
     prompt: string,
     timeoutMs: number,
     signal?: AbortSignal,
+    backend?: string,
   ): Promise<string> {
     return new Promise<string>((resolve, reject) => {
-      const child = spawn(CODEX_COMMAND, CODEX_ARGS, {
+      const args = ['--backend', backend ?? 'codex'];
+      const child = spawn(CODEX_COMMAND, args, {
         stdio: ['pipe', 'pipe', 'pipe'],
         // Ensure the child process inherits PATH so codeagent-wrapper is found
         env: process.env,
@@ -287,7 +290,8 @@ export class ModelInvoker {
     const { default: Anthropic } = await import('@anthropic-ai/sdk');
 
     const client = new Anthropic();
-    const model = opts.model ?? DEFAULT_CLAUDE_MODEL;
+    const model = opts.model ?? 'claude-sonnet-4-20250514';
+    const maxTokens = opts.maxOutputTokens ?? 200_000;
 
     // Create an internal AbortController for timeout management.
     // If the caller also provides an external signal, we listen on
@@ -313,12 +317,19 @@ export class ModelInvoker {
     }, opts.timeoutMs);
 
     try {
+      const createParams: Record<string, unknown> = {
+        model,
+        max_tokens: maxTokens,
+        messages: [{ role: 'user', content: prompt }],
+      };
+
+      // Only add system field when a system prompt is provided
+      if (opts.systemPrompt) {
+        createParams.system = opts.systemPrompt;
+      }
+
       const response = await client.messages.create(
-        {
-          model,
-          max_tokens: 4096,
-          messages: [{ role: 'user', content: prompt }],
-        },
+        createParams as Parameters<typeof client.messages.create>[0],
         { signal: internalController.signal },
       );
 

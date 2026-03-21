@@ -280,6 +280,7 @@ export class WorkflowEngine {
               timeoutMs: config.codex_timeout_ms,
               maxRetries: config.codex_max_retries,
               signal: this.abortController?.signal,
+              backend: config.codex_backend,
             });
           } catch (err: unknown) {
             if (err instanceof AbortError) {
@@ -459,14 +460,17 @@ export class WorkflowEngine {
           const input = await this.packBuilder.buildClaudeDecisionInput(
             runId, round, matchResult.matchedIssues,
           );
-          const prompt = await this.promptAssembler.renderClaudeDecisionPrompt(input);
-          await this.store.saveRoundArtifact(runId, round, 'claude-input.md', prompt);
+          const claudePrompt = await this.promptAssembler.renderClaudeDecisionPrompt(input);
+          await this.store.saveRoundArtifact(runId, round, 'claude-input.md', claudePrompt.user);
 
           try {
-            claudeRaw = await this.modelInvoker.invokeClaude(prompt, {
+            claudeRaw = await this.modelInvoker.invokeClaude(claudePrompt.user, {
               timeoutMs: config.claude_timeout_ms,
               maxRetries: config.claude_max_retries,
               signal: this.abortController?.signal,
+              systemPrompt: claudePrompt.system,
+              model: config.claude_model,
+              maxOutputTokens: config.claude_max_output_tokens,
             });
           } catch (err: unknown) {
             if (err instanceof AbortError) {

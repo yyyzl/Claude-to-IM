@@ -123,6 +123,8 @@ If JSON output is not possible, wrap modified sections in markers:
 (modified plan content)
 --- END PLAN UPDATE ---`;
 
+const CLAUDE_DECISION_SYSTEM_TEMPLATE = `You are the **Technical Decision Authority** in a Spec-Review workflow.`;
+
 // ── Test fixtures ────────────────────────────────────────────────
 
 /** Build a complete SpecReviewPack with all fields populated. */
@@ -281,6 +283,11 @@ describe('PromptAssembler', () => {
       CLAUDE_DECISION_TEMPLATE,
       'utf-8',
     );
+    await fs.writeFile(
+      path.join(templatesPath, 'claude-decision-system.md'),
+      CLAUDE_DECISION_SYSTEM_TEMPLATE,
+      'utf-8',
+    );
 
     store = new WorkflowStore(tmpDir);
     assembler = new PromptAssembler(store);
@@ -391,9 +398,13 @@ describe('PromptAssembler', () => {
     // ── Case 6: Normal prompt with findings ───────────────────
     it('renders findings with numbered list when hasNewFindings=true', async () => {
       const input = createDecisionInputWithFindings();
-      const result = await assembler.renderClaudeDecisionPrompt(input);
+      const { system, user: result } = await assembler.renderClaudeDecisionPrompt(input);
 
-      // No un-replaced placeholders
+      // System prompt should be loaded from template
+      assert.ok(system.length > 0, 'System prompt should not be empty');
+      assert.ok(system.includes('Technical Decision Authority'), 'System prompt missing role');
+
+      // No un-replaced placeholders in user prompt
       assert.ok(!result.includes('{{'), `Unexpected placeholder found: ${extractPlaceholders(result)}`);
 
       // Verify round number
@@ -413,7 +424,7 @@ describe('PromptAssembler', () => {
     // ── Case 7: No findings prompt ────────────────────────────
     it('shows "No new findings from Codex." when hasNewFindings=false', async () => {
       const input = createDecisionInputNoFindings();
-      const result = await assembler.renderClaudeDecisionPrompt(input);
+      const { user: result } = await assembler.renderClaudeDecisionPrompt(input);
 
       assert.ok(
         result.includes('No new findings from Codex.'),
@@ -429,7 +440,7 @@ describe('PromptAssembler', () => {
     // ── Case 8: First round — no previous decisions ───────────
     it('shows "First round - no previous decisions." when previousDecisions is empty', async () => {
       const input = createDecisionInputFirstRound();
-      const result = await assembler.renderClaudeDecisionPrompt(input);
+      const { user: result } = await assembler.renderClaudeDecisionPrompt(input);
 
       assert.ok(
         result.includes('First round - no previous decisions.'),
@@ -440,7 +451,7 @@ describe('PromptAssembler', () => {
     // ── Case 9: Finding format with (NEW), ID, evidence, suggestion ──
     it('formats findings with (NEW) marker, issue ID, evidence and suggestion', async () => {
       const input = createDecisionInputWithFindings();
-      const result = await assembler.renderClaudeDecisionPrompt(input);
+      const { user: result } = await assembler.renderClaudeDecisionPrompt(input);
 
       // Finding 1 is NEW
       assert.ok(

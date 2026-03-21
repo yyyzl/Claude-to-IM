@@ -280,6 +280,12 @@ export interface WorkflowConfig {
   claude_max_retries: number;
   /** Token budget for the Codex context window (used by the context compressor). */
   codex_context_window_tokens: number;
+  /** Claude model identifier (e.g. 'claude-sonnet-4-20250514'). */
+  claude_model: string;
+  /** Maximum output tokens for Claude API calls. */
+  claude_max_output_tokens: number;
+  /** Codex CLI backend name (e.g. 'codex', 'gemini'). */
+  codex_backend: string;
   /** Additional files to include in every review pack. */
   context_files: ContextFile[];
 }
@@ -429,11 +435,14 @@ export const DEFAULT_CONFIG: WorkflowConfig = {
   max_rounds: 3,
   auto_terminate: true,
   human_review_on_deadlock: true,
-  codex_timeout_ms: 180_000,
-  claude_timeout_ms: 120_000,
+  codex_timeout_ms: 5_400_000,
+  claude_timeout_ms: 5_400_000,
   codex_max_retries: 1,
   claude_max_retries: 1,
   codex_context_window_tokens: 128_000,
+  claude_model: 'claude-sonnet-4-20250514',
+  claude_max_output_tokens: 200_000,
+  codex_backend: 'codex',
   context_files: [],
 };
 

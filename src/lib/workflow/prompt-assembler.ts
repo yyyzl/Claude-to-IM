@@ -27,6 +27,17 @@ const SPEC_REVIEW_TEMPLATE = 'spec-review-pack.md';
 /** Template file name for the Claude decision prompt. */
 const CLAUDE_DECISION_TEMPLATE = 'claude-decision.md';
 
+/** Template file name for the Claude decision system prompt. */
+const CLAUDE_DECISION_SYSTEM_TEMPLATE = 'claude-decision-system.md';
+
+/** Separated prompt components for Claude API calls. */
+export interface ClaudePromptParts {
+  /** System prompt (role definition, decision framework). */
+  system: string;
+  /** User prompt (actual task content). */
+  user: string;
+}
+
 /**
  * Assembles final prompt text from structured workflow data.
  *
@@ -80,14 +91,17 @@ export class PromptAssembler {
   }
 
   /**
-   * Render a {@link ClaudeDecisionInput} into the final Claude prompt text.
+   * Render a {@link ClaudeDecisionInput} into separated system + user prompts.
    *
-   * Two rendering variants:
+   * Two rendering variants for the user prompt:
    * - **Normal** (`hasNewFindings=true`): standard decision prompt with numbered findings.
    * - **No findings** (`hasNewFindings=false`): alternate prompt directing Claude to
    *   address remaining open issues in the ledger.
+   *
+   * The system prompt is loaded from a dedicated template file and returned
+   * separately so it can be passed as the `system` parameter to the Claude API.
    */
-  async renderClaudeDecisionPrompt(input: ClaudeDecisionInput): Promise<string> {
+  async renderClaudeDecisionPrompt(input: ClaudeDecisionInput): Promise<ClaudePromptParts> {
     const template = await this.store.loadTemplate(CLAUDE_DECISION_TEMPLATE);
 
     let result = template;
@@ -106,7 +120,10 @@ export class PromptAssembler {
     result = this.replacePlaceholder(result, 'current_spec', input.currentSpec);
     result = this.replacePlaceholder(result, 'current_plan', input.currentPlan);
 
-    return result;
+    // Load system prompt template
+    const system = await this.store.loadTemplate(CLAUDE_DECISION_SYSTEM_TEMPLATE);
+
+    return { system, user: result };
   }
 
   // ── Private: placeholder replacement ───────────────────────────
