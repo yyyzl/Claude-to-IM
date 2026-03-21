@@ -65,7 +65,7 @@ export class JsonParser {
    *
    * Strategy (in order):
    * 1. Read `spec_patch` / `plan_patch` from the pre-parsed JSON object
-   * 2. Fallback: scan raw text for `--- SPEC UPDATE ---` / `--- PLAN UPDATE ---` markers
+   * 2. Fallback: scan raw text for `--- SPEC PATCH ---` / `--- PLAN PATCH ---` markers
    * 3. Return `null` for any patch not found
    *
    * @param raw - Raw Claude output string.
@@ -89,7 +89,25 @@ export class JsonParser {
       }
     }
 
-    // Strategy 2: fallback to marker-based extraction from raw text
+    // Strategy 2: marker-based extraction from raw text
+    // Primary markers (TP0 template format)
+    if (specPatch === null) {
+      specPatch = extractBetweenMarkers(
+        raw,
+        '--- SPEC PATCH ---',
+        '--- END SPEC PATCH ---',
+      );
+    }
+
+    if (planPatch === null) {
+      planPatch = extractBetweenMarkers(
+        raw,
+        '--- PLAN PATCH ---',
+        '--- END PLAN PATCH ---',
+      );
+    }
+
+    // Legacy markers (pre-TP0 fallback)
     if (specPatch === null) {
       specPatch = extractBetweenMarkers(
         raw,
@@ -231,8 +249,8 @@ function extractBalancedBlock(text: string): string | null {
  * between them, trimmed. Returns `null` if either marker is not found.
  *
  * @param raw - The raw text to search.
- * @param startMarker - The opening marker (e.g. `"--- SPEC UPDATE ---"`).
- * @param endMarker - The closing marker (e.g. `"--- END SPEC UPDATE ---"`).
+ * @param startMarker - The opening marker (e.g. `"--- SPEC PATCH ---"`).
+ * @param endMarker - The closing marker (e.g. `"--- END SPEC PATCH ---"`).
  * @returns The extracted content between markers (trimmed), or `null`.
  */
 function extractBetweenMarkers(

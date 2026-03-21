@@ -197,7 +197,60 @@ describe('JsonParser', () => {
       assert.equal(planPatch, null);
     });
 
-    // ── 14. Empty string fields fallback to markers ───────────────
+    // ── 14. TP0 SPEC PATCH markers (primary) ─────────────────────
+
+    it('extracts specPatch from SPEC PATCH markers (TP0 format)', () => {
+      const raw = [
+        '```json',
+        '{"decisions": [], "spec_updated": true, "plan_updated": false, "summary": "ok"}',
+        '```',
+        '',
+        '--- SPEC PATCH ---',
+        '## 6.5 TerminationJudge',
+        'Updated content here',
+        '--- END SPEC PATCH ---',
+      ].join('\n');
+
+      const { specPatch, planPatch } = parser.extractPatches(raw, null);
+      assert.equal(specPatch, '## 6.5 TerminationJudge\nUpdated content here');
+      assert.equal(planPatch, null);
+    });
+
+    // ── 15. TP0 both PATCH markers ─────────────────────────────────
+
+    it('extracts both patches from PATCH markers (TP0 format)', () => {
+      const raw = [
+        '--- SPEC PATCH ---',
+        'spec patch content',
+        '--- END SPEC PATCH ---',
+        '',
+        '--- PLAN PATCH ---',
+        'plan patch content',
+        '--- END PLAN PATCH ---',
+      ].join('\n');
+
+      const { specPatch, planPatch } = parser.extractPatches(raw, null);
+      assert.equal(specPatch, 'spec patch content');
+      assert.equal(planPatch, 'plan patch content');
+    });
+
+    // ── 16. PATCH markers take priority over UPDATE markers ────────
+
+    it('prefers PATCH markers over legacy UPDATE markers', () => {
+      const raw = [
+        '--- SPEC PATCH ---',
+        'new patch content',
+        '--- END SPEC PATCH ---',
+        '--- SPEC UPDATE ---',
+        'legacy content',
+        '--- END SPEC UPDATE ---',
+      ].join('\n');
+
+      const { specPatch } = parser.extractPatches(raw, null);
+      assert.equal(specPatch, 'new patch content');
+    });
+
+    // ── 17. Empty string fields fallback to markers ───────────────
 
     it('falls back to markers when parsed fields are empty strings', () => {
       const parsed = makeDecisionOutput({
