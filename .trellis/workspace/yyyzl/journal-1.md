@@ -608,3 +608,58 @@ Workflow Engine Spec/Plan R4: 全部 9 个独立问题闭环 + 代码增强
 ### Next Steps
 
 - Spec + Plan 协议已完全收敛，可进入 P0 实现阶段
+
+
+## Session 14: Workflow Claude 调用从 HTTP API 迁移到本地 Agent SDK
+
+**Date**: 2026-03-21
+**Task**: Workflow Claude 调用从 HTTP API 迁移到本地 Agent SDK
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+## 问题诊断
+
+用户报告 spec-review 工作流 (run: 20260321-4f1ae2) 出现 "Claude 决策超时"，但 Codex 审查正常。
+
+事件日志揭示根因：Claude 决策在 11ms 内就"超时"（配置90分钟），不是真正超时而是立即失败。
+
+项目有两条 Claude 调用路径——Bridge 用 Agent SDK（不需 API key），Workflow 用 HTTP API（需 ANTHROPIC_API_KEY 但未设置）。SDK 抛出认证错误，被 withRetry 误分类为可重试 → 3次毫秒级失败 → 包装为 TimeoutError。
+
+## 修复内容
+
+| 改动 | 说明 |
+|------|------|
+| `executeClaudeRequest` 从 HTTP API → Agent SDK | 消除 ANTHROPIC_API_KEY 依赖，统一使用本地 Claude Code |
+| `withRetry` 增加 `isNonRetryableError()` | 启发式检测 auth/ENOENT/permission 错误，立即升级为 ModelInvocationError |
+| 删除 `vendor-types.d.ts` | SDK 自带类型，旧声明覆盖真实类型导致编译错误 |
+
+Agent SDK 配置：`tools: []`（纯文本）、`persistSession: false`、`maxTurns: 1`、`settingSources: []`（隔离模式）。
+
+**验证**: tsc 0 错误，15/15 测试通过。
+
+**Updated Files**:
+- `src/lib/workflow/model-invoker.ts` (重写)
+- `src/lib/workflow/vendor-types.d.ts` (删除)
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `923e95a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
