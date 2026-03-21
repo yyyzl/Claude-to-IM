@@ -714,3 +714,65 @@ Agent SDK 配置：`tools: []`（纯文本）、`persistSession: false`、`maxTu
 ### Next Steps
 
 - None - task complete
+
+
+## Session 16: Workflow Engine P0+TP0: parse safety net + prompt optimization
+
+**Date**: 2026-03-22
+**Task**: Workflow Engine P0+TP0: parse safety net + prompt optimization
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+## 变更概览
+
+同批修复 Workflow Engine 的 5 个代码缺陷 + 5 个 prompt 模板问题——它们是同一根因的两面（代码没拦住 parse 失败 + prompt 导致了 parse 失败）。
+
+## 代码修复 P0（5 项）
+
+| # | 缺陷 | 文件 | 修复 |
+|---|------|------|------|
+| 1 | Claude parse 失败后空转 | workflow-engine.ts, types.ts | consecutiveParseFailures 计数器，连续2次 pause_for_human |
+| 2 | max_rounds B2 提前截断 | termination-judge.ts | isPreTermination 参数，B2 跳过 max_rounds 检查 |
+| 3 | 零进展安全网 | workflow-engine.ts, types.ts | zeroProgressRounds 持久化，连续2轮 pause_for_human |
+| 4 | TimeoutError 破坏终止条件 | workflow-engine.ts | 移除 previousRoundHadNewHighCritical=true |
+| H-NEW-1 | Codex fallback 伪造 LGTM | workflow-engine.ts | 三处 fallback 从 lgtm 改为 major_issues |
+
+## 模板修复 TP0（5 项）
+
+| # | 问题 | 文件 | 修复 |
+|---|------|------|------|
+| T1 | JSON/Patch 分离 | claude-decision.md, json-parser.ts | Part 1 JSON + Part 2 marker patch |
+| T2 | Claude 橡皮图章 | claude-decision-system.md | Decision Budget 3/轮 + reject 20-40% |
+| T4 | Codex 尾部清理 | spec-review-pack.md, model-invoker.ts | OUTPUT RULES + SESSION_ID 后处理 |
+| T5 | severity 模糊 | spec-review-pack.md | Severity Calibration 锚定定义 |
+| T7 | R1 summary 空 | pack-builder.ts | round=1 返回引导文字 |
+
+## 验证
+
+- TypeScript 编译零错误
+- 265/266 测试通过（1 个失败是已有的 untracked bridge-stop-command.test.ts）
+- 11 文件变更, +484 / -114 行
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0ba2ea4` | (see git log) |
+| `843eb5e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

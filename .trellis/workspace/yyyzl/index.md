@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 15
-- **Last Active**: 2026-03-21
+- **Total Sessions**: 16
+- **Last Active**: 2026-03-22
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~716 | Active |
+| `journal-1.md` | ~778 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits |
 |---|------|-------|---------|
+| 16 | 2026-03-22 | Workflow Engine P0+TP0: parse safety net + prompt optimization | `0ba2ea4`, `843eb5e` |
 | 15 | 2026-03-21 | fix(bridge): /stop 无法终止跨 session 的活跃任务 | `cfe2f4b` |
 | 14 | 2026-03-21 | Workflow Claude 调用从 HTTP API 迁移到本地 Agent SDK | `923e95a` |
 | 13 | 2026-03-21 | Workflow Engine Spec/Plan R4: 全部 9 个独立问题闭环 + 代码增强 | `d4633fc` |
