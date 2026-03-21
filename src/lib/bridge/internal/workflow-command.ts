@@ -27,15 +27,6 @@ import type { InboundMessage, ChannelBinding } from '../types.js';
 import { deliver } from '../delivery-layer.js';
 import { getBridgeContext } from '../context.js';
 
-// ── Module-level Singleton ────────────────────────────────────
-
-/** Lazy-initialized WorkflowStore singleton for status queries. */
-let _workflowStore: WorkflowStore | null = null;
-function getWorkflowStore(): WorkflowStore {
-  if (!_workflowStore) _workflowStore = new WorkflowStore();
-  return _workflowStore;
-}
-
 // ── Types ──────────────────────────────────────────────────────
 
 /** Parsed `/workflow` subcommand. */
@@ -171,11 +162,11 @@ export async function handleWorkflowCommand(
       return;
 
     case 'status':
-      await handleStatus(adapter, msg, cmd, key);
+      await handleStatus(adapter, msg, cmd, key, cwd);
       return;
 
     case 'resume':
-      await handleResume(adapter, msg, cmd, key);
+      await handleResume(adapter, msg, cmd, key, cwd);
       return;
 
     case 'stop':
@@ -262,7 +253,9 @@ async function handleStart(
     }
 
     // ── Create engine and upgrade slot ──
-    const engine = createSpecReviewEngine();
+    // Pass cwd-based basePath so workflow artifacts live alongside the chat's working directory,
+    // not wherever the bot process happens to start.
+    const engine = createSpecReviewEngine(path.join(cwd, '.claude-workflows'));
 
     // Upgrade the placeholder to a real provisional entry with engine.
     activeWorkflows.set(key, {
@@ -329,17 +322,18 @@ async function handleStatus(
   msg: InboundMessage,
   cmd: Extract<WorkflowSubcommand, { kind: 'status' }>,
   key: string,
+  cwd: string,
 ): Promise<void> {
   const running = activeWorkflows.get(key);
 
   if (cmd.runId) {
-    // Query specific run from store
-    await deliverRunStatus(adapter, msg, cmd.runId);
+    // Query specific run from store — use cwd-based path to match start's storage location.
+    await deliverRunStatus(adapter, msg, cmd.runId, cwd);
     return;
   }
 
   if (running) {
-    await deliverRunStatus(adapter, msg, running.runId);
+    await deliverRunStatus(adapter, msg, running.runId, cwd);
   } else {
     await deliverText(adapter, msg, '当前聊天没有运行中的工作流。\n使用 <code>/workflow start</code> 启动。');
   }
@@ -350,6 +344,7 @@ async function handleResume(
   msg: InboundMessage,
   cmd: Extract<WorkflowSubcommand, { kind: 'resume' }>,
   key: string,
+  cwd: string,
 ): Promise<void> {
   // Guard: no concurrent workflow
   if (activeWorkflows.has(key)) {
@@ -360,7 +355,8 @@ async function handleResume(
     return;
   }
 
-  const engine = createSpecReviewEngine();
+  // Use cwd-based basePath to match start's storage location.
+  const engine = createSpecReviewEngine(path.join(cwd, '.claude-workflows'));
   bindProgressEvents(engine, adapter, msg, key);
 
   activeWorkflows.set(key, {
@@ -524,19 +520,19 @@ function bindProgressEvents(
 
   // Error events (non-fatal, informational)
   engine.on('codex_review_timeout', (e: WorkflowEvent) => {
-    push(`⏱ Codex 审查超时 (第 ${e.round} 轮)，正在重试...`);
+    push(`⏱ Codex 审查超时 (第 ${e.round} 轮)，已跳过，进入下一轮`);
   });
 
   engine.on('claude_decision_timeout', (e: WorkflowEvent) => {
-    push(`⏱ Claude 决策超时 (第 ${e.round} 轮)，正在重试...`);
+    push(`⏱ Claude 决策超时 (第 ${e.round} 轮)，已跳过，进入下一轮`);
   });
 
   engine.on('codex_parse_error', (e: WorkflowEvent) => {
-    push(`⚠️ Codex 输出解析失败 (第 ${e.round} 轮)，正在重试...`);
+    push(`⚠️ Codex 输出解析失败 (第 ${e.round} 轮)，使用空结果继续`);
   });
 
   engine.on('claude_parse_error', (e: WorkflowEvent) => {
-    push(`⚠️ Claude 输出解析失败 (第 ${e.round} 轮)，正在重试...`);
+    push(`⚠️ Claude 输出解析失败 (第 ${e.round} 轮)，使用空结果继续`);
   });
 }
 
@@ -549,9 +545,10 @@ async function deliverRunStatus(
   adapter: BaseChannelAdapter,
   msg: InboundMessage,
   runId: string,
+  cwd: string,
 ): Promise<void> {
   try {
-    const store = getWorkflowStore();
+    const store = new WorkflowStore(path.join(cwd, '.claude-workflows'));
     const meta: WorkflowMeta | null = await store.getMeta(runId);
 
     if (!meta) {
