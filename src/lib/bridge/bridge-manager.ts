@@ -9,7 +9,14 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { BridgeStatus, InboundMessage, OutboundMessage, StreamingPreviewState, ToolCallInfo } from './types.js';
+import type {
+  BridgeStatus,
+  ChannelAddress,
+  InboundMessage,
+  OutboundMessage,
+  StreamingPreviewState,
+  ToolCallInfo,
+} from './types.js';
 import { createAdapter, getRegisteredTypes } from './channel-adapter.js';
 import type { BaseChannelAdapter } from './channel-adapter.js';
 // Side-effect import: triggers self-registration of all adapter factories
@@ -128,7 +135,7 @@ function flushPreview(
 
 // ── Channel-aware rendering dispatch ──────────────────────────
 
-import type { ChannelAddress, SendResult } from './types.js';
+import type { SendResult } from './types.js';
 
 /**
  * Render response text and deliver via the appropriate channel format.
@@ -202,6 +209,12 @@ interface GitDraftRecord {
   summaryLines: string[];
 }
 
+interface ActiveChatTask {
+  abort: AbortController;
+  sessionId: string;
+  startedAt: number;
+}
+
 /** Timestamped tool call entry for /status live context display. */
 interface RecentToolCallEntry {
   name: string;
@@ -219,6 +232,7 @@ interface BridgeManagerState {
   startedAt: string | null;
   loopAborts: Map<string, AbortController>;
   activeTasks: Map<string, AbortController>;
+  activeTasksByChat: Map<string, ActiveChatTask>;
   activeTaskStartedAt: Map<string, number>;
   /** Per-session processing chains for concurrency control */
   sessionLocks: Map<string, Promise<void>>;
@@ -241,6 +255,7 @@ function getState(): BridgeManagerState {
       startedAt: null,
       loopAborts: new Map(),
       activeTasks: new Map(),
+      activeTasksByChat: new Map(),
       activeTaskStartedAt: new Map(),
       sessionLocks: new Map(),
       inputDebounceBuffers: new Map(),
@@ -256,6 +271,9 @@ function getState(): BridgeManagerState {
   // Backfill activeTaskStartedAt for states created before this field existed
   if (!g[GLOBAL_KEY].activeTaskStartedAt) {
     g[GLOBAL_KEY].activeTaskStartedAt = new Map();
+  }
+  if (!g[GLOBAL_KEY].activeTasksByChat) {
+    g[GLOBAL_KEY].activeTasksByChat = new Map();
   }
   // Backfill debounce buffers for states created before this field existed
   if (!g[GLOBAL_KEY].inputDebounceBuffers) {
@@ -289,6 +307,47 @@ function recordRecentToolCall(sessionId: string, name: string, status: 'running'
   if (list.length > MAX_RECENT_TOOL_CALLS) {
     st.recentToolCalls.set(sessionId, list.slice(-MAX_RECENT_TOOL_CALLS));
   }
+}
+
+function getChatTaskKey(address: ChannelAddress): string {
+  return `${address.channelType}:${address.chatId}`;
+}
+
+function registerActiveTask(address: ChannelAddress, sessionId: string, abort: AbortController): void {
+  const state = getState();
+  const startedAt = Date.now();
+  state.activeTasks.set(sessionId, abort);
+  state.activeTaskStartedAt.set(sessionId, startedAt);
+  state.activeTasksByChat.set(getChatTaskKey(address), {
+    abort,
+    sessionId,
+    startedAt,
+  });
+}
+
+function clearActiveTask(address: ChannelAddress, sessionId: string, abort: AbortController): void {
+  const state = getState();
+  if (state.activeTasks.get(sessionId) === abort) {
+    state.activeTasks.delete(sessionId);
+    state.activeTaskStartedAt.delete(sessionId);
+  }
+
+  const chatKey = getChatTaskKey(address);
+  const activeChatTask = state.activeTasksByChat.get(chatKey);
+  if (activeChatTask?.abort === abort) {
+    state.activeTasksByChat.delete(chatKey);
+  }
+}
+
+function getActiveTaskForChat(address: ChannelAddress): ActiveChatTask | null {
+  return getState().activeTasksByChat.get(getChatTaskKey(address)) ?? null;
+}
+
+function abortActiveTaskForChat(address: ChannelAddress): boolean {
+  const activeChatTask = getActiveTaskForChat(address);
+  if (!activeChatTask) return false;
+  activeChatTask.abort.abort();
+  return true;
 }
 
 /**
@@ -931,9 +990,7 @@ async function handleMessage(
 
   // Create an AbortController so /stop can cancel this task externally
   const taskAbort = new AbortController();
-  const state = getState();
-  state.activeTasks.set(binding.codepilotSessionId, taskAbort);
-  state.activeTaskStartedAt.set(binding.codepilotSessionId, Date.now());
+  registerActiveTask(msg.address, binding.codepilotSessionId, taskAbort);
 
   // ── Streaming preview setup ──────────────────────────────────
   let previewState: StreamingPreviewState | null = null;
@@ -1149,8 +1206,7 @@ async function handleMessage(
       } catch { /* best effort */ }
     }
 
-    state.activeTasks.delete(binding.codepilotSessionId);
-    state.activeTaskStartedAt.delete(binding.codepilotSessionId);
+    clearActiveTask(msg.address, binding.codepilotSessionId, taskAbort);
     // Notify adapter that message processing ended
     adapter.onMessageEnd?.(msg.address.chatId);
     // Commit the offset only after full processing (success or failure)
@@ -1201,16 +1257,6 @@ async function handleCommand(
       break;
 
     case '/new': {
-      // Abort any running task on the current session before creating a new one
-      const oldBinding = router.resolve(msg.address);
-      const state = getState();
-      const oldTask = state.activeTasks.get(oldBinding.codepilotSessionId);
-      if (oldTask) {
-        oldTask.abort();
-        state.activeTasks.delete(oldBinding.codepilotSessionId);
-        state.activeTaskStartedAt.delete(oldBinding.codepilotSessionId);
-      }
-
       let workDir: string | undefined;
       if (args) {
         const validated = validateWorkingDirectory(args);
@@ -1221,19 +1267,8 @@ async function handleCommand(
         workDir = validated;
       }
 
-      // If there is a running task for the current binding, stop it before switching sessions.
-      let stopped = false;
-      const existing = store.getChannelBinding(msg.address.channelType, msg.address.chatId);
-      if (existing) {
-        const st = getState();
-        const taskAbort = st.activeTasks.get(existing.codepilotSessionId);
-        if (taskAbort) {
-          taskAbort.abort();
-          st.activeTasks.delete(existing.codepilotSessionId);
-          st.activeTaskStartedAt.delete(existing.codepilotSessionId);
-          stopped = true;
-        }
-      }
+      // If there is a running task for this chat, stop it before switching sessions.
+      const stopped = abortActiveTaskForChat(msg.address);
 
       const binding = router.startNewSession(msg.address, workDir ? { workingDirectory: workDir } : {});
 
@@ -1245,10 +1280,12 @@ async function handleCommand(
         : null;
 
       const st = getState();
-      const isRunningTask = st.activeTasks.has(binding.codepilotSessionId);
-      const startedAtMs = st.activeTaskStartedAt.get(binding.codepilotSessionId) ?? null;
+      const activeChatTask = getActiveTaskForChat(msg.address);
+      const isRunningTask = Boolean(activeChatTask);
+      const startedAtMs = activeChatTask?.startedAt ?? null;
       const runningForMs = (isRunningTask && startedAtMs) ? (Date.now() - startedAtMs) : null;
-      const hasSessionLock = st.sessionLocks.has(binding.codepilotSessionId);
+      const activeTaskSessionId = activeChatTask?.sessionId ?? binding.codepilotSessionId;
+      const hasSessionLock = st.sessionLocks.has(activeTaskSessionId);
 
       const turnTimeoutSetting = parsePositiveInt(store.getSetting('bridge_codex_turn_timeout_ms'));
       const idleTimeoutSetting = parsePositiveInt(store.getSetting('bridge_codex_turn_idle_timeout_ms'));
@@ -1285,9 +1322,13 @@ async function handleCommand(
         response = 'Invalid session ID format. Expected a 32-64 character hex/UUID string.';
         break;
       }
+      const stopped = abortActiveTaskForChat(msg.address);
       const binding = router.bindToSession(msg.address, args);
       if (binding) {
-        response = `Bound to session <code>${args.slice(0, 8)}...</code>`;
+        response = [
+          `Bound to session <code>${args.slice(0, 8)}...</code>`,
+          stopped ? '<i>Stopped previous running task.</i>' : '',
+        ].filter(Boolean).join('\n');
       } else {
         response = 'Session not found.';
       }
@@ -1331,10 +1372,16 @@ async function handleCommand(
         : null;
 
       const st = getState();
-      const isRunningTask = st.activeTasks.has(binding.codepilotSessionId);
-      const startedAtMs = st.activeTaskStartedAt.get(binding.codepilotSessionId) ?? null;
+      const activeChatTask = getActiveTaskForChat(msg.address);
+      const isRunningTask = Boolean(activeChatTask);
+      const startedAtMs = activeChatTask
+        ? (activeChatTask.sessionId === binding.codepilotSessionId
+          ? st.activeTaskStartedAt.get(binding.codepilotSessionId) ?? activeChatTask.startedAt
+          : activeChatTask.startedAt)
+        : null;
       const runningForMs = (isRunningTask && startedAtMs) ? (Date.now() - startedAtMs) : null;
-      const hasSessionLock = st.sessionLocks.has(binding.codepilotSessionId);
+      const activeTaskSessionId = activeChatTask?.sessionId ?? binding.codepilotSessionId;
+      const hasSessionLock = st.sessionLocks.has(activeTaskSessionId);
 
       const turnTimeoutSetting = parsePositiveInt(store.getSetting('bridge_codex_turn_timeout_ms'));
       const idleTimeoutSetting = parsePositiveInt(store.getSetting('bridge_codex_turn_idle_timeout_ms'));
@@ -1344,7 +1391,7 @@ async function handleCommand(
       const effectiveQueueTimeoutMs = computeSessionQueueTimeoutMs(queueTimeoutSetting, turnTimeoutSetting);
 
       // Build recent tool calls section
-      const recentTools = st.recentToolCalls.get(binding.codepilotSessionId) || [];
+      const recentTools = st.recentToolCalls.get(activeTaskSessionId) || [];
       const toolLines: string[] = [];
       if (recentTools.length > 0) {
         toolLines.push('', '<b>Recent tools:</b>');
@@ -1363,6 +1410,9 @@ async function handleCommand(
         '<b>Bridge Status</b>',
         '',
         `Session: <code>${binding.codepilotSessionId.slice(0, 8)}...</code>`,
+        ...(activeChatTask && activeChatTask.sessionId !== binding.codepilotSessionId
+          ? [`Active task session: <code>${activeChatTask.sessionId.slice(0, 8)}...</code>`]
+          : []),
         `CWD: <code>${escapeHtml(binding.workingDirectory || '~')}</code>`,
         `Mode: <b>${binding.mode}</b>`,
         `Model: <code>${escapeHtml(effectiveModel)}</code>`,
@@ -1415,13 +1465,14 @@ async function handleCommand(
     }
 
     case '/stop': {
-      const binding = router.resolve(msg.address);
-      const st = getState();
-      const taskAbort = st.activeTasks.get(binding.codepilotSessionId);
-      if (taskAbort) {
-        taskAbort.abort();
-        st.activeTasks.delete(binding.codepilotSessionId);
-        st.activeTaskStartedAt.delete(binding.codepilotSessionId);
+      const activeChatTask = getActiveTaskForChat(msg.address);
+      if (activeChatTask) {
+        activeChatTask.abort.abort();
+        // Eagerly clear chat-level tracking so /status immediately reflects idle.
+        // Session-level entries (activeTasks, activeTaskStartedAt) are cleaned up
+        // by clearActiveTask() in handleMessage's finally block.
+        const chatKey = getChatTaskKey(msg.address);
+        getState().activeTasksByChat.delete(chatKey);
         response = 'Stopping current task...';
       } else {
         response = 'No task is currently running.';
