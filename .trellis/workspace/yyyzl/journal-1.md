@@ -844,3 +844,56 @@ P1+TP1 批次实施 + 跨 AI 审核修复。包含 5 个代码安全网补全 + 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 18: PatchApplier 测试对齐 + P2 决策
+
+**Date**: 2026-03-22
+**Task**: PatchApplier 测试对齐 + P2 决策
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+## 本次工作
+
+| 项目 | 内容 |
+|------|------|
+| PatchApplier 测试修复 | 修复 5 个与代码行为不一致的旧测试（追加→丢弃、level 不匹配→Fallback 2 匹配） |
+| 新增测试覆盖 | +3 个测试：case-insensitive 回退、ambiguous 拒绝、混合 patch |
+| P2 决策 | PatchApplier 相关的 P2 项（M-NEW-4 + ISS-002）已在 edc92f1 中完成，无需单独开 P2 |
+
+## 测试结果
+
+- 修复前：7 pass / 5 fail (12 tests)
+- 修复后：15 pass / 0 fail (15 tests)
+
+## 修改的文件
+
+- `src/__tests__/unit/workflow-patch-applier.test.ts` — 重写测试对齐新行为 (**未提交，pending commit**)
+
+## 关键决策
+
+- P2 不再单独开任务：核心价值（PatchApplier 两个 fix）已作为 P1 副产物完成
+- 建议下一步：用修好的工作流跑端到端 spec-review 验证
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `edc92f1` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

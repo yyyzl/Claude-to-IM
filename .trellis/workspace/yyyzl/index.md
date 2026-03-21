@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 17
+- **Total Sessions**: 18
 - **Last Active**: 2026-03-22
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~846 | Active |
+| `journal-1.md` | ~899 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits |
 |---|------|-------|---------|
+| 18 | 2026-03-22 | PatchApplier 测试对齐 + P2 决策 | `edc92f1` |
 | 17 | 2026-03-22 | Workflow P1+TP1 + cross-AI review fixes | `c07c85c`, `c8c51b2` |
 | 16 | 2026-03-22 | Workflow Engine P0+TP0: parse safety net + prompt optimization | `0ba2ea4`, `843eb5e` |
 | 15 | 2026-03-21 | fix(bridge): /stop 无法终止跨 session 的活跃任务 | `cfe2f4b` |
