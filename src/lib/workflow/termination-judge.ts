@@ -58,21 +58,24 @@ export class TerminationJudge {
     // ── Check 1: LGTM assessment ──────────────────────────────
     // If Codex says "lgtm", check whether there are still unresolved issues.
     if (latestOutput.overall_assessment === 'lgtm') {
-      const hasOpenOrAccepted = ledger.issues.some(
-        (issue) => issue.status === 'open' || issue.status === 'accepted',
+      const hasUnresolved = ledger.issues.some(
+        (issue) =>
+          issue.status === 'open' ||
+          issue.status === 'accepted' ||
+          issue.status === 'deferred',
       );
 
-      if (!hasOpenOrAccepted) {
+      if (!hasUnresolved) {
         return {
           reason: 'lgtm',
           action: 'terminate',
           details:
-            `Codex assessed LGTM with no open or accepted issues remaining. ` +
+            `Codex assessed LGTM with no unresolved issues remaining (open/accepted/deferred). ` +
             `Workflow completed successfully after ${round} round(s).`,
         };
       }
 
-      // Open/accepted issues exist — continue so Claude can address them.
+      // Unresolved issues exist (including deferred) — continue so Claude can address them.
       return null;
     }
 

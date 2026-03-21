@@ -667,11 +667,15 @@ export class WorkflowEngine {
               round,
               errors: validationResult.errors,
             });
-            // Filter out decisions with unknown issue_ids or invalid actions (graceful degradation)
+            // Filter out invalid decisions: unknown issue_ids, invalid actions, duplicates (graceful degradation)
             const knownIds = new Set(ledger.issues.map((i) => i.id));
-            claudeOutput.decisions = claudeOutput.decisions.filter(
-              (d) => knownIds.has(d.issue_id) && VALID_ACTIONS_SET.has(d.action),
-            );
+            const seenIds = new Set<string>();
+            claudeOutput.decisions = claudeOutput.decisions.filter((d) => {
+              if (!knownIds.has(d.issue_id) || !VALID_ACTIONS_SET.has(d.action)) return false;
+              if (seenIds.has(d.issue_id)) return false; // Remove duplicates (keep first)
+              seenIds.add(d.issue_id);
+              return true;
+            });
           }
         }
 
@@ -900,18 +904,22 @@ export class WorkflowEngine {
         }
 
         // Zero-progress safety net (P0 fix: prevent wasting API calls)
-        const thisRoundAccepted = ledger.issues.filter(
-          (i) => i.decided_by === 'claude' && i.round === round &&
-            (i.status === 'accepted' || i.status === 'resolved'),
-        ).length;
+        // Count issues that were decided by Claude THIS round (not first-raised round).
+        // An issue's .round is the round it was first raised; we need to check
+        // decision_reason presence + resolved_in_round to detect this-round activity.
         const thisRoundResolved = ledger.issues.filter(
           (i) => i.resolved_in_round === round,
+        ).length;
+        const thisRoundDecided = ledger.issues.filter(
+          (i) => i.decided_by === 'claude' &&
+            (i.status === 'accepted' || i.status === 'rejected' || i.status === 'deferred') &&
+            i.decision_reason != null,
         ).length;
 
         const currentMetaZP = await this.store.getMeta(runId);
         const ts = currentMetaZP?.termination_state ?? { consecutive_parse_failures: 0, zero_progress_rounds: 0 };
 
-        if (thisRoundAccepted === 0 && thisRoundResolved === 0) {
+        if (thisRoundDecided === 0 && thisRoundResolved === 0) {
           const zeroProgressCount = ts.zero_progress_rounds + 1;
           await this.store.updateMeta(runId, {
             termination_state: { ...ts, zero_progress_rounds: zeroProgressCount },

@@ -72,7 +72,27 @@ describe('TerminationJudge', () => {
   // ── 1. LGTM + no open/accepted issues → terminate (lgtm) ─────
 
   describe('Check 1: LGTM assessment', () => {
-    it('terminates with reason "lgtm" when LGTM and no open/accepted issues', () => {
+    it('terminates with reason "lgtm" when LGTM and no unresolved issues (open/accepted/deferred)', () => {
+      const result = judge.judge({
+        round: 2,
+        config: createDefaultConfig(),
+        ledger: createLedger([
+          createIssue({ id: 'ISS-001', status: 'resolved' }),
+          createIssue({ id: 'ISS-002', status: 'rejected' }),
+        ]),
+        latestOutput: createCodexOutput({ overall_assessment: 'lgtm' }),
+        previousRoundHadNewHighCritical: false,
+      });
+
+      assert.ok(result, 'Expected a TerminationResult, got null');
+      assert.equal(result.reason, 'lgtm');
+      assert.equal(result.action, 'terminate');
+      assert.ok(result.details.includes('LGTM'));
+      assert.ok(result.details.includes('2 round(s)'));
+    });
+
+    it('returns null when LGTM but deferred issues remain', () => {
+      // Deferred issues count as unresolved — LGTM should NOT terminate
       const result = judge.judge({
         round: 2,
         config: createDefaultConfig(),
@@ -84,11 +104,7 @@ describe('TerminationJudge', () => {
         previousRoundHadNewHighCritical: false,
       });
 
-      assert.ok(result, 'Expected a TerminationResult, got null');
-      assert.equal(result.reason, 'lgtm');
-      assert.equal(result.action, 'terminate');
-      assert.ok(result.details.includes('LGTM'));
-      assert.ok(result.details.includes('2 round(s)'));
+      assert.equal(result, null, 'Should continue when deferred issues exist');
     });
 
     // ── 2. LGTM with open issues → null (continue to Claude) ───
