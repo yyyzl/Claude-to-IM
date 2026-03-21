@@ -64,7 +64,7 @@ export type WorkflowEventType =
   | 'issue_created' | 'issue_status_changed'
   | 'issue_matching_completed'
   | 'spec_updated' | 'plan_updated'
-  | 'patch_apply_failed'
+  | 'patch_apply_failed' | 'patch_extraction_failed'
   | 'resolves_issues_missing'
   | 'termination_triggered' | 'human_review_requested'
   | 'workflow_completed' | 'workflow_failed' | 'workflow_resumed';

@@ -47,7 +47,7 @@ A single JSON object with decisions only (NO patch content inside JSON):
 After the JSON block, write patches using markers:
 
 --- SPEC PATCH ---
-## 6.5 TerminationJudge
+### 6.5 TerminationJudge
 (full replacement content for this section)
 --- END SPEC PATCH ---
 
@@ -62,7 +62,9 @@ After the JSON block, write patches using markers:
 2. When action="accept" AND you provide a patch, you MUST include "resolves_issues".
    If omitted, accepted issues will NOT be auto-resolved (safety measure).
 3. Use "accept_and_resolve" for issues valid but needing no spec/plan change.
-4. Patch sections must include their heading (matching original level exactly).
+4. **CRITICAL — Heading level**: Each patch section heading MUST use the EXACT same
+   heading level (`#`/`##`/`###`/`####`) as the original document. Look at the spec/plan
+   provided above and copy the heading format exactly. Wrong level = patch rejected.
 5. Each patch section should be MINIMAL — only the changed section, not entire chapters.
 6. Keep patches under 200 lines total. If more needed, defer remaining issues.
 

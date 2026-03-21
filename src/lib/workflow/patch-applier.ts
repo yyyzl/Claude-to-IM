@@ -6,8 +6,8 @@
  * content with the patch content up to the next heading of the same
  * or higher level.
  *
- * Unmatched patch sections are appended to the end of the document
- * and reported in {@link PatchResult.failedSections}.
+ * Unmatched patch sections are **not** appended to the document —
+ * they are only reported in {@link PatchResult.failedSections}.
  *
  * @module workflow/patch-applier
  */
@@ -52,8 +52,8 @@ export class PatchApplier {
    *
    * - **Match found**: the section content (from heading to next same-or-higher
    *   level heading, or EOF) is replaced with the patch section content.
-   * - **No match**: the patch section is appended at the end of the document,
-   *   and the heading is recorded in `failedSections`.
+   * - **No match**: the heading is recorded in `failedSections` and the
+   *   patch section is **discarded** (not appended) to prevent document pollution.
    *
    * @param currentDoc - The current document content to patch.
    * @param patch - The patch content containing replacement sections.
@@ -84,10 +84,30 @@ export class PatchApplier {
     for (const ps of patchSections) {
       const patchContent = patch.slice(ps.startIdx, ps.endIdx);
 
-      // Find matching section in the current document
-      const match = docSections.find(
+      // 1. Exact match: same level + same text (case-sensitive)
+      let match = docSections.find(
         (ds) => ds.level === ps.level && ds.heading.trim() === ps.heading.trim(),
       );
+
+      // 2. Fallback: same level + case-insensitive text
+      if (!match) {
+        match = docSections.find(
+          (ds) =>
+            ds.level === ps.level &&
+            ds.heading.trim().toLowerCase() === ps.heading.trim().toLowerCase(),
+        );
+      }
+
+      // 3. Fallback: text-only match ignoring heading level (## vs ###)
+      //    Only if exactly ONE candidate matches — ambiguous matches are rejected
+      if (!match) {
+        const textCandidates = docSections.filter(
+          (ds) => ds.heading.trim().toLowerCase() === ps.heading.trim().toLowerCase(),
+        );
+        if (textCandidates.length === 1) {
+          match = textCandidates[0];
+        }
+      }
 
       replacements.push({
         patchSection: ps,
@@ -116,17 +136,10 @@ export class PatchApplier {
         result.slice(docSection!.endIdx);
     }
 
-    // Append unmatched sections at the end
-    for (const { patchSection, patchContent } of unmatched) {
+    // Record unmatched sections as failures — do NOT append to document
+    for (const { patchSection } of unmatched) {
       const heading = formatHeading(patchSection.level, patchSection.heading);
       failedSections.push(heading);
-
-      // Ensure there is a blank line before appending
-      if (result.length > 0 && !result.endsWith('\n\n')) {
-        result += result.endsWith('\n') ? '\n' : '\n\n';
-      }
-
-      result += patchContent;
     }
 
     return { merged: result, appliedSections, failedSections };

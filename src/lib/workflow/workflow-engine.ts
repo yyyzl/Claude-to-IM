@@ -726,6 +726,23 @@ export class WorkflowEngine {
         // Apply spec patch — track whether any sections failed
         let hasPatchFailure = false;
 
+        // Guard: Claude claims patch exists but extraction failed → treat as patch failure
+        // Prevents false-positive resolves when markers don't match or extraction breaks
+        if (claudeOutput?.spec_updated && !patches.specPatch) {
+          hasPatchFailure = true;
+          await this.emit(runId, round, 'patch_extraction_failed', {
+            target: 'spec',
+            reason: 'Claude reported spec_updated=true but no spec patch could be extracted',
+          });
+        }
+        if (claudeOutput?.plan_updated && !patches.planPatch) {
+          hasPatchFailure = true;
+          await this.emit(runId, round, 'patch_extraction_failed', {
+            target: 'plan',
+            reason: 'Claude reported plan_updated=true but no plan patch could be extracted',
+          });
+        }
+
         if (patches.specPatch) {
           const currentSpec = await this.store.loadSpec(runId);
           if (currentSpec) {
