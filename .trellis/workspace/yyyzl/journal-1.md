@@ -394,3 +394,35 @@ F:/Git/status 增加最近工具调用展示（名称+相对时间），onToolEv
 ### Next Steps
 
 - None - task complete
+
+
+## Session 10: Workflow Engine 改进: system prompt + 模型可配置 + 超时调优
+
+**Date**: 2026-03-21
+**Task**: Workflow Engine 改进: system prompt + 模型可配置 + 超时调优
+
+### Summary
+
+分析 /workflow TS 引擎架构后实施 3 个改进：(1) Claude 决策加 system prompt（Technical Decision Authority 角色 + 深度判断框架），(2) 模型版本可配置（claude_model/codex_backend + --model/--codex-backend CLI 参数），(3) 超时从 3min → 90min + max_tokens 从 4096 → 200k。修改 7 文件 + 新建 1 模板，全部 40 测试通过。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fe0d2e3` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
