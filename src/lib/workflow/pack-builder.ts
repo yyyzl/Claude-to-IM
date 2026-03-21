@@ -20,6 +20,8 @@ import type {
   Finding,
   WorkflowConfig,
   RejectedIssueSummary,
+  ResolvedIssueSummary,
+  AcceptedIssueSummary,
   RoundData,
 } from './types.js';
 import { SPEC_REVIEW_OVERRIDES } from './types.js';
@@ -86,6 +88,10 @@ export class PackBuilder {
     // Build rejected issue summaries
     const rejectedIssues = this.buildRejectedIssues(ledger.issues);
 
+    // Build resolved and accepted issue summaries (for dedup context)
+    const resolvedIssues = this.buildResolvedIssues(ledger.issues);
+    const acceptedIssues = this.buildAcceptedIssues(ledger.issues);
+
     // Generate round summary
     const roundSummary = this.generateRoundSummary(round, ledger);
 
@@ -95,13 +101,15 @@ export class PackBuilder {
     // Attempt context compression if conditions are met.
     // When triggered, the compressor returns a condensed version of spec+plan
     // that fits within the Codex context window budget.
-    const compressed = this.tryCompress(spec, plan, ledger, round, config);
+    const compressed = await this.tryCompress(runId, spec, plan, ledger, round, config);
 
     return {
       spec: compressed.spec,
       plan: compressed.plan,
       unresolved_issues: unresolvedIssues,
       rejected_issues: rejectedIssues,
+      resolved_issues: resolvedIssues,
+      accepted_issues: acceptedIssues,
       context_files: contextFiles,
       round_summary: roundSummary,
       round,
@@ -253,6 +261,40 @@ export class PackBuilder {
       }));
   }
 
+  /**
+   * Build resolved issue summaries for dedup context.
+   *
+   * Only includes issues with status `resolved`.
+   * Each summary contains: id, description, resolved_in_round, severity.
+   */
+  private buildResolvedIssues(issues: Issue[]): ResolvedIssueSummary[] {
+    return issues
+      .filter((i) => i.status === 'resolved')
+      .map((i) => ({
+        id: i.id,
+        description: i.description,
+        resolved_in_round: i.resolved_in_round ?? i.round,
+        severity: i.severity,
+      }));
+  }
+
+  /**
+   * Build accepted issue summaries for dedup context.
+   *
+   * Only includes issues with status `accepted`.
+   * Each summary contains: id, description, round, severity.
+   */
+  private buildAcceptedIssues(issues: Issue[]): AcceptedIssueSummary[] {
+    return issues
+      .filter((i) => i.status === 'accepted')
+      .map((i) => ({
+        id: i.id,
+        description: i.description,
+        round: i.round,
+        severity: i.severity,
+      }));
+  }
+
   // ── Private: round summary generation ───────────────────────────
 
   /**
@@ -320,13 +362,14 @@ export class PackBuilder {
    *
    * @returns `{ spec, plan }` — possibly compressed.
    */
-  private tryCompress(
+  private async tryCompress(
+    runId: string,
     spec: string,
     plan: string,
     ledger: IssueLedger,
     round: number,
     config: WorkflowConfig,
-  ): { spec: string; plan: string } {
+  ): Promise<{ spec: string; plan: string }> {
     const windowTokens = config.codex_context_window_tokens;
     const estimatedTokens = estimateTokens(spec + plan);
     const threshold = windowTokens * SPEC_REVIEW_OVERRIDES.context_compress_threshold;
@@ -339,11 +382,25 @@ export class PackBuilder {
       return { spec, plan };
     }
 
+    // Load historical rounds data for the compressor (H-NEW-3 fix)
+    const rounds: RoundData[] = [];
+    for (let r = 1; r < round; r++) {
+      const packJson = await this.store.loadRoundArtifact(runId, r, 'pack.json');
+      const codexOutput = await this.store.loadRoundArtifact(runId, r, 'codex-review.md');
+      const claudeDecision = await this.store.loadRoundArtifact(runId, r, 'claude-raw.md');
+      rounds.push({
+        round: r,
+        packJson: packJson ?? undefined,
+        codexOutput: codexOutput ?? undefined,
+        claudeDecision: claudeDecision ?? undefined,
+      });
+    }
+
     const result = this.compressor.compress({
       spec,
       plan,
       ledger,
-      rounds: [], // Rounds data would be loaded async; empty for now
+      rounds,
       currentRound: round,
       windowTokens,
     });

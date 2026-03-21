@@ -135,8 +135,19 @@ export class IssueMatcher {
       const matched = this.match(finding, ledger.issues);
 
       if (matched !== null) {
+        // Idempotency guard: skip if already processed in this round
+        if (matched.last_processed_round === round) {
+          matchedIssues.push({
+            issueId: matched.id,
+            finding,
+            isNew: false,
+          });
+          continue;
+        }
+
         // Finding matched an existing issue — apply status-dependent logic
         this.handleMatchedIssue(matched);
+        matched.last_processed_round = round;
 
         matchedIssues.push({
           issueId: matched.id,
@@ -173,6 +184,7 @@ export class IssueMatcher {
           evidence: finding.evidence,
           status: 'open',
           repeat_count: 0,
+          last_processed_round: round,
         };
 
         nextSeq++;

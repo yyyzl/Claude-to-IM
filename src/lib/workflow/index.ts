@@ -23,6 +23,7 @@ export { ContextCompressor } from './context-compressor.js';
 export { JsonParser } from './json-parser.js';
 export { IssueMatcher } from './issue-matcher.js';
 export { PatchApplier } from './patch-applier.js';
+export { DecisionValidator } from './decision-validator.js';
 
 // Local imports for the factory function (re-exports above only forward
 // symbols; they do NOT bring them into the current module scope).
@@ -36,10 +37,11 @@ import { ContextCompressor as _ContextCompressor } from './context-compressor.js
 import { JsonParser as _JsonParser } from './json-parser.js';
 import { IssueMatcher as _IssueMatcher } from './issue-matcher.js';
 import { PatchApplier as _PatchApplier } from './patch-applier.js';
+import { DecisionValidator as _DecisionValidator } from './decision-validator.js';
 
 /**
  * Factory function: create a fully-wired WorkflowEngine for Spec-Review.
- * All 8 dependencies are created and wired together.
+ * All 9 dependencies are created and wired together.
  * ContextCompressor is injected into PackBuilder (not directly into engine).
  */
 export function createSpecReviewEngine(basePath?: string): _WorkflowEngine {
@@ -52,9 +54,11 @@ export function createSpecReviewEngine(basePath?: string): _WorkflowEngine {
   const jsonParser = new _JsonParser();
   const issueMatcher = new _IssueMatcher();
   const patchApplier = new _PatchApplier();
+  const decisionValidator = new _DecisionValidator();
 
   return new _WorkflowEngine(
     store, packBuilder, promptAssembler, modelInvoker,
     terminationJudge, jsonParser, issueMatcher, patchApplier,
+    decisionValidator,
   );
 }

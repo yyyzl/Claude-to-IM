@@ -34,11 +34,23 @@ If your findings are 80%+ high/critical, you are likely over-calibrating. Step b
 ## Current Plan
 {{plan}}
 
+## Already Resolved Issues (DO NOT re-raise these — they have been fixed)
+{{resolved_issues}}
+
+## Previously Accepted (being addressed — DO NOT re-raise these)
+{{accepted_issues}}
+
 ## Unresolved Issues (focus here)
 {{unresolved_issues}}
 
 ## Previously Rejected (do not re-raise without new evidence)
 {{rejected_issues}}
+
+## DEDUP RULES (CRITICAL — violations will be automatically discarded)
+1. Before raising ANY finding, check ALL sections above (Resolved, Accepted, Unresolved, Rejected)
+2. If your finding covers the SAME CONCERN as any existing issue (even if worded differently), DO NOT raise it
+3. Your value comes from finding genuinely NEW problems, not restating known ones
+4. A finding that duplicates an existing issue adds zero value and wastes review budget
 
 ## Previous Rounds Summary
 {{round_summary}}

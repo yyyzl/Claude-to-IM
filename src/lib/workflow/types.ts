@@ -60,6 +60,7 @@ export type WorkflowEventType =
   | 'claude_decision_started' | 'claude_decision_completed'
   | 'claude_decision_timeout' | 'claude_decision_retried'
   | 'claude_parse_error'
+  | 'decision_validation_failed'
   | 'issue_created' | 'issue_status_changed'
   | 'issue_matching_completed'
   | 'spec_updated' | 'plan_updated'
@@ -96,6 +97,30 @@ export interface RejectedIssueSummary {
   round_rejected: number;
 }
 
+/** Summary of a resolved issue shown to Codex for dedup purposes. */
+export interface ResolvedIssueSummary {
+  /** Issue identifier. */
+  id: string;
+  /** Brief description of the issue. */
+  description: string;
+  /** Round in which the issue was resolved. */
+  resolved_in_round: number;
+  /** Severity level. */
+  severity: Severity;
+}
+
+/** Summary of an accepted issue shown to Codex for dedup purposes. */
+export interface AcceptedIssueSummary {
+  /** Issue identifier. */
+  id: string;
+  /** Brief description of the issue. */
+  description: string;
+  /** Round in which the issue was first raised. */
+  round: number;
+  /** Severity level. */
+  severity: Severity;
+}
+
 /**
  * The "review pack" sent to Codex at the start of each round.
  *
@@ -111,6 +136,10 @@ export interface SpecReviewPack {
   unresolved_issues: Issue[];
   /** Issues that were explicitly rejected (for context, to avoid re-raising). */
   rejected_issues: RejectedIssueSummary[];
+  /** Issues that have been resolved in previous rounds (for dedup context). */
+  resolved_issues?: ResolvedIssueSummary[];
+  /** Issues that have been accepted and are being addressed (for dedup context). */
+  accepted_issues?: AcceptedIssueSummary[];
   /** Additional files provided as context for the review. */
   context_files: ContextFile[];
   /** Natural-language summary of the previous round's outcomes. */
@@ -162,6 +191,8 @@ export interface Issue {
   resolved_in_round?: number;
   /** Number of times this issue has been re-raised across rounds. */
   repeat_count: number;
+  /** Round in which IssueMatcher last processed this issue (idempotency guard). */
+  last_processed_round?: number;
 }
 
 // === Codex Output Types ===

@@ -29,6 +29,7 @@ import { JsonParser } from '../../lib/workflow/json-parser.js';
 import { IssueMatcher } from '../../lib/workflow/issue-matcher.js';
 import { PatchApplier } from '../../lib/workflow/patch-applier.js';
 import { ContextCompressor } from '../../lib/workflow/context-compressor.js';
+import { DecisionValidator } from '../../lib/workflow/decision-validator.js';
 import type {
   WorkflowMeta,
   WorkflowEvent,
@@ -233,6 +234,7 @@ function buildEngine(
   const jsonParser = new JsonParser();
   const issueMatcher = new IssueMatcher();
   const patchApplier = new PatchApplier();
+  const decisionValidator = new DecisionValidator();
 
   return new WorkflowEngine(
     store,
@@ -243,6 +245,7 @@ function buildEngine(
     jsonParser,
     issueMatcher,
     patchApplier,
+    decisionValidator,
   );
 }
 

@@ -24,6 +24,7 @@ import { TerminationJudge } from './termination-judge.js';
 import { JsonParser } from './json-parser.js';
 import { IssueMatcher } from './issue-matcher.js';
 import { PatchApplier } from './patch-applier.js';
+import { DecisionValidator } from './decision-validator.js';
 import {
   TimeoutError,
   AbortError,
@@ -39,8 +40,15 @@ import {
   type CodexReviewOutput,
   type ClaudeDecisionOutput,
   type TerminationResult,
+  type TerminationReason,
   type ProcessFindingsResult,
+  type DecisionAction,
 } from './types.js';
+
+// ── Decision validation constants ────────────────────────────────
+
+/** Set of valid decision actions for quick lookup during filtering. */
+const VALID_ACTIONS_SET = new Set<DecisionAction>(['accept', 'reject', 'defer', 'accept_and_resolve']);
 
 // ── Run ID generation ────────────────────────────────────────────
 
@@ -73,6 +81,7 @@ export class WorkflowEngine {
     private readonly jsonParser: JsonParser,
     private readonly issueMatcher: IssueMatcher,
     private readonly patchApplier: PatchApplier,
+    private readonly decisionValidator: DecisionValidator,
   ) {}
 
   // ── Public API ──────────────────────────────────────────────────
@@ -642,7 +651,32 @@ export class WorkflowEngine {
         // Extract patches (works even if claudeOutput is null -- falls back to markers)
         const patches = this.jsonParser.extractPatches(claudeRaw, claudeOutput);
 
+        // Validate decisions before processing (H-NEW-4)
+        if (claudeOutput?.decisions) {
+          const validationResult = this.decisionValidator.validate(
+            claudeOutput.decisions,
+            claudeOutput.resolves_issues,
+            ledger,
+          );
+          if (!validationResult.valid) {
+            console.warn(
+              `[WorkflowEngine] Decision validation warnings (run=${runId}, round=${round}):`,
+              validationResult.errors,
+            );
+            await this.emit(runId, round, 'decision_validation_failed', {
+              round,
+              errors: validationResult.errors,
+            });
+            // Filter out decisions with unknown issue_ids or invalid actions (graceful degradation)
+            const knownIds = new Set(ledger.issues.map((i) => i.id));
+            claudeOutput.decisions = claudeOutput.decisions.filter(
+              (d) => knownIds.has(d.issue_id) && VALID_ACTIONS_SET.has(d.action),
+            );
+          }
+        }
+
         // Process decisions -> update ledger
+        const pendingAcceptAndResolve: string[] = [];
         if (claudeOutput?.decisions) {
           for (const decision of claudeOutput.decisions) {
             const issue = ledger.issues.find((i) => i.id === decision.issue_id);
@@ -653,8 +687,9 @@ export class WorkflowEngine {
                 issue.status = 'accepted';
                 break;
               case 'accept_and_resolve':
-                issue.status = 'resolved';
-                issue.resolved_in_round = round;
+                // Defer resolution until after patch application (H-NEW-2 fix)
+                issue.status = 'accepted';  // Temporarily set as accepted
+                pendingAcceptAndResolve.push(issue.id);
                 break;
               case 'reject':
                 issue.status = 'rejected';
@@ -662,6 +697,16 @@ export class WorkflowEngine {
               case 'defer':
                 issue.status = 'deferred';
                 break;
+              default:
+                console.warn(
+                  `[WorkflowEngine] Unknown decision action '${decision.action}' for issue ${decision.issue_id}. Skipping.`,
+                );
+                await this.emit(runId, round, 'claude_parse_error', {
+                  round,
+                  issue_id: decision.issue_id,
+                  unknown_action: decision.action,
+                });
+                continue; // Skip decided_by/decision_reason assignment
             }
             issue.decided_by = 'claude';
             issue.decision_reason = decision.reason;
@@ -713,6 +758,32 @@ export class WorkflowEngine {
                 failed_sections: result.failedSections,
               });
             }
+          }
+        }
+
+        // Finalize accept_and_resolve decisions based on patch results (H-NEW-2)
+        for (const issueId of pendingAcceptAndResolve) {
+          const issue = ledger.issues.find((i) => i.id === issueId);
+          if (!issue) continue;
+          if (hasPatchFailure) {
+            // Patch failed — keep as accepted, do not auto-resolve
+            console.warn(
+              `[WorkflowEngine] accept_and_resolve for ${issueId} downgraded to accepted due to patch failure`,
+            );
+            await this.emit(runId, round, 'issue_status_changed', {
+              issue_id: issueId,
+              new_status: 'accepted',
+              action: 'accept_and_resolve_downgraded',
+              reason: 'patch_apply_failed',
+            });
+          } else {
+            issue.status = 'resolved';
+            issue.resolved_in_round = round;
+            await this.emit(runId, round, 'issue_status_changed', {
+              issue_id: issueId,
+              new_status: 'resolved',
+              action: 'accept_and_resolve',
+            });
           }
         }
 
@@ -947,6 +1018,17 @@ export class WorkflowEngine {
     round: number,
     reason: string,
   ): Promise<void> {
+    // Check auto_terminate config — if disabled, pause for human instead
+    const meta = await this.store.getMeta(runId);
+    if (meta && !meta.config.auto_terminate) {
+      await this.pauseForHuman(runId, round, {
+        reason: reason as TerminationReason,
+        action: 'pause_for_human',
+        details: `Termination condition '${reason}' met, but auto_terminate is disabled. Pausing for human review.`,
+      });
+      return;
+    }
+
     await this.emit(runId, round, 'termination_triggered', { reason, round });
 
     // Load ledger for final summary statistics

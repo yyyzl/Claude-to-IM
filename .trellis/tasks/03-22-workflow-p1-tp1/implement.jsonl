@@ -1,0 +1,13 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": "src/lib/workflow/workflow-engine.ts", "reason": "H-NEW-2 + switch default + DecisionValidator integration"}
+{"file": "src/lib/workflow/types.ts", "reason": "Issue.last_processed_round + SpecReviewPack resolved/accepted"}
+{"file": "src/lib/workflow/pack-builder.ts", "reason": "H-NEW-3 rounds + T3 resolved/accepted issues"}
+{"file": "src/lib/workflow/context-compressor.ts", "reason": "RoundData loading reference"}
+{"file": "src/lib/workflow/issue-matcher.ts", "reason": "last_processed_round idempotency"}
+{"file": "src/lib/workflow/termination-judge.ts", "reason": "auto_terminate + human_review_on_deadlock"}
+{"file": "src/lib/workflow/prompt-assembler.ts", "reason": "T3 resolved/accepted rendering"}
+{"file": "src/lib/workflow/index.ts", "reason": "DecisionValidator export"}
+{"file": ".claude-workflows/templates/spec-review-pack.md", "reason": "T3 dedup sections"}
+{"file": ".claude-workflows/reports/workflow-engine-deep-audit.md", "reason": "Audit reference"}
+{"file": ".claude-workflows/reports/prompt-optimization-plan.md", "reason": "Template optimization reference"}

@@ -84,12 +84,16 @@ export class TerminationJudge {
 
     if (deadlockedIssues.length > 0) {
       const ids = deadlockedIssues.map((issue) => issue.id).join(', ');
+      const action = config.human_review_on_deadlock ? 'pause_for_human' : 'terminate';
       return {
         reason: 'deadlock_detected',
-        action: 'pause_for_human',
+        action,
         details:
           `Deadlock detected: ${deadlockedIssues.length} issue(s) have been rejected ` +
-          `and re-raised 2+ times (${ids}). Human review required to break the cycle.`,
+          `and re-raised 2+ times (${ids}). ` +
+          (action === 'pause_for_human'
+            ? 'Human review required to break the cycle.'
+            : 'Terminating workflow (human_review_on_deadlock is disabled).'),
       };
     }
 

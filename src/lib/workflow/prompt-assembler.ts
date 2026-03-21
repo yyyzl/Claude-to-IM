@@ -17,6 +17,8 @@ import type {
   ClaudeDecisionInput,
   Issue,
   RejectedIssueSummary,
+  ResolvedIssueSummary,
+  AcceptedIssueSummary,
   ContextFile,
   Finding,
 } from './types.js';
@@ -74,6 +76,16 @@ export class PromptAssembler {
       result,
       'rejected_issues',
       this.renderRejectedIssues(pack.rejected_issues),
+    );
+    result = this.replacePlaceholder(
+      result,
+      'resolved_issues',
+      this.renderResolvedIssues(pack.resolved_issues ?? []),
+    );
+    result = this.replacePlaceholder(
+      result,
+      'accepted_issues',
+      this.renderAcceptedIssues(pack.accepted_issues ?? []),
     );
     result = this.replacePlaceholder(
       result,
@@ -174,6 +186,40 @@ export class PromptAssembler {
 
     return rejected
       .map((item) => `- [${item.id}] ${item.description} (rejected in round ${item.round_rejected})`)
+      .join('\n');
+  }
+
+  /**
+   * Render resolved issue summaries as a Markdown bullet list.
+   *
+   * Each resolved issue is formatted as:
+   * ```
+   * - [ISS-003] (high, resolved in R2) description
+   * ```
+   *
+   * @returns Formatted string, or `"None"` if the array is empty.
+   */
+  private renderResolvedIssues(issues: ResolvedIssueSummary[]): string {
+    if (issues.length === 0) return 'None';
+    return issues
+      .map((i) => `- [${i.id}] (${i.severity}, resolved in R${i.resolved_in_round}) ${i.description}`)
+      .join('\n');
+  }
+
+  /**
+   * Render accepted issue summaries as a Markdown bullet list.
+   *
+   * Each accepted issue is formatted as:
+   * ```
+   * - [ISS-004] (medium, raised in R1) description
+   * ```
+   *
+   * @returns Formatted string, or `"None"` if the array is empty.
+   */
+  private renderAcceptedIssues(issues: AcceptedIssueSummary[]): string {
+    if (issues.length === 0) return 'None';
+    return issues
+      .map((i) => `- [${i.id}] (${i.severity}, raised in R${i.round}) ${i.description}`)
       .join('\n');
   }
 
