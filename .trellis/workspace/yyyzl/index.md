@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 10
+- **Total Sessions**: 11
 - **Last Active**: 2026-03-21
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~428 | Active |
+| `journal-1.md` | ~460 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits |
 |---|------|-------|---------|
+| 11 | 2026-03-21 | fix(workflow): store path consistency & event message accuracy | `e418522` |
 | 10 | 2026-03-21 | Workflow Engine 改进: system prompt + 模型可配置 + 超时调优 | `fe0d2e3` |
 | 9 | 2026-03-21 | 修复飞书最终卡片展示 | `fe316e8e91f90c191485afd2afa5481df42f8f99` |
 | 8 | 2026-03-21 | feat: 实现 LLM Provider 工具调用事件转发 | `0af6d88` |

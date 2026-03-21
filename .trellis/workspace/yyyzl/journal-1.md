@@ -426,3 +426,35 @@ F:/Git/status 增加最近工具调用展示（名称+相对时间），onToolEv
 ### Next Steps
 
 - None - task complete
+
+
+## Session 11: fix(workflow): store path consistency & event message accuracy
+
+**Date**: 2026-03-21
+**Task**: fix(workflow): store path consistency & event message accuracy
+
+### Summary
+
+Fix two design defects in /workflow command: (1) unify basePath across start/resume/status so all operations read/write the same .claude-workflows directory under chat's workingDirectory; (2) correct misleading progress messages to match actual engine behavior (timeout=skip round, parse error=fallback empty output). Removed stale getWorkflowStore singleton.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e418522` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
