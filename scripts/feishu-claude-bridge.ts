@@ -28,6 +28,11 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import {
+  formatRestartStatusNotification,
+  getRestartArtifactPaths,
+  loadRestartArtifacts,
+} from "../src/lib/bridge/internal/restart-artifacts.ts";
 import { loadDotEnvFile } from "./claude-to-im-bridge/settings.ts";
 import { isClaudeToImDistStale } from "../src/lib/bridge/internal/build-freshness.ts";
 import { InMemoryPermissionGateway } from "./claude-to-im-bridge/permissions.ts";
@@ -389,8 +394,8 @@ async function main() {
     );
   }
 
-  // ── Restart notify file path (written before shutdown, read on startup) ──
-  const restartNotifyFile = path.join(control.controlDir, "restart-notify.json");
+  // ── Restart artifacts (written by /restart flow, read on startup) ──
+  const restartArtifacts = getRestartArtifactPaths(control.controlDir);
 
   bridgeContextMod.initBridgeContext({
     store,
@@ -399,40 +404,77 @@ async function main() {
     lifecycle: {
       onBridgeStart: () => console.log("[bridge-runner] Bridge starting..."),
       onBridgeStop: () => console.log("[bridge-runner] Bridge stopped."),
-      onRestartRequested: (info: { channelType: string; chatId: string }): boolean => {
-        try {
-          // 1. Write notify file so the new process can send "restart complete" message
-          safeWriteJson(restartNotifyFile, {
-            channelType: info.channelType,
-            chatId: info.chatId,
-            ts: new Date().toISOString(),
-          });
+      onRestartRequested: (info: { channelType: string; chatId: string }) => {
+        return {
+          afterReply: async () => {
+            try {
+              safeWriteJson(restartArtifacts.restartNotifyFile, {
+                channelType: info.channelType,
+                chatId: info.chatId,
+                ts: new Date().toISOString(),
+              });
+              safeUnlink(restartArtifacts.restartStatusFile);
 
-          // 2. Spawn external restart script (detached — survives this process exit)
-          const ps1Path = path.join(runnerRoot, "scripts", "restart-bridge.ps1");
-          const child = spawn("powershell.exe", [
-            "-ExecutionPolicy", "Bypass",
-            "-File", ps1Path,
-            "-ControlDir", control.controlDir,
-            "-EnvFile", envFileName,
-          ], {
-            cwd: runnerRoot,
-            detached: true,
-            stdio: "ignore",
-            windowsHide: true,
-          });
-          child.unref();
+              const ps1Path = path.join(runnerRoot, "scripts", "restart-bridge.ps1");
+              const spawned = await new Promise<boolean>((resolve) => {
+                let settled = false;
+                const finish = (value: boolean) => {
+                  if (settled) return;
+                  settled = true;
+                  resolve(value);
+                };
 
-          console.log(`[bridge-runner] Restart script spawned (ps1 pid=${child.pid})`);
+                const child = spawn("powershell.exe", [
+                  "-ExecutionPolicy", "Bypass",
+                  "-File", ps1Path,
+                  "-ControlDir", control.controlDir,
+                  "-EnvFile", envFileName,
+                ], {
+                  cwd: runnerRoot,
+                  detached: true,
+                  stdio: "ignore",
+                  windowsHide: true,
+                });
 
-          // 3. Write stop file to trigger graceful shutdown
-          safeWriteFile(control.stopFile, new Date().toISOString());
+                child.once("spawn", () => {
+                  console.log(`[bridge-runner] Restart script spawned (ps1 pid=${child.pid})`);
+                  child.unref();
+                  finish(true);
+                });
 
-          return true;
-        } catch (err) {
-          console.error("[bridge-runner] Failed to initiate restart:", err);
-          return false;
-        }
+                child.once("error", (err) => {
+                  const message = err instanceof Error ? err.message : String(err);
+                  console.error("[bridge-runner] Failed to spawn restart script:", err);
+                  safeWriteFile(
+                    restartArtifacts.restartDebugFile,
+                    `[${
+                      new Date().toISOString()
+                    }] FAIL [spawn_script] ${message}`,
+                  );
+                  safeWriteJson(restartArtifacts.restartStatusFile, {
+                    status: "failed",
+                    stage: "spawn_script",
+                    message,
+                    ts: new Date().toISOString(),
+                    debugLog: restartArtifacts.restartDebugFile,
+                    stdoutLog: restartArtifacts.stdoutLog,
+                    stderrLog: restartArtifacts.stderrLog,
+                    details: [`script=${ps1Path}`],
+                  });
+                  finish(false);
+                });
+              });
+
+              if (!spawned) {
+                return;
+              }
+
+              safeWriteFile(control.stopFile, new Date().toISOString());
+            } catch (err) {
+              console.error("[bridge-runner] Failed to initiate restart:", err);
+            }
+          },
+        };
       },
     },
   });
@@ -443,34 +485,66 @@ async function main() {
   console.log(`[bridge-runner] PID=${process.pid} PPID=${process.ppid} platform=${process.platform}`);
   console.log(`[bridge-runner] Control dir: ${control.controlDir}`);
 
-  // ── Check for restart notification (send "restart complete" if applicable) ──
-  if (fs.existsSync(restartNotifyFile)) {
-    try {
-      const notify = JSON.parse(fs.readFileSync(restartNotifyFile, "utf8"));
-      if (notify?.channelType && notify?.chatId) {
-        // Give adapters a moment to fully connect before sending
-        setTimeout(async () => {
-          try {
-            const sent = await bridgeManager.sendNotification(
-              { channelType: notify.channelType, chatId: notify.chatId },
-              `✅ Bridge 已重启成功（backend=${backend}, pid=${process.pid}）`,
-            );
-            if (sent) {
-              console.log("[bridge-runner] Restart notification sent.");
-            } else {
-              console.warn("[bridge-runner] Restart notification could not be sent (adapter not ready?).");
-            }
-          } catch (err) {
-            console.warn("[bridge-runner] Failed to send restart notification:", err);
+  // ── Check for restart artifacts (send success/failure notification if applicable) ──
+  const startupRestartArtifacts = loadRestartArtifacts(control.controlDir);
+  if (startupRestartArtifacts.notify) {
+    const notificationText = formatRestartStatusNotification({
+      backend,
+      pid: process.pid,
+      status: startupRestartArtifacts.status,
+    });
+
+    // ── Fix: 重试机制替代固定 3 秒等待 ──
+    // 飞书 WS 连接可能需要超过 3 秒才能建立，使用指数退避重试确保通知送达。
+    const RESTART_NOTIFY_ATTEMPTS = 5;
+    const RESTART_NOTIFY_DELAYS = [3000, 5000, 8000, 12000, 20000];
+    const address = {
+      channelType: startupRestartArtifacts.notify!.channelType,
+      chatId: startupRestartArtifacts.notify!.chatId,
+    };
+    let attempt = 0;
+    const tryNotify = async () => {
+      attempt++;
+      try {
+        const sent = await bridgeManager.sendNotification(address, notificationText);
+        if (sent) {
+          console.log(`[bridge-runner] Restart notification sent (attempt ${attempt}).`);
+          safeUnlink(startupRestartArtifacts.paths.restartNotifyFile);
+          if (startupRestartArtifacts.status) {
+            safeUnlink(startupRestartArtifacts.paths.restartStatusFile);
           }
-          // Clean up notify file regardless
-          safeUnlink(restartNotifyFile);
-        }, 3000);
-      } else {
-        safeUnlink(restartNotifyFile);
+          return;
+        }
+      } catch (err) {
+        console.warn(`[bridge-runner] Restart notification attempt ${attempt} failed:`, err);
       }
-    } catch {
-      safeUnlink(restartNotifyFile);
+      if (attempt < RESTART_NOTIFY_ATTEMPTS) {
+        const delay = RESTART_NOTIFY_DELAYS[attempt] ?? 20000;
+        console.log(`[bridge-runner] Retry restart notification in ${delay}ms (attempt ${attempt + 1}/${RESTART_NOTIFY_ATTEMPTS})...`);
+        setTimeout(tryNotify, delay);
+      } else {
+        console.warn(`[bridge-runner] Restart notification failed after ${RESTART_NOTIFY_ATTEMPTS} attempts, giving up.`);
+        safeUnlink(startupRestartArtifacts.paths.restartNotifyFile);
+        if (startupRestartArtifacts.status) {
+          safeUnlink(startupRestartArtifacts.paths.restartStatusFile);
+        }
+      }
+    };
+    setTimeout(tryNotify, RESTART_NOTIFY_DELAYS[0]);
+  } else {
+    if (fs.existsSync(restartArtifacts.restartNotifyFile)) {
+      console.warn("[bridge-runner] Ignoring invalid restart notify file.");
+      safeUnlink(restartArtifacts.restartNotifyFile);
+    }
+    if (startupRestartArtifacts.status) {
+      console.warn(
+        [
+          "[bridge-runner] Found restart failure status without notify target.",
+          `stage=${startupRestartArtifacts.status.stage}`,
+          `message=${startupRestartArtifacts.status.message}`,
+          startupRestartArtifacts.status.debugLog ? `debugLog=${startupRestartArtifacts.status.debugLog}` : "",
+        ].filter(Boolean).join(" "),
+      );
     }
   }
 
@@ -550,8 +624,23 @@ async function main() {
       parentProcess: parentDiag,
     });
 
+    // ── Fix: 硬超时保护 ──
+    // bridgeManager.stop() 或 llm.stop() 可能永久阻塞（如适配器连接卡住），
+    // 导致旧进程变成僵尸。设置 15 秒硬超时，超时直接 exit 保证 /restart 流程
+    // 不会因为旧进程不退出而卡住。
+    const SHUTDOWN_HARD_TIMEOUT_MS = 15_000;
+    const shutdownDeadline = setTimeout(() => {
+      console.error(`[bridge-runner] Shutdown hard timeout (${SHUTDOWN_HARD_TIMEOUT_MS}ms) reached, forcing exit.`);
+      safeUnlink(control.pidFile);
+      writeHeartbeat("stopped", { reason: `${signal}:hard_timeout` });
+      process.exit(1);
+    }, SHUTDOWN_HARD_TIMEOUT_MS);
+    shutdownDeadline.unref();
+
     try { await bridgeManager.stop(); } catch { /* ignore */ }
     try { (llmFinal as any).stop?.(); } catch { /* ignore */ }
+
+    clearTimeout(shutdownDeadline);
     safeUnlink(control.pidFile);
     writeHeartbeat("stopped", { reason: signal });
     process.exit(0);

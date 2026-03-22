@@ -245,6 +245,12 @@ export interface PermissionGateway {
 
 // ── Host Interface: Lifecycle Hooks ──────────────────────────
 
+export interface DeferredLifecycleAction {
+  afterReply?: () => void | Promise<void>;
+}
+
+export type RestartRequestResult = boolean | DeferredLifecycleAction;
+
 export interface LifecycleHooks {
   /** Called when the bridge system starts (e.g., to suppress competing polling). */
   onBridgeStart?(): void;
@@ -255,5 +261,5 @@ export interface LifecycleHooks {
    * The runner should: save notify info → spawn external restart script → write stop file.
    * Return true if the restart was initiated successfully.
    */
-  onRestartRequested?(info: { channelType: string; chatId: string }): boolean;
+  onRestartRequested?(info: { channelType: string; chatId: string }): RestartRequestResult;
 }

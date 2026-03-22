@@ -1330,6 +1330,7 @@ async function handleCommand(
   }
 
   let response = '';
+  let afterReply: (() => void | Promise<void>) | null = null;
 
   switch (command) {
     case '/start':
@@ -1570,7 +1571,10 @@ async function handleCommand(
         channelType: msg.address.channelType,
         chatId: msg.address.chatId,
       });
-      if (initiated) {
+      if (initiated && typeof initiated === 'object') {
+        afterReply = typeof initiated.afterReply === 'function' ? initiated.afterReply : null;
+        response = '♻️ 正在重启：npm install → build → restart\n请稍等，完成后会通知你。';
+      } else if (initiated) {
         response = '♻️ 正在重启：npm install → build → restart\n请稍等，完成后会通知你。';
       } else {
         response = '重启请求失败，请检查 runner 日志。';
@@ -2127,12 +2131,20 @@ async function handleCommand(
   }
 
   if (response) {
-    await deliver(adapter, {
+    const result = await deliver(adapter, {
       address: msg.address,
       text: response,
       parseMode: 'HTML',
       replyToMessageId: msg.messageId,
     });
+    if (result.ok && afterReply) {
+      await afterReply();
+    }
+    return;
+  }
+
+  if (afterReply) {
+    await afterReply();
   }
 }
 
