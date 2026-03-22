@@ -9,6 +9,7 @@ export function buildBridgeCommandHelp(): string {
     '/status - Show current status',
     '/sessions - List recent sessions',
     '/stop - Stop current session',
+    '/restart - Rebuild &amp; restart this bridge (npm install → build → restart)',
     '/git - Auto commit all changes',
     '/git help - Show /git usage',
     '/git draft - Generate commit draft (LLM)',

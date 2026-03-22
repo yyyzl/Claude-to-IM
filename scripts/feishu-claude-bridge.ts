@@ -25,7 +25,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { loadDotEnvFile } from "./claude-to-im-bridge/settings.ts";
@@ -43,6 +43,7 @@ type BridgeManagerModule = {
   start: () => Promise<void>;
   stop: () => Promise<void>;
   getStatus: () => unknown;
+  sendNotification: (address: { channelType: string; chatId: string }, text: string) => Promise<boolean>;
 };
 
 type RunnerControlFiles = {
@@ -388,6 +389,9 @@ async function main() {
     );
   }
 
+  // ── Restart notify file path (written before shutdown, read on startup) ──
+  const restartNotifyFile = path.join(control.controlDir, "restart-notify.json");
+
   bridgeContextMod.initBridgeContext({
     store,
     llm: llmFinal,
@@ -395,6 +399,41 @@ async function main() {
     lifecycle: {
       onBridgeStart: () => console.log("[bridge-runner] Bridge starting..."),
       onBridgeStop: () => console.log("[bridge-runner] Bridge stopped."),
+      onRestartRequested: (info: { channelType: string; chatId: string }): boolean => {
+        try {
+          // 1. Write notify file so the new process can send "restart complete" message
+          safeWriteJson(restartNotifyFile, {
+            channelType: info.channelType,
+            chatId: info.chatId,
+            ts: new Date().toISOString(),
+          });
+
+          // 2. Spawn external restart script (detached — survives this process exit)
+          const ps1Path = path.join(runnerRoot, "scripts", "restart-bridge.ps1");
+          const child = spawn("powershell.exe", [
+            "-ExecutionPolicy", "Bypass",
+            "-File", ps1Path,
+            "-ControlDir", control.controlDir,
+            "-EnvFile", envFileName,
+          ], {
+            cwd: runnerRoot,
+            detached: true,
+            stdio: "ignore",
+            windowsHide: true,
+          });
+          child.unref();
+
+          console.log(`[bridge-runner] Restart script spawned (ps1 pid=${child.pid})`);
+
+          // 3. Write stop file to trigger graceful shutdown
+          safeWriteFile(control.stopFile, new Date().toISOString());
+
+          return true;
+        } catch (err) {
+          console.error("[bridge-runner] Failed to initiate restart:", err);
+          return false;
+        }
+      },
     },
   });
 
@@ -403,6 +442,37 @@ async function main() {
   console.log("[bridge-runner] LLM backend:", backend);
   console.log(`[bridge-runner] PID=${process.pid} PPID=${process.ppid} platform=${process.platform}`);
   console.log(`[bridge-runner] Control dir: ${control.controlDir}`);
+
+  // ── Check for restart notification (send "restart complete" if applicable) ──
+  if (fs.existsSync(restartNotifyFile)) {
+    try {
+      const notify = JSON.parse(fs.readFileSync(restartNotifyFile, "utf8"));
+      if (notify?.channelType && notify?.chatId) {
+        // Give adapters a moment to fully connect before sending
+        setTimeout(async () => {
+          try {
+            const sent = await bridgeManager.sendNotification(
+              { channelType: notify.channelType, chatId: notify.chatId },
+              `✅ Bridge 已重启成功（backend=${backend}, pid=${process.pid}）`,
+            );
+            if (sent) {
+              console.log("[bridge-runner] Restart notification sent.");
+            } else {
+              console.warn("[bridge-runner] Restart notification could not be sent (adapter not ready?).");
+            }
+          } catch (err) {
+            console.warn("[bridge-runner] Failed to send restart notification:", err);
+          }
+          // Clean up notify file regardless
+          safeUnlink(restartNotifyFile);
+        }, 3000);
+      } else {
+        safeUnlink(restartNotifyFile);
+      }
+    } catch {
+      safeUnlink(restartNotifyFile);
+    }
+  }
 
   safeWriteFile(control.pidFile, String(process.pid));
 
