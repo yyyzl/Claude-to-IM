@@ -959,3 +959,56 @@ P1+TP1 批次实施 + 跨 AI 审核修复。包含 5 个代码安全网补全 + 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 20: Remove /restart command, replace with start/stop management
+
+**Date**: 2026-03-23
+**Task**: Remove /restart command, replace with start/stop management
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+## 变更概述
+
+移除了不可靠的 `/restart` 斜杠命令，用更简单的 `start/stop` 管理方案替代。
+
+| 类别 | 变更 |
+|------|------|
+| **移除** | `/restart` 命令处理、`DeferredLifecycleAction` 类型、`onRestartRequested` 生命周期钩子、`sendNotification()` 导出、`restart-artifacts.ts` 模块、`restart-bridge.ps1` 脚本、3 个 restart 测试文件 |
+| **新增** | 同 controlDir 单实例锁（pid 文件 + 存活检测）、定向 stop token（JSON `{ targetPid }` + 旧格式兼容）、heartbeat 加入 git commit hash 版本追踪 |
+| **重写** | `start-bridges.ps1` 升级为 start/stop 管理工具（npm install → build → 启动，优雅停止 + 超时强杀，降级机制）|
+| **新增** | `bridges.bat` 入口脚本、`bridge-runner-scripts.test.ts` 守护测试 |
+
+**统计**: 12 files changed, +255 / -977 lines
+
+**关键文件**:
+- `src/lib/bridge/bridge-manager.ts` — 移除 /restart case + sendNotification + afterReply 逻辑
+- `src/lib/bridge/host.ts` — 移除 DeferredLifecycleAction / RestartRequestResult / onRestartRequested
+- `src/lib/bridge/internal/restart-artifacts.ts` — 删除
+- `scripts/feishu-claude-bridge.ts` — 移除 restart 钩子，新增单实例锁 + 定向 stop + commit 追踪
+- `scripts/start-bridges.ps1` — 重写为 start/stop 管理脚本
+- `scripts/restart-bridge.ps1` — 删除
+- `scripts/bridges.bat` — 新建入口
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7718949` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
