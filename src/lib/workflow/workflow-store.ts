@@ -241,7 +241,15 @@ export class WorkflowStore {
     for (const line of lines) {
       const trimmed = line.trim();
       if (trimmed.length === 0) continue;
-      events.push(JSON.parse(trimmed) as WorkflowEvent);
+      try {
+        events.push(JSON.parse(trimmed) as WorkflowEvent);
+      } catch {
+        // Gracefully skip malformed lines (e.g. truncated writes from a crash).
+        // This is critical for resume() to work after an unclean shutdown.
+        console.warn(
+          `[WorkflowStore] Skipping corrupt event line: ${trimmed.substring(0, 120)}`,
+        );
+      }
     }
     return events;
   }

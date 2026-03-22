@@ -21,6 +21,7 @@ export function buildClaudePassthroughHelp(): string {
     '//fix &lt;bug描述&gt; - 修复 Bug',
     '//bugfix &lt;描述&gt; - 快速 Bug 修复工作流',
     '//refactor &lt;目标&gt; - 代码重构',
+    '//simplify - 审查近期改动，精简代码提升可读性',
     '//optimize &lt;目标&gt; - 性能优化',
     '//code &lt;需求&gt; - 多模型协作写代码',
     '//explain &lt;文件/函数&gt; - 解释代码逻辑',
