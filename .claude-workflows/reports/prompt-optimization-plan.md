@@ -17,10 +17,10 @@
 | T4 | Codex 输出尾部带非 JSON 内容 | spec-review-pack.md | **Medium** | ✅ 已修复 |
 | T5 | severity 定义模糊，Codex 偏高标 | spec-review-pack.md | **Medium** | ✅ 已修复 |
 | T6 | 缺少"已解决问题"上下文 | spec-review-pack.md | **Medium** | ✅ 已修复 |
-| T7 | round_summary 在 R1 为空 | spec-review-pack.md | **Low** | ⚠️ 未验证 |
-| T8 | round-summary.md 模板未被代码调用 | round-summary.md | **Low** | ⚠️ 未验证 |
+| T7 | round_summary 在 R1 为空 | spec-review-pack.md | **Low** | ✅ wontfix — R1 无前轮数据，空值是正确行为 |
+| T8 | round-summary.md 模板未被代码调用 | round-summary.md | **Low** | ✅ closed — 模板已删除，round_summary 由 PackBuilder 内联生成 |
 
-**总结**: 8 项中 6 项已修复，2 项 Low 级别未验证。
+**总结**: 8 项全部关闭（6 项已修复，2 项 Low 级别确认为 wontfix/closed）。
 
 ---
 
@@ -112,11 +112,15 @@
 
 ---
 
-## T7：round_summary 在 R1 为空（Low） — ⚠️ 未验证
+## T7：round_summary 在 R1 为空（Low） — ✅ wontfix
+
+R1 没有前轮数据，round_summary 为空是正确行为，不需要修复。
 
 ---
 
-## T8：round-summary.md 模板未被代码调用（Low） — ⚠️ 未验证
+## T8：round-summary.md 模板未被代码调用（Low） — ✅ closed
+
+`round-summary.md` 模板文件已在文档治理中删除（2026-03-23）。round_summary 由 `PackBuilder.buildSpecReviewPack()` 内联生成，不需要独立模板。
 
 ---
 
