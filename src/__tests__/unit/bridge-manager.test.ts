@@ -11,14 +11,12 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { initBridgeContext } from '../../lib/bridge/context';
-import { BaseChannelAdapter, registerAdapterFactory } from '../../lib/bridge/channel-adapter';
 import {
   processWithSessionLock as processWithSessionLockInternal,
   SessionQueueTimeoutError,
 } from '../../lib/bridge/internal/session-lock';
 import { computeSessionQueueTimeoutMs } from '../../lib/bridge/internal/timeouts';
 import type { BridgeStore, LifecycleHooks } from '../../lib/bridge/host';
-import type { InboundMessage, OutboundMessage, SendResult } from '../../lib/bridge/types';
 
 // ── Test the session lock mechanism directly ────────────────
 // We test the real session lock implementation (including queue timeout semantics).
@@ -176,187 +174,7 @@ describe('bridge-manager lifecycle', () => {
     assert.equal(status.running, false);
     assert.equal(status.adapters.length, 0);
   });
-
-  it('runs restart finalization after the restart acknowledgement is delivered', async () => {
-    const events: string[] = [];
-    const adapter = new RestartCommandTestAdapter(async (message) => {
-      events.push(`send:start:${message.text}`);
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      events.push('send:end');
-      return { ok: true, messageId: 'restart-reply-1' };
-    });
-
-    registerAdapterFactory(RESTART_TEST_CHANNEL, () => adapter);
-
-    initBridgeContext({
-      store: createMinimalStore({
-        remote_bridge_enabled: 'true',
-        [`bridge_${RESTART_TEST_CHANNEL}_enabled`]: 'true',
-      }),
-      llm: { streamChat: () => new ReadableStream() },
-      permissions: { resolvePendingPermission: () => false },
-      lifecycle: {
-        onRestartRequested: (() => ({
-          afterReply: async () => {
-            events.push('restart:after-reply');
-          },
-        })) as unknown as LifecycleHooks['onRestartRequested'],
-      },
-    });
-
-    const bridgeManager = await import('../../lib/bridge/bridge-manager');
-    adapter.enqueue({
-      messageId: 'restart-cmd-1',
-      address: { channelType: RESTART_TEST_CHANNEL, chatId: 'chat-1', userId: 'user-1' },
-      text: '/restart',
-      timestamp: Date.now(),
-    });
-
-    try {
-      await bridgeManager.start();
-      await waitFor(() => events.includes('restart:after-reply'));
-
-      assert.deepStrictEqual(events, [
-        'send:start:♻️ 正在重启：npm install → build → restart\n请稍等，完成后会通知你。',
-        'send:end',
-        'restart:after-reply',
-      ]);
-      assert.equal(adapter.sentMessages.length, 1);
-      assert.equal(adapter.sentMessages[0]?.replyToMessageId, 'restart-cmd-1');
-    } finally {
-      await bridgeManager.stop();
-    }
-  });
-
-  it('does not run restart finalization when the restart acknowledgement fails to send', async () => {
-    const events: string[] = [];
-    let sendCompleted = false;
-    const adapter = new RestartCommandTestAdapter(async (message) => {
-      events.push(`send:start:${message.text}`);
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      events.push('send:end');
-      sendCompleted = true;
-      return { ok: false, error: 'bad request', httpStatus: 400 } as SendResult & { httpStatus: number };
-    });
-
-    registerAdapterFactory(RESTART_TEST_CHANNEL, () => adapter);
-
-    initBridgeContext({
-      store: createMinimalStore({
-        remote_bridge_enabled: 'true',
-        [`bridge_${RESTART_TEST_CHANNEL}_enabled`]: 'true',
-      }),
-      llm: { streamChat: () => new ReadableStream() },
-      permissions: { resolvePendingPermission: () => false },
-      lifecycle: {
-        onRestartRequested: (() => ({
-          afterReply: async () => {
-            events.push('restart:after-reply');
-          },
-        })) as unknown as LifecycleHooks['onRestartRequested'],
-      },
-    });
-
-    const bridgeManager = await import('../../lib/bridge/bridge-manager');
-    adapter.enqueue({
-      messageId: 'restart-cmd-2',
-      address: { channelType: RESTART_TEST_CHANNEL, chatId: 'chat-1', userId: 'user-1' },
-      text: '/restart',
-      timestamp: Date.now(),
-    });
-
-    try {
-      await bridgeManager.start();
-      await waitFor(() => sendCompleted);
-      await new Promise((resolve) => setTimeout(resolve, 30));
-
-      assert.deepStrictEqual(events, [
-        'send:start:♻️ 正在重启：npm install → build → restart\n请稍等，完成后会通知你。',
-        'send:end',
-      ]);
-      assert.equal(adapter.sentMessages.length, 1);
-      assert.equal(adapter.sentMessages[0]?.replyToMessageId, 'restart-cmd-2');
-    } finally {
-      await bridgeManager.stop();
-    }
-  });
 });
-
-const RESTART_TEST_CHANNEL = 'restarttest';
-
-class RestartCommandTestAdapter extends BaseChannelAdapter {
-  readonly channelType = RESTART_TEST_CHANNEL;
-  readonly sentMessages: OutboundMessage[] = [];
-
-  private running = false;
-  private queue: InboundMessage[] = [];
-  private pendingConsume: ((msg: InboundMessage | null) => void) | null = null;
-
-  constructor(
-    private readonly sendImpl: (message: OutboundMessage) => Promise<SendResult>,
-  ) {
-    super();
-  }
-
-  enqueue(message: InboundMessage): void {
-    const pending = this.pendingConsume;
-    if (pending) {
-      this.pendingConsume = null;
-      pending(message);
-      return;
-    }
-    this.queue.push(message);
-  }
-
-  async start(): Promise<void> {
-    this.running = true;
-  }
-
-  async stop(): Promise<void> {
-    this.running = false;
-    const pending = this.pendingConsume;
-    this.pendingConsume = null;
-    pending?.(null);
-  }
-
-  isRunning(): boolean {
-    return this.running;
-  }
-
-  async consumeOne(): Promise<InboundMessage | null> {
-    if (this.queue.length > 0) {
-      return this.queue.shift() ?? null;
-    }
-    if (!this.running) {
-      return null;
-    }
-    return await new Promise<InboundMessage | null>((resolve) => {
-      this.pendingConsume = resolve;
-    });
-  }
-
-  async send(message: OutboundMessage): Promise<SendResult> {
-    this.sentMessages.push(message);
-    return this.sendImpl(message);
-  }
-
-  validateConfig(): string | null {
-    return null;
-  }
-
-  isAuthorized(): boolean {
-    return true;
-  }
-}
-
-async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  assert.fail('Timed out waiting for async bridge state');
-}
 
 function createMinimalStore(settings: Record<string, string> = {}): BridgeStore {
   return {

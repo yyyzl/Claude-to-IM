@@ -774,31 +774,6 @@ export function getStatus(): BridgeStatus {
 }
 
 /**
- * Send a system notification to a specific channel address.
- * Used by the runner to send restart-complete notifications etc.
- */
-export async function sendNotification(
-  address: { channelType: string; chatId: string },
-  text: string,
-): Promise<boolean> {
-  const state = getState();
-  if (!state.running) return false;
-  const adapter = state.adapters.get(address.channelType);
-  if (!adapter) return false;
-  try {
-    await deliver(adapter, {
-      address: { channelType: address.channelType, chatId: address.chatId },
-      text,
-      parseMode: 'plain',
-    });
-    return true;
-  } catch (err) {
-    console.error('[bridge-manager] sendNotification failed:', err);
-    return false;
-  }
-}
-
-/**
  * Register a channel adapter.
  */
 export function registerAdapter(adapter: BaseChannelAdapter): void {
@@ -1330,7 +1305,6 @@ async function handleCommand(
   }
 
   let response = '';
-  let afterReply: (() => void | Promise<void>) | null = null;
 
   switch (command) {
     case '/start':
@@ -1557,27 +1531,6 @@ async function handleCommand(
         response = 'Stopping current task...';
       } else {
         response = 'No task is currently running.';
-      }
-      break;
-    }
-
-    case '/restart': {
-      const { lifecycle } = getBridgeContext();
-      if (!lifecycle.onRestartRequested) {
-        response = 'Restart not supported by this runner.';
-        break;
-      }
-      const initiated = lifecycle.onRestartRequested({
-        channelType: msg.address.channelType,
-        chatId: msg.address.chatId,
-      });
-      if (initiated && typeof initiated === 'object') {
-        afterReply = typeof initiated.afterReply === 'function' ? initiated.afterReply : null;
-        response = '♻️ 正在重启：npm install → build → restart\n请稍等，完成后会通知你。';
-      } else if (initiated) {
-        response = '♻️ 正在重启：npm install → build → restart\n请稍等，完成后会通知你。';
-      } else {
-        response = '重启请求失败，请检查 runner 日志。';
       }
       break;
     }
@@ -2131,20 +2084,12 @@ async function handleCommand(
   }
 
   if (response) {
-    const result = await deliver(adapter, {
+    await deliver(adapter, {
       address: msg.address,
       text: response,
       parseMode: 'HTML',
       replyToMessageId: msg.messageId,
     });
-    if (result.ok && afterReply) {
-      await afterReply();
-    }
-    return;
-  }
-
-  if (afterReply) {
-    await afterReply();
   }
 }
 

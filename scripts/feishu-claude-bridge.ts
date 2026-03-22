@@ -25,14 +25,9 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import {
-  formatRestartStatusNotification,
-  getRestartArtifactPaths,
-  loadRestartArtifacts,
-} from "../src/lib/bridge/internal/restart-artifacts.ts";
 import { loadDotEnvFile } from "./claude-to-im-bridge/settings.ts";
 import { isClaudeToImDistStale } from "../src/lib/bridge/internal/build-freshness.ts";
 import { InMemoryPermissionGateway } from "./claude-to-im-bridge/permissions.ts";
@@ -48,7 +43,6 @@ type BridgeManagerModule = {
   start: () => Promise<void>;
   stop: () => Promise<void>;
   getStatus: () => unknown;
-  sendNotification: (address: { channelType: string; chatId: string }, text: string) => Promise<boolean>;
 };
 
 type RunnerControlFiles = {
@@ -80,7 +74,7 @@ function pickEnv(name: string): string | null {
 function detectPotentialSignalSourceHints(): string[] {
   const hints: string[] = [];
 
-  // 常见"看似自动中断"的根因：watch/restart 工具会向子进程发 SIGINT/SIGTERM 来重启。
+  // 常见"看似自动中断"的根因：watch 类工具会向子进程发 SIGINT/SIGTERM 来拉起新进程。
   const lifecycle = pickEnv("npm_lifecycle_script");
   if (lifecycle && /(tsx\s+watch|nodemon|concurrently|turbo|vite|webpack|rollup|watch)/i.test(lifecycle)) {
     hints.push(`npm_lifecycle_script=${lifecycle}`);
@@ -216,11 +210,55 @@ function ensureClaudeToImBuild(claudeToImRoot: string): void {
 
 async function main() {
   const bootAt = Date.now();
+
+  // ── P2: 获取 git commit hash 用于版本追踪 ──
+  const gitCommitHash = (() => {
+    try {
+      const res = spawnSync("git", ["rev-parse", "--short", "HEAD"], {
+        cwd: path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."),
+        encoding: "utf8",
+        timeout: 5_000,
+        windowsHide: true,
+      });
+      return (res.stdout || "").trim() || "unknown";
+    } catch {
+      return "unknown";
+    }
+  })();
+
   const scriptPath = fileURLToPath(import.meta.url);
   const scriptDir = path.dirname(scriptPath);
   const runnerRoot = path.resolve(scriptDir, "..");
   const control = resolveRunnerControlFiles(runnerRoot);
   safeMkdirp(control.controlDir);
+
+  // ── P0: 同 controlDir 单实例锁 ──
+  // 如果 pid 文件存在且对应进程仍在运行，则拒绝启动，避免多实例竞争。
+  const existingPidRaw = (() => {
+    try { return fs.readFileSync(control.pidFile, "utf8").trim(); } catch { return ""; }
+  })();
+  if (existingPidRaw) {
+    const existingPid = parseInt(existingPidRaw, 10);
+    if (Number.isFinite(existingPid) && existingPid > 0) {
+      let alive = false;
+      try {
+        process.kill(existingPid, 0); // signal 0: existence check, no actual signal sent
+        alive = true;
+      } catch {
+        // process doesn't exist — stale pid file
+      }
+      if (alive) {
+        console.error(
+          `[bridge-runner] 拒绝启动：controlDir "${control.controlDir}" 已有活跃实例 (pid=${existingPid})。\n` +
+          `如需强制启动，请先终止旧进程或删除 pid 文件：${control.pidFile}`
+        );
+        process.exit(1);
+      } else {
+        console.warn(`[bridge-runner] 清理残留 pid 文件 (stale pid=${existingPid})`);
+        safeUnlink(control.pidFile);
+      }
+    }
+  }
 
   // Load local env file (no override)
   // 支持通过命令行参数指定 env 文件，方便同时运行多个 Bot 实例：
@@ -394,9 +432,6 @@ async function main() {
     );
   }
 
-  // ── Restart artifacts (written by /restart flow, read on startup) ──
-  const restartArtifacts = getRestartArtifactPaths(control.controlDir);
-
   bridgeContextMod.initBridgeContext({
     store,
     llm: llmFinal,
@@ -404,78 +439,6 @@ async function main() {
     lifecycle: {
       onBridgeStart: () => console.log("[bridge-runner] Bridge starting..."),
       onBridgeStop: () => console.log("[bridge-runner] Bridge stopped."),
-      onRestartRequested: (info: { channelType: string; chatId: string }) => {
-        return {
-          afterReply: async () => {
-            try {
-              safeWriteJson(restartArtifacts.restartNotifyFile, {
-                channelType: info.channelType,
-                chatId: info.chatId,
-                ts: new Date().toISOString(),
-              });
-              safeUnlink(restartArtifacts.restartStatusFile);
-
-              const ps1Path = path.join(runnerRoot, "scripts", "restart-bridge.ps1");
-              const spawned = await new Promise<boolean>((resolve) => {
-                let settled = false;
-                const finish = (value: boolean) => {
-                  if (settled) return;
-                  settled = true;
-                  resolve(value);
-                };
-
-                const child = spawn("powershell.exe", [
-                  "-ExecutionPolicy", "Bypass",
-                  "-File", ps1Path,
-                  "-ControlDir", control.controlDir,
-                  "-EnvFile", envFileName,
-                ], {
-                  cwd: runnerRoot,
-                  detached: true,
-                  stdio: "ignore",
-                  windowsHide: true,
-                });
-
-                child.once("spawn", () => {
-                  console.log(`[bridge-runner] Restart script spawned (ps1 pid=${child.pid})`);
-                  child.unref();
-                  finish(true);
-                });
-
-                child.once("error", (err) => {
-                  const message = err instanceof Error ? err.message : String(err);
-                  console.error("[bridge-runner] Failed to spawn restart script:", err);
-                  safeWriteFile(
-                    restartArtifacts.restartDebugFile,
-                    `[${
-                      new Date().toISOString()
-                    }] FAIL [spawn_script] ${message}`,
-                  );
-                  safeWriteJson(restartArtifacts.restartStatusFile, {
-                    status: "failed",
-                    stage: "spawn_script",
-                    message,
-                    ts: new Date().toISOString(),
-                    debugLog: restartArtifacts.restartDebugFile,
-                    stdoutLog: restartArtifacts.stdoutLog,
-                    stderrLog: restartArtifacts.stderrLog,
-                    details: [`script=${ps1Path}`],
-                  });
-                  finish(false);
-                });
-              });
-
-              if (!spawned) {
-                return;
-              }
-
-              safeWriteFile(control.stopFile, new Date().toISOString());
-            } catch (err) {
-              console.error("[bridge-runner] Failed to initiate restart:", err);
-            }
-          },
-        };
-      },
     },
   });
 
@@ -484,69 +447,6 @@ async function main() {
   console.log("[bridge-runner] LLM backend:", backend);
   console.log(`[bridge-runner] PID=${process.pid} PPID=${process.ppid} platform=${process.platform}`);
   console.log(`[bridge-runner] Control dir: ${control.controlDir}`);
-
-  // ── Check for restart artifacts (send success/failure notification if applicable) ──
-  const startupRestartArtifacts = loadRestartArtifacts(control.controlDir);
-  if (startupRestartArtifacts.notify) {
-    const notificationText = formatRestartStatusNotification({
-      backend,
-      pid: process.pid,
-      status: startupRestartArtifacts.status,
-    });
-
-    // ── Fix: 重试机制替代固定 3 秒等待 ──
-    // 飞书 WS 连接可能需要超过 3 秒才能建立，使用指数退避重试确保通知送达。
-    const RESTART_NOTIFY_ATTEMPTS = 5;
-    const RESTART_NOTIFY_DELAYS = [3000, 5000, 8000, 12000, 20000];
-    const address = {
-      channelType: startupRestartArtifacts.notify!.channelType,
-      chatId: startupRestartArtifacts.notify!.chatId,
-    };
-    let attempt = 0;
-    const tryNotify = async () => {
-      attempt++;
-      try {
-        const sent = await bridgeManager.sendNotification(address, notificationText);
-        if (sent) {
-          console.log(`[bridge-runner] Restart notification sent (attempt ${attempt}).`);
-          safeUnlink(startupRestartArtifacts.paths.restartNotifyFile);
-          if (startupRestartArtifacts.status) {
-            safeUnlink(startupRestartArtifacts.paths.restartStatusFile);
-          }
-          return;
-        }
-      } catch (err) {
-        console.warn(`[bridge-runner] Restart notification attempt ${attempt} failed:`, err);
-      }
-      if (attempt < RESTART_NOTIFY_ATTEMPTS) {
-        const delay = RESTART_NOTIFY_DELAYS[attempt] ?? 20000;
-        console.log(`[bridge-runner] Retry restart notification in ${delay}ms (attempt ${attempt + 1}/${RESTART_NOTIFY_ATTEMPTS})...`);
-        setTimeout(tryNotify, delay);
-      } else {
-        console.warn(`[bridge-runner] Restart notification failed after ${RESTART_NOTIFY_ATTEMPTS} attempts, giving up.`);
-        safeUnlink(startupRestartArtifacts.paths.restartNotifyFile);
-        if (startupRestartArtifacts.status) {
-          safeUnlink(startupRestartArtifacts.paths.restartStatusFile);
-        }
-      }
-    };
-    setTimeout(tryNotify, RESTART_NOTIFY_DELAYS[0]);
-  } else {
-    if (fs.existsSync(restartArtifacts.restartNotifyFile)) {
-      console.warn("[bridge-runner] Ignoring invalid restart notify file.");
-      safeUnlink(restartArtifacts.restartNotifyFile);
-    }
-    if (startupRestartArtifacts.status) {
-      console.warn(
-        [
-          "[bridge-runner] Found restart failure status without notify target.",
-          `stage=${startupRestartArtifacts.status.stage}`,
-          `message=${startupRestartArtifacts.status.message}`,
-          startupRestartArtifacts.status.debugLog ? `debugLog=${startupRestartArtifacts.status.debugLog}` : "",
-        ].filter(Boolean).join(" "),
-      );
-    }
-  }
 
   safeWriteFile(control.pidFile, String(process.pid));
 
@@ -573,6 +473,7 @@ async function main() {
         uptimeSec: upSec,
         status,
         backend,
+        commit: gitCommitHash,
         ...extra,
       }),
     );
@@ -598,7 +499,7 @@ async function main() {
     }
     safeUnlink(control.stopFile);
 
-    // 诊断信息：SIGINT 多数情况下来自 Ctrl+C 或父进程（watch/restart 工具）发出的终止信号。
+    // 诊断信息：SIGINT 多数情况下来自 Ctrl+C 或父进程（watch 类工具）发出的终止信号。
     // 这里尽量在不泄漏敏感信息的前提下，打印一些线索，方便定位"自动中断"的真实来源。
     const hints = detectPotentialSignalSourceHints();
     if (hints.length) {
@@ -624,23 +525,8 @@ async function main() {
       parentProcess: parentDiag,
     });
 
-    // ── Fix: 硬超时保护 ──
-    // bridgeManager.stop() 或 llm.stop() 可能永久阻塞（如适配器连接卡住），
-    // 导致旧进程变成僵尸。设置 15 秒硬超时，超时直接 exit 保证 /restart 流程
-    // 不会因为旧进程不退出而卡住。
-    const SHUTDOWN_HARD_TIMEOUT_MS = 15_000;
-    const shutdownDeadline = setTimeout(() => {
-      console.error(`[bridge-runner] Shutdown hard timeout (${SHUTDOWN_HARD_TIMEOUT_MS}ms) reached, forcing exit.`);
-      safeUnlink(control.pidFile);
-      writeHeartbeat("stopped", { reason: `${signal}:hard_timeout` });
-      process.exit(1);
-    }, SHUTDOWN_HARD_TIMEOUT_MS);
-    shutdownDeadline.unref();
-
     try { await bridgeManager.stop(); } catch { /* ignore */ }
     try { (llmFinal as any).stop?.(); } catch { /* ignore */ }
-
-    clearTimeout(shutdownDeadline);
     safeUnlink(control.pidFile);
     writeHeartbeat("stopped", { reason: signal });
     process.exit(0);
@@ -700,6 +586,22 @@ async function main() {
         }
       } catch {
         // ignore
+      }
+
+      // ── P0: 定向 stop token ──
+      // 只有 stop 文件中的 targetPid 匹配当前进程 PID 时才执行 shutdown。
+      // 兼容旧版：如果 stop 文件不是 JSON 或没有 targetPid，也视为匹配（向后兼容）。
+      try {
+        const raw = fs.readFileSync(control.stopFile, "utf8").trim();
+        if (raw.startsWith("{")) {
+          const parsed = JSON.parse(raw);
+          if (typeof parsed.targetPid === "number" && parsed.targetPid !== process.pid) {
+            // stop 文件不是发给当前进程的，忽略
+            return;
+          }
+        }
+      } catch {
+        // 解析失败，视为向后兼容的非定向 stop
       }
 
       safeUnlink(control.stopFile);

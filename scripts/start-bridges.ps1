@@ -1,12 +1,25 @@
 ﻿<#
-  一键启动 Claude + Codex 双桥接
-  各自在独立的 PowerShell 窗口中运行，窗口标题标注后端类型。
+  Claude + Codex 双桥接管理脚本
+  支持 start / stop 两种操作。
 
   用法：
-    powershell -ExecutionPolicy Bypass -File scripts/start-bridges.ps1
+    powershell -ExecutionPolicy Bypass -File scripts/start-bridges.ps1 [start|stop]
+
+  start   (默认) npm install → npm run build → 启动双桥接窗口
+  stop    优雅停止两个桥接，超时则强杀
 #>
 
+param(
+  [Parameter(Position = 0)]
+  [ValidateSet("start", "stop")]
+  [string]$Action = "start",
+
+  [int]$StopTimeoutSec = 15
+)
+
+$ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+Set-Location $repoRoot
 
 # ── 桥接实例定义 ──
 $bridges = @(
@@ -22,13 +35,148 @@ $bridges = @(
   }
 )
 
-foreach ($b in $bridges) {
-  $title = "Bridge: $($b.Name)"
-  # 用 cmd /k 保持窗口不关闭，方便看日志；set 设置环境变量后再 npx 启动
-  $cmd = "set BRIDGE_CONTROL_DIR=$($b.ControlDir) && cd /d `"$repoRoot`" && title $title && npx tsx scripts/feishu-claude-bridge.ts $($b.EnvFile)"
+# ════════════════════════════════════════
+# Stop：优雅停止 → 超时强杀
+# ════════════════════════════════════════
+function Stop-AllBridges {
+  $anyRunning = $false
 
-  Write-Host "[start-bridges] 启动 $($b.Name) 桥接窗口..."
-  Start-Process cmd.exe -ArgumentList "/k $cmd"
+  foreach ($b in $bridges) {
+    $controlDir = Join-Path $repoRoot $b.ControlDir
+    $pidFile = Join-Path $controlDir "pid"
+    $stopFile = Join-Path $controlDir "stop"
+
+    if (-not (Test-Path -LiteralPath $pidFile)) { continue }
+    $raw = (Get-Content -LiteralPath $pidFile -Encoding UTF8 -Raw).Trim()
+    $bridgePid = 0
+    if (-not ([int]::TryParse($raw, [ref]$bridgePid)) -or $bridgePid -le 0) { continue }
+
+    $proc = $null
+    try { $proc = Get-Process -Id $bridgePid -ErrorAction Stop } catch {}
+    if (-not $proc) {
+      Write-Host "[bridges] $($b.Name): 进程不存在 (pid=$bridgePid)，清理残留文件。"
+      Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath $stopFile -Force -ErrorAction SilentlyContinue
+      continue
+    }
+
+    $anyRunning = $true
+    Write-Host "[bridges] $($b.Name): 发送停止信号 (pid=$bridgePid) ..."
+    New-Item -ItemType Directory -Force -Path $controlDir | Out-Null
+    Set-Content -LiteralPath $stopFile -Encoding UTF8 -Value (Get-Date).ToString("o")
+  }
+
+  if (-not $anyRunning) {
+    Write-Host "[bridges] 没有正在运行的桥接。"
+    return
+  }
+
+  # 等待所有进程退出
+  $deadline = (Get-Date).AddSeconds($StopTimeoutSec)
+  while ((Get-Date) -lt $deadline) {
+    $stillAlive = $false
+    foreach ($b in $bridges) {
+      $controlDir = Join-Path $repoRoot $b.ControlDir
+      $pidFile = Join-Path $controlDir "pid"
+      if (-not (Test-Path -LiteralPath $pidFile)) { continue }
+      $raw = (Get-Content -LiteralPath $pidFile -Encoding UTF8 -Raw).Trim()
+      $pid2 = 0
+      if (-not ([int]::TryParse($raw, [ref]$pid2)) -or $pid2 -le 0) { continue }
+      try { $null = Get-Process -Id $pid2 -ErrorAction Stop; $stillAlive = $true } catch {}
+    }
+    if (-not $stillAlive) { break }
+    Start-Sleep -Milliseconds 500
+  }
+
+  # 超时：强杀残留
+  foreach ($b in $bridges) {
+    $controlDir = Join-Path $repoRoot $b.ControlDir
+    $pidFile = Join-Path $controlDir "pid"
+    $stopFile = Join-Path $controlDir "stop"
+
+    if (-not (Test-Path -LiteralPath $pidFile)) { continue }
+    $raw = (Get-Content -LiteralPath $pidFile -Encoding UTF8 -Raw).Trim()
+    $pid3 = 0
+    if (-not ([int]::TryParse($raw, [ref]$pid3)) -or $pid3 -le 0) { continue }
+
+    $proc = $null
+    try { $proc = Get-Process -Id $pid3 -ErrorAction Stop } catch {}
+    if ($proc) {
+      Write-Host "[bridges] $($b.Name): 超时未退出，强制结束 (pid=$pid3) ..." -ForegroundColor Yellow
+      & taskkill.exe /PID $pid3 /T /F 2>$null | Out-Null
+      Start-Sleep -Milliseconds 500
+    }
+
+    Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $stopFile -Force -ErrorAction SilentlyContinue
+  }
+
+  Write-Host "[bridges] 全部已停止。" -ForegroundColor Green
 }
 
-Write-Host "[start-bridges] 已启动 $($bridges.Count) 个桥接窗口。"
+# ════════════════════════════════════════
+# Start：install → build → 启动窗口
+# ════════════════════════════════════════
+function Start-AllBridges {
+  $nodeModulesExist = Test-Path (Join-Path $repoRoot "node_modules")
+
+  # npm install --ignore-scripts：跳过 prepare 钩子（避免 install 阶段触发 tsc 编译撞文件锁）
+  # build 在下一步单独执行
+  # 注意：临时切换 ErrorActionPreference 为 Continue，否则 npm stderr 输出会被
+  #       PowerShell 当作终止性错误，导致脚本直接崩溃而跳过降级逻辑
+  Write-Host "[bridges] npm install ..."
+  $savedEAP = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  & npm.cmd install --ignore-scripts
+  $npmInstallExit = $LASTEXITCODE
+  $ErrorActionPreference = $savedEAP
+
+  if ($npmInstallExit -ne 0) {
+    if ($nodeModulesExist) {
+      Write-Host "[bridges] npm install 失败 (exit=$npmInstallExit)，但 node_modules 已存在，降级继续。" -ForegroundColor Yellow
+    } else {
+      Write-Host "[bridges] npm install 失败 (exit=$npmInstallExit)，且 node_modules 不存在，中止。" -ForegroundColor Red
+      exit 1
+    }
+  } else {
+    Write-Host "[bridges] npm install 完成。" -ForegroundColor Green
+  }
+
+  # npm run build（失败时若 dist 已存在则降级继续）
+  $distExist = Test-Path (Join-Path $repoRoot "dist")
+  Write-Host "[bridges] npm run build ..."
+  $ErrorActionPreference = "Continue"
+  & npm.cmd run build
+  $npmBuildExit = $LASTEXITCODE
+  $ErrorActionPreference = $savedEAP
+
+  if ($npmBuildExit -ne 0) {
+    if ($distExist) {
+      Write-Host "[bridges] npm run build 失败 (exit=$npmBuildExit)，但 dist 已存在，降级继续。" -ForegroundColor Yellow
+    } else {
+      Write-Host "[bridges] npm run build 失败 (exit=$npmBuildExit)，且 dist 不存在，中止。" -ForegroundColor Red
+      exit 1
+    }
+  } else {
+    Write-Host "[bridges] npm run build 完成。" -ForegroundColor Green
+  }
+
+  # 启动双桥接
+  foreach ($b in $bridges) {
+    $title = "Bridge: $($b.Name)"
+    $cmd = "set BRIDGE_CONTROL_DIR=$($b.ControlDir) && cd /d `"$repoRoot`" && title $title && npx tsx scripts/feishu-claude-bridge.ts $($b.EnvFile)"
+
+    Write-Host "[bridges] 启动 $($b.Name) 桥接窗口..."
+    Start-Process cmd.exe -ArgumentList "/k $cmd"
+  }
+
+  Write-Host "[bridges] 全部就绪：已启动 $($bridges.Count) 个桥接窗口。" -ForegroundColor Green
+}
+
+# ════════════════════════════════════════
+# 主入口
+# ════════════════════════════════════════
+switch ($Action) {
+  "start"   { Start-AllBridges }
+  "stop"    { Stop-AllBridges }
+}
