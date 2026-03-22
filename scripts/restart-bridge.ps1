@@ -1,4 +1,4 @@
-<#
+﻿<#
   Single-instance restart script triggered by bridge /restart.
   Runs detached: wait old process exit -> npm install -> start new process.
 #>
@@ -131,6 +131,11 @@ Set-Content -LiteralPath $restartDebugFile -Encoding UTF8 -Value (
   "[{0}] restart begin controlDir={1} envFile={2}" -f (Get-Date).ToString("o"), $ControlDir, $EnvFile
 )
 
+# ── P1: Write ack file to signal parent that script has started executing ──
+$ackFile = Join-Path $ControlDir "restart-ack"
+Set-Content -LiteralPath $ackFile -Encoding UTF8 -Value "ack"
+Write-RestartDebug "[restart-bridge] ack written: $ackFile"
+
 try {
   Write-RestartDebug "[restart-bridge] waiting for old process exit..."
   for ($i = 0; $i -lt 60; $i++) {
@@ -157,17 +162,37 @@ try {
 
   Write-RestartDebug "[restart-bridge] running npm install..."
   Set-Location $repoRoot
-  $installResult = & npm.cmd install 2>&1
-  $installExit = $LASTEXITCODE
-  $installLines = @($installResult | ForEach-Object { $_.ToString() })
-  if ($installExit -ne 0) {
-    Write-RestartDebug ("[restart-bridge] npm install failed exit={0}" -f $installExit)
-    foreach ($line in ($installLines | Select-Object -Last 40)) {
-      Write-RestartDebug ("  {0}" -f $line)
-    }
+  $npmInstallTimeout = 120  # seconds
+  $npmLogOut = Join-Path $ControlDir "npm-install-stdout.log"
+  $npmLogErr = Join-Path $ControlDir "npm-install-stderr.log"
+  Remove-Item -LiteralPath $npmLogOut -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $npmLogErr -Force -ErrorAction SilentlyContinue
+  $npmProc = Start-Process -FilePath "npm.cmd" -ArgumentList @("install") -WorkingDirectory $repoRoot -WindowStyle Hidden -RedirectStandardOutput $npmLogOut -RedirectStandardError $npmLogErr -PassThru
+  $npmExited = $npmProc.WaitForExit($npmInstallTimeout * 1000)
+  if (-not $npmExited) {
+    Write-RestartDebug "[restart-bridge] npm install timed out after ${npmInstallTimeout}s, killing..."
+    try { $npmProc.Kill() } catch {}
+    Start-Sleep -Seconds 2
+    $installLines = Get-LogTail -filePath $npmLogOut -lineCount 20
+    Write-RestartFailure "npm_install_timeout" "npm install did not complete within ${npmInstallTimeout}s" @(
+      ("timeout=${npmInstallTimeout}s")
+    )
+    # Don't abort; try to start with existing node_modules
+    Write-RestartDebug "[restart-bridge] proceeding despite npm install timeout..."
   } else {
-    Write-RestartDebug "[restart-bridge] npm install finished exit=0"
+    $installExit = $npmProc.ExitCode
+    if ($installExit -ne 0) {
+      $installLines = Get-LogTail -filePath $npmLogOut -lineCount 40
+      Write-RestartDebug ("[restart-bridge] npm install failed exit={0}" -f $installExit)
+      foreach ($line in $installLines) {
+        Write-RestartDebug ("  {0}" -f $line)
+      }
+    } else {
+      Write-RestartDebug "[restart-bridge] npm install finished exit=0"
+    }
   }
+  Remove-Item -LiteralPath $npmLogOut -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $npmLogErr -Force -ErrorAction SilentlyContinue
 
   Write-RestartDebug "[restart-bridge] starting new bridge process..."
 
