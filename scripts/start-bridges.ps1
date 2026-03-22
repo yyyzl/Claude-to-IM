@@ -67,44 +67,68 @@ function Stop-AllBridges {
   }
 
   if (-not $anyRunning) {
-    Write-Host "[bridges] 没有正在运行的桥接。"
-    return
+    Write-Host "[bridges] 没有正在运行的桥接进程。"
+    # 仍需关闭可能残留的 cmd 窗口（node 退了但 /k 让 cmd 窗口留着的情况）
   }
 
-  # 等待所有进程退出
-  $deadline = (Get-Date).AddSeconds($StopTimeoutSec)
-  while ((Get-Date) -lt $deadline) {
-    $stillAlive = $false
+  if ($anyRunning) {
+    # 等待所有进程退出
+    $deadline = (Get-Date).AddSeconds($StopTimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+      $stillAlive = $false
+      foreach ($b in $bridges) {
+        $controlDir = Join-Path $repoRoot $b.ControlDir
+        $pidFile = Join-Path $controlDir "pid"
+        if (-not (Test-Path -LiteralPath $pidFile)) { continue }
+        $raw = (Get-Content -LiteralPath $pidFile -Encoding UTF8 -Raw).Trim()
+        $pid2 = 0
+        if (-not ([int]::TryParse($raw, [ref]$pid2)) -or $pid2 -le 0) { continue }
+        try { $null = Get-Process -Id $pid2 -ErrorAction Stop; $stillAlive = $true } catch {}
+      }
+      if (-not $stillAlive) { break }
+      Start-Sleep -Milliseconds 500
+    }
+
+    # 超时：强杀残留进程
     foreach ($b in $bridges) {
       $controlDir = Join-Path $repoRoot $b.ControlDir
       $pidFile = Join-Path $controlDir "pid"
+
       if (-not (Test-Path -LiteralPath $pidFile)) { continue }
       $raw = (Get-Content -LiteralPath $pidFile -Encoding UTF8 -Raw).Trim()
-      $pid2 = 0
-      if (-not ([int]::TryParse($raw, [ref]$pid2)) -or $pid2 -le 0) { continue }
-      try { $null = Get-Process -Id $pid2 -ErrorAction Stop; $stillAlive = $true } catch {}
+      $pid3 = 0
+      if (-not ([int]::TryParse($raw, [ref]$pid3)) -or $pid3 -le 0) { continue }
+
+      $proc = $null
+      try { $proc = Get-Process -Id $pid3 -ErrorAction Stop } catch {}
+      if ($proc) {
+        Write-Host "[bridges] $($b.Name): 超时未退出，强制结束 (pid=$pid3) ..." -ForegroundColor Yellow
+        & taskkill.exe /PID $pid3 /T /F 2>$null | Out-Null
+        Start-Sleep -Milliseconds 500
+      }
     }
-    if (-not $stillAlive) { break }
-    Start-Sleep -Milliseconds 500
   }
 
-  # 超时：强杀残留
+  # 关闭残留 cmd 窗口 + 清理控制文件（无论正常退出还是超时，都执行）
   foreach ($b in $bridges) {
     $controlDir = Join-Path $repoRoot $b.ControlDir
     $pidFile = Join-Path $controlDir "pid"
     $stopFile = Join-Path $controlDir "stop"
+    $cmdPidFile = Join-Path $controlDir "cmd-pid"
 
-    if (-not (Test-Path -LiteralPath $pidFile)) { continue }
-    $raw = (Get-Content -LiteralPath $pidFile -Encoding UTF8 -Raw).Trim()
-    $pid3 = 0
-    if (-not ([int]::TryParse($raw, [ref]$pid3)) -or $pid3 -le 0) { continue }
-
-    $proc = $null
-    try { $proc = Get-Process -Id $pid3 -ErrorAction Stop } catch {}
-    if ($proc) {
-      Write-Host "[bridges] $($b.Name): 超时未退出，强制结束 (pid=$pid3) ..." -ForegroundColor Yellow
-      & taskkill.exe /PID $pid3 /T /F 2>$null | Out-Null
-      Start-Sleep -Milliseconds 500
+    # 通过保存的 cmd.exe PID 关闭窗口（WINDOWTITLE 过滤器对 Start-Process 创建的窗口无效）
+    if (Test-Path -LiteralPath $cmdPidFile) {
+      $cmdRaw = (Get-Content -LiteralPath $cmdPidFile -Encoding UTF8 -Raw).Trim()
+      $cmdPid = 0
+      if ([int]::TryParse($cmdRaw, [ref]$cmdPid) -and $cmdPid -gt 0) {
+        $cmdProc = $null
+        try { $cmdProc = Get-Process -Id $cmdPid -ErrorAction Stop } catch {}
+        if ($cmdProc) {
+          Write-Host "[bridges] $($b.Name): 关闭 cmd 窗口 (cmd-pid=$cmdPid) ..."
+          & taskkill.exe /PID $cmdPid /T /F 2>$null | Out-Null
+        }
+      }
+      Remove-Item -LiteralPath $cmdPidFile -Force -ErrorAction SilentlyContinue
     }
 
     Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
@@ -161,13 +185,33 @@ function Start-AllBridges {
     Write-Host "[bridges] npm run build 完成。" -ForegroundColor Green
   }
 
-  # 启动双桥接
+  # 启动双桥接（先清理残留旧窗口，再开新窗口）
   foreach ($b in $bridges) {
+    $controlDir = Join-Path $repoRoot $b.ControlDir
+    $cmdPidFile = Join-Path $controlDir "cmd-pid"
+    New-Item -ItemType Directory -Force -Path $controlDir | Out-Null
+
+    # 清理可能残留的旧 cmd 窗口（通过保存的 PID）
+    if (Test-Path -LiteralPath $cmdPidFile) {
+      $oldRaw = (Get-Content -LiteralPath $cmdPidFile -Encoding UTF8 -Raw).Trim()
+      $oldCmdPid = 0
+      if ([int]::TryParse($oldRaw, [ref]$oldCmdPid) -and $oldCmdPid -gt 0) {
+        $oldProc = $null
+        try { $oldProc = Get-Process -Id $oldCmdPid -ErrorAction Stop } catch {}
+        if ($oldProc) {
+          Write-Host "[bridges] $($b.Name): 清理残留旧窗口 (cmd-pid=$oldCmdPid) ..."
+          & taskkill.exe /PID $oldCmdPid /T /F 2>$null | Out-Null
+        }
+      }
+    }
+
     $title = "Bridge: $($b.Name)"
     $cmd = "set BRIDGE_CONTROL_DIR=$($b.ControlDir) && cd /d `"$repoRoot`" && title $title && npx tsx scripts/feishu-claude-bridge.ts $($b.EnvFile)"
 
     Write-Host "[bridges] 启动 $($b.Name) 桥接窗口..."
-    Start-Process cmd.exe -ArgumentList "/k $cmd"
+    $cmdProc = Start-Process cmd.exe -ArgumentList "/k $cmd" -PassThru
+    Set-Content -LiteralPath $cmdPidFile -Encoding UTF8 -Value $cmdProc.Id
+    Write-Host "[bridges] $($b.Name): cmd 窗口 PID=$($cmdProc.Id)"
   }
 
   Write-Host "[bridges] 全部就绪：已启动 $($bridges.Count) 个桥接窗口。" -ForegroundColor Green
