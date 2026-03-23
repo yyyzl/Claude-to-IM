@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 24
+- **Total Sessions**: 25
 - **Last Active**: 2026-03-23
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1229 | Active |
+| `journal-1.md` | ~1275 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits |
 |---|------|-------|---------|
+| 25 | 2026-03-23 | Workflow P1b-CR-0 Phase 3+4 | `11c2033` |
 | 24 | 2026-03-23 | P1b-CR-0 Phase 1+2: Code Review Workflow 引擎泛化 + 数据管道 | `3a848c1` |
 | 23 | 2026-03-23 | P1b-CR-0 代码审查工作流设计（3 轮审查迭代） | `3b401ce` |
 | 22 | 2026-03-23 | 补充工作流卡片渲染函数单元测试 | `a821824` |
