@@ -467,7 +467,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
                 cwd: params.workingDirectory,
               });
 
-              const { text, usage } = await this.collectTurnText({
+              const { text, usage, emittedFinalText } = await this.collectTurnText({
                 threadId: freshThreadId,
                 turnId,
                 onDelta: (delta) => emit(controller, "text", delta),
@@ -475,8 +475,8 @@ export class CodexAppServerLLMProvider implements LLMProvider {
                 signal,
               });
 
-              if (text) {
-                // 已通过 delta 发过的情况下，text 可能等于已发送内容；这里不再重复发送
+              if (text && !emittedFinalText) {
+                emit(controller, "text", text);
               }
 
               emit(controller, "result", { usage, is_error: false, session_id: freshThreadId });
@@ -485,7 +485,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
             throw e;
           }
 
-          const { text, usage } = await this.collectTurnText({
+          const { text, usage, emittedFinalText } = await this.collectTurnText({
             threadId,
             turnId,
             onDelta: (delta) => emit(controller, "text", delta),
@@ -493,9 +493,9 @@ export class CodexAppServerLLMProvider implements LLMProvider {
             signal,
           });
 
-          // 某些情况下 delta 可能为空，completed 才有整段文本
-          if (text) {
-            // 已通过 delta 发过的情况下，text 可能等于已发送内容；这里不再重复发送
+          // 某些情况下只有 completed 才有 final_answer 文本；这里补发一次。
+          if (text && !emittedFinalText) {
+            emit(controller, "text", text);
           }
 
           emit(controller, "result", { usage, is_error: false, session_id: threadId });
@@ -655,18 +655,37 @@ export class CodexAppServerLLMProvider implements LLMProvider {
     /** Callback for tool call lifecycle events (start / complete / error). */
     onToolEvent?: (toolId: string, toolName: string, status: 'running' | 'complete' | 'error') => void;
     signal: AbortSignal;
-  }): Promise<{ text: string; usage: TokenUsage | null }> {
+  }): Promise<{ text: string; usage: TokenUsage | null; emittedFinalText: boolean }> {
     const timeoutMs = this.turnTimeoutMs;
     const deadlineMs = timeoutMs > 0 ? Date.now() + timeoutMs : Number.POSITIVE_INFINITY;
     const idleTimeoutMs = this.turnIdleTimeoutMs;
-    let merged = "";
-    let itemCompletedText: string | null = null;
+    let legacyMerged = "";
+    let finalMerged = "";
+    let finalCompletedText: string | null = null;
+    let lastAgentMessageText: string | null = null;
+    let emittedFinalText = false;
     let turnCompleted = false;
     let usage: TokenUsage | null = null;
     let lastRelevantEventMs = Date.now();
     /** De-dup set for streaming tool notifications (commandExecution, mcpToolCall)
      *  that fire per-delta rather than once per tool invocation. */
     const seenToolIds = new Set<string>();
+    const agentMessagePhaseById = new Map<string, string>();
+    const pendingAgentMessageDeltaById = new Map<string, string>();
+
+    const flushPendingAgentMessageDelta = (itemId: string): void => {
+      const buffered = pendingAgentMessageDeltaById.get(itemId);
+      if (!buffered) return;
+
+      pendingAgentMessageDeltaById.delete(itemId);
+      legacyMerged += buffered;
+
+      if (agentMessagePhaseById.get(itemId) === "final_answer") {
+        finalMerged += buffered;
+        emittedFinalText = true;
+        opts.onDelta(buffered);
+      }
+    };
 
     const handle = (msg: JsonRpcMessage): void => {
       const msgThreadId = getNotifThreadId(msg);
@@ -684,10 +703,13 @@ export class CodexAppServerLLMProvider implements LLMProvider {
       }
 
       if (method === "item/agentMessage/delta") {
+        const itemId = pickString(params.itemId);
         const delta = String(params.delta ?? "");
-        if (delta) {
-          merged += delta;
-          opts.onDelta(delta);
+        if (itemId && delta) {
+          pendingAgentMessageDeltaById.set(itemId, (pendingAgentMessageDeltaById.get(itemId) || "") + delta);
+          if (agentMessagePhaseById.has(itemId)) {
+            flushPendingAgentMessageDelta(itemId);
+          }
         }
         return;
       }
@@ -700,10 +722,18 @@ export class CodexAppServerLLMProvider implements LLMProvider {
       //   item/mcpToolCall/progress — MCP tool progress
       //   item/completed            — item finished
 
-      if (method === "item/started" && opts.onToolEvent) {
+      if (method === "item/started") {
         const item = (params.item || {}) as Record<string, unknown>;
         const itemType = String(item.type || "");
-        if (itemType === "function_call" || itemType === "tool_call") {
+        if (itemType === "agentMessage") {
+          const itemId = pickString(item.id);
+          if (itemId) {
+            agentMessagePhaseById.set(itemId, pickString((item as any).phase) || "");
+            flushPendingAgentMessageDelta(itemId);
+          }
+          return;
+        }
+        if ((itemType === "function_call" || itemType === "tool_call") && opts.onToolEvent) {
           const toolId = pickString(item.id) || `tool-${Date.now()}`;
           const toolName = pickString(item.name)
             || pickString((item as any).function?.name)
@@ -748,8 +778,18 @@ export class CodexAppServerLLMProvider implements LLMProvider {
         const item = (params.item || {}) as Record<string, unknown>;
         const itemType = String(item.type || "");
         if (itemType === "agentMessage") {
+          const itemId = pickString(item.id);
+          if (itemId) {
+            agentMessagePhaseById.set(itemId, pickString((item as any).phase) || "");
+            flushPendingAgentMessageDelta(itemId);
+          }
           const txt = pickString(item.text);
-          if (txt) itemCompletedText = txt;
+          if (txt) {
+            lastAgentMessageText = txt;
+            if (pickString((item as any).phase) === "final_answer") {
+              finalCompletedText = txt;
+            }
+          }
         } else if ((itemType === "function_call" || itemType === "tool_call") && opts.onToolEvent) {
           // Tool call finished executing
           const toolId = pickString(item.id) || "";
@@ -805,11 +845,24 @@ export class CodexAppServerLLMProvider implements LLMProvider {
         if (lastError) throw lastError;
 
         if (turnCompleted) {
-          if (itemCompletedText && !merged) {
-            merged = itemCompletedText;
-            opts.onDelta(itemCompletedText);
+          for (const itemId of pendingAgentMessageDeltaById.keys()) {
+            flushPendingAgentMessageDelta(itemId);
           }
-          return { text: merged.trim(), usage };
+
+          const completedFinal = finalCompletedText ?? "";
+          const lastAgentMessage = lastAgentMessageText ?? "";
+          let text = finalMerged.trim();
+          if (!text && completedFinal) {
+            text = completedFinal.trim();
+          }
+          if (!text) {
+            text = legacyMerged.trim();
+          }
+          if (!text && lastAgentMessage) {
+            text = lastAgentMessage.trim();
+          }
+
+          return { text, usage, emittedFinalText };
         }
 
         // “无事件”超时：只统计本 turn 的相关通知（其它 turn 的噪声不算进展）。用于尽快发现卡死/网络阻塞。
