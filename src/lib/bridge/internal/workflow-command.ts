@@ -26,6 +26,7 @@ import type { BaseChannelAdapter } from '../channel-adapter.js';
 import type { InboundMessage, ChannelBinding } from '../types.js';
 import { deliver } from '../delivery-layer.js';
 import { getBridgeContext } from '../context.js';
+import { buildWorkflowCardJson, formatElapsed } from '../markdown/feishu.js';
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -421,10 +422,188 @@ async function handleStop(
 // ── Event → IM Message Binding ─────────────────────────────────
 
 /**
- * Subscribe to WorkflowEngine events and push formatted IM messages.
+ * State tracked for each round of the workflow.
+ * Used to build the aggregated card markdown.
+ */
+interface RoundProgress {
+  codex: 'pending' | 'running' | 'done';
+  codexFindings?: number;
+  codexAssessment?: string;
+  newIssues?: number;
+  highCritical?: number;
+  claude: 'pending' | 'running' | 'done';
+  claudeDecision?: { accepted: number; rejected: number; deferred: number; resolved: number };
+  specUpdated?: boolean;
+  planUpdated?: boolean;
+  warnings: string[];
+}
+
+/**
+ * Full progress state for a workflow run.
+ * Accumulated across events and re-rendered into the card on each update.
+ */
+interface WorkflowProgressState {
+  runId: string;
+  currentRound: number;
+  rounds: Map<number, RoundProgress>;
+  termination?: { reason: string; details?: string };
+  humanReview?: { reason?: string };
+  startedAt: number;
+  /** Whether the adapter supports workflow cards (detected once). */
+  cardMode: boolean;
+  /** Whether the card has been created yet. */
+  cardCreated: boolean;
+  /** Debounce timer for card updates (prevents rapid successive API calls). */
+  updateTimer: ReturnType<typeof setTimeout> | null;
+}
+
+/** Debounce interval for card updates (ms). */
+const CARD_UPDATE_DEBOUNCE_MS = 500;
+
+/**
+ * Render the progress state into markdown for the card body.
+ */
+function renderProgressMarkdown(state: WorkflowProgressState): string {
+  const lines: string[] = [];
+  lines.push(`**Run:** \`${state.runId}\``);
+  lines.push('');
+
+  for (const [num, round] of [...state.rounds.entries()].sort((a, b) => a[0] - b[0])) {
+    const isActive = num === state.currentRound && !state.termination && !state.humanReview;
+    const roundIcon = isActive ? '⏳' : '✅';
+    lines.push(`${roundIcon} **第 ${num} 轮**`);
+
+    // Codex
+    if (round.codex === 'running') {
+      lines.push('  🔍 Codex 审查中...');
+    } else if (round.codex === 'done') {
+      const count = round.codexFindings ?? '?';
+      const assess =
+        round.codexAssessment === 'lgtm' ? ' 👍' :
+        round.codexAssessment === 'major_issues' ? ' ⚠️' : '';
+      lines.push(`  🔍 Codex: **${count}** 个问题${assess}`);
+    }
+
+    // Issue matching
+    if (round.newIssues != null && round.newIssues > 0) {
+      const hc = round.highCritical
+        ? ` (🔴 Critical/High: **${round.highCritical}**)`
+        : '';
+      lines.push(`  📊 新增 **${round.newIssues}** 个问题${hc}`);
+    }
+
+    // Claude
+    if (round.claude === 'running') {
+      lines.push('  🤔 Claude 决策中...');
+    } else if (round.claude === 'done' && round.claudeDecision) {
+      const d = round.claudeDecision;
+      const parts: string[] = [];
+      if (d.accepted) parts.push(`${d.accepted}✓`);
+      if (d.resolved) parts.push(`${d.resolved}↺`);
+      if (d.rejected) parts.push(`${d.rejected}✗`);
+      if (d.deferred) parts.push(`${d.deferred}⏳`);
+      lines.push(`  🤔 Claude: ${parts.join(' ')}`);
+
+      const updates: string[] = [];
+      if (round.specUpdated) updates.push('spec');
+      if (round.planUpdated) updates.push('plan');
+      if (updates.length > 0) lines.push(`  📝 已更新: ${updates.join(', ')}`);
+    }
+
+    // Warnings for this round
+    for (const w of round.warnings) {
+      lines.push(`  ⚠️ ${w}`);
+    }
+
+    lines.push('');
+  }
+
+  // Termination
+  if (state.termination) {
+    lines.push(`⏹ **终止判定**: ${state.termination.reason}`);
+    if (state.termination.details) lines.push(state.termination.details);
+    lines.push('');
+  }
+
+  // Human review
+  if (state.humanReview) {
+    lines.push('⚠️ **需要人工审查**');
+    if (state.humanReview.reason) lines.push(`原因: ${state.humanReview.reason}`);
+    lines.push(`使用 \`/workflow resume ${state.runId}\` 继续`);
+    lines.push('');
+  }
+
+  return lines.join('\n').trim();
+}
+
+/**
+ * Render the final completion summary markdown.
+ */
+function renderCompletionMarkdown(
+  state: WorkflowProgressState,
+  data: {
+    total_rounds?: number;
+    total_issues?: number;
+    reason?: string;
+    severity?: { critical?: number; high?: number; medium?: number; low?: number };
+    status?: { open?: number; accepted?: number; rejected?: number; deferred?: number; resolved?: number };
+  },
+): string {
+  const lines: string[] = [];
+
+  // Include the existing round progress first
+  lines.push(renderProgressMarkdown(state));
+  lines.push('');
+  lines.push('---');
+  lines.push('');
+
+  lines.push('🎉 **工作流完成！**');
+  if (data.reason) lines.push(`终止原因: ${data.reason}`);
+  if (data.total_rounds) lines.push(`轮次: ${data.total_rounds}`);
+  if (data.total_issues != null) lines.push(`Issue 总数: **${data.total_issues}**`);
+
+  if (data.severity) {
+    const s = data.severity;
+    const parts: string[] = [];
+    if (s.critical) parts.push(`🔴 Critical: ${s.critical}`);
+    if (s.high) parts.push(`🟠 High: ${s.high}`);
+    if (s.medium) parts.push(`🟡 Medium: ${s.medium}`);
+    if (s.low) parts.push(`🟢 Low: ${s.low}`);
+    if (parts.length > 0) lines.push(`严重度: ${parts.join(' · ')}`);
+  }
+
+  if (data.status) {
+    const st = data.status;
+    const parts: string[] = [];
+    if (st.open) parts.push(`open: ${st.open}`);
+    if (st.resolved) parts.push(`resolved: ${st.resolved}`);
+    if (st.accepted) parts.push(`accepted: ${st.accepted}`);
+    if (st.rejected) parts.push(`rejected: ${st.rejected}`);
+    if (st.deferred) parts.push(`deferred: ${st.deferred}`);
+    if (parts.length > 0) lines.push(`状态: ${parts.join(' · ')}`);
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Get or create a RoundProgress entry for the given round.
+ */
+function ensureRound(state: WorkflowProgressState, round: number): RoundProgress {
+  let r = state.rounds.get(round);
+  if (!r) {
+    r = { codex: 'pending', claude: 'pending', warnings: [] };
+    state.rounds.set(round, r);
+  }
+  return r;
+}
+
+/**
+ * Subscribe to WorkflowEngine events and push progress via a single
+ * updatable card (when supported) or fallback to individual text messages.
  *
  * This is the **single point** where events become messages.
- * P2B 卡片化只需替换此函数的输出格式，不改事件订阅逻辑。
+ * Card mode: all events update one card. Text mode: each event sends a text message.
  */
 function bindProgressEvents(
   engine: WorkflowEngine,
@@ -432,162 +611,357 @@ function bindProgressEvents(
   msg: InboundMessage,
   _key: string,
 ): void {
-  const push = (text: string): void => {
+  // Detect card support
+  const supportsCards = typeof adapter.createWorkflowCard === 'function';
+
+  // ── Text-mode fallback (original behaviour) ──
+  const pushText = (text: string): void => {
     deliverText(adapter, msg, text).catch((err) => {
       console.error('[workflow-command] Failed to push progress message:', err);
     });
   };
 
+  // ── Card-mode state ──
+  const state: WorkflowProgressState = {
+    runId: '(pending)',
+    currentRound: 0,
+    rounds: new Map(),
+    startedAt: Date.now(),
+    cardMode: supportsCards,
+    cardCreated: false,
+    updateTimer: null,
+  };
+
+  /**
+   * Schedule a debounced card update.
+   * Events that fire in quick succession (e.g. codex_completed + issue_matching)
+   * are batched into a single API call.
+   */
+  const scheduleCardUpdate = (): void => {
+    if (!state.cardMode) return;
+    if (state.updateTimer) clearTimeout(state.updateTimer);
+    state.updateTimer = setTimeout(() => {
+      state.updateTimer = null;
+      flushCardUpdate();
+    }, CARD_UPDATE_DEBOUNCE_MS);
+  };
+
+  /**
+   * Immediately flush the card update.
+   */
+  const flushCardUpdate = (): void => {
+    if (!state.cardMode || !state.cardCreated) return;
+
+    const elapsed = formatElapsed(Date.now() - state.startedAt);
+    const content = renderProgressMarkdown(state);
+    const cardJson = buildWorkflowCardJson(content, {
+      footer: { status: '🔄 运行中', elapsed },
+    });
+
+    adapter.updateWorkflowCard?.(msg.address.chatId, cardJson).catch((err) => {
+      console.error('[workflow-command] Failed to update workflow card:', err);
+    });
+  };
+
+  /**
+   * Create the initial card (called on workflow_started).
+   */
+  const createCard = (): void => {
+    if (!state.cardMode || state.cardCreated) return;
+
+    const content = renderProgressMarkdown(state);
+    const cardJson = buildWorkflowCardJson(content, {
+      footer: { status: '🔄 启动中', elapsed: '0s' },
+    });
+
+    state.cardCreated = true; // optimistic — prevent double creation
+    adapter.createWorkflowCard?.(msg.address.chatId, cardJson, msg.messageId)
+      ?.then((cardId) => {
+        if (!cardId) {
+          // Card creation failed — degrade to text mode
+          console.warn('[workflow-command] Card creation failed, falling back to text mode');
+          state.cardMode = false;
+          state.cardCreated = false;
+          // Re-send the start message as text
+          pushText(`🚀 <b>工作流已启动</b> (run: <code>${esc(state.runId)}</code>)`);
+        } else {
+          // Card created successfully — flush any pending updates accumulated during creation
+          flushCardUpdate();
+        }
+      })
+      ?.catch(() => {
+        state.cardMode = false;
+        state.cardCreated = false;
+      });
+  };
+
+  /**
+   * Finalize the card with terminal content (completed / failed / paused).
+   */
+  const finalizeCard = (content: string, headerTitle: string, headerTemplate: string, footerStatus: string): void => {
+    if (state.updateTimer) {
+      clearTimeout(state.updateTimer);
+      state.updateTimer = null;
+    }
+
+    const elapsed = formatElapsed(Date.now() - state.startedAt);
+    const cardJson = buildWorkflowCardJson(content, {
+      headerTitle,
+      headerTemplate,
+      footer: { status: footerStatus, elapsed },
+    });
+
+    adapter.finalizeWorkflowCard?.(msg.address.chatId, cardJson)?.catch((err) => {
+      console.error('[workflow-command] Failed to finalize workflow card:', err);
+    });
+  };
+
+  // ── Event subscriptions ──────────────────────────────────────
+
   engine.on('workflow_started', (e: WorkflowEvent) => {
-    push(`🚀 <b>工作流已启动</b> (run: <code>${esc(e.run_id)}</code>)`);
-  });
-
-  engine.on('round_started', (e: WorkflowEvent) => {
-    push(`📋 <b>第 ${e.round} 轮</b>审查开始`);
-  });
-
-  engine.on('codex_review_started', () => {
-    push('🔍 Codex 审查中...');
-  });
-
-  engine.on('codex_review_completed', (e: WorkflowEvent) => {
-    const data = e.data as {
-      findings_count?: number;
-      overall_assessment?: string;
-    };
-    const count = data.findings_count ?? '?';
-    const assessment = data.overall_assessment ?? '';
-    const assessLabel =
-      assessment === 'lgtm' ? ' 👍' :
-      assessment === 'major_issues' ? ' ⚠️' : '';
-    push(`✅ Codex 审查完成，发现 <b>${count}</b> 个问题${assessLabel}`);
-  });
-
-  engine.on('issue_matching_completed', (e: WorkflowEvent) => {
-    const data = e.data as {
-      new_issues?: number;
-      new_high_critical?: number;
-    };
-    const newCount = data.new_issues ?? 0;
-    const hcCount = data.new_high_critical ?? 0;
-    if (newCount > 0) {
-      push(
-        `📊 新增 <b>${newCount}</b> 个问题` +
-        (hcCount > 0 ? ` (🔴 Critical/High: <b>${hcCount}</b>)` : ''),
-      );
+    state.runId = e.run_id;
+    if (state.cardMode) {
+      createCard();
+    } else {
+      pushText(`🚀 <b>工作流已启动</b> (run: <code>${esc(e.run_id)}</code>)`);
     }
   });
 
-  engine.on('claude_decision_started', () => {
-    push('🤔 Claude 决策中...');
+  engine.on('round_started', (e: WorkflowEvent) => {
+    state.currentRound = e.round;
+    ensureRound(state, e.round);
+    if (state.cardMode) {
+      scheduleCardUpdate();
+    } else {
+      pushText(`📋 <b>第 ${e.round} 轮</b>审查开始`);
+    }
+  });
+
+  engine.on('codex_review_started', (e: WorkflowEvent) => {
+    const round = ensureRound(state, e.round);
+    round.codex = 'running';
+    if (state.cardMode) {
+      scheduleCardUpdate();
+    } else {
+      pushText('🔍 Codex 审查中...');
+    }
+  });
+
+  engine.on('codex_review_completed', (e: WorkflowEvent) => {
+    const data = e.data as { findings_count?: number; overall_assessment?: string };
+    const round = ensureRound(state, e.round);
+    round.codex = 'done';
+    round.codexFindings = data.findings_count;
+    round.codexAssessment = data.overall_assessment;
+
+    if (state.cardMode) {
+      scheduleCardUpdate();
+    } else {
+      const count = data.findings_count ?? '?';
+      const assessment = data.overall_assessment ?? '';
+      const assessLabel =
+        assessment === 'lgtm' ? ' 👍' :
+        assessment === 'major_issues' ? ' ⚠️' : '';
+      pushText(`✅ Codex 审查完成，发现 <b>${count}</b> 个问题${assessLabel}`);
+    }
+  });
+
+  engine.on('issue_matching_completed', (e: WorkflowEvent) => {
+    const data = e.data as { new_issues?: number; new_high_critical?: number };
+    const round = ensureRound(state, e.round);
+    round.newIssues = data.new_issues;
+    round.highCritical = data.new_high_critical;
+
+    if (state.cardMode) {
+      scheduleCardUpdate();
+    } else {
+      const newCount = data.new_issues ?? 0;
+      const hcCount = data.new_high_critical ?? 0;
+      if (newCount > 0) {
+        pushText(
+          `📊 新增 <b>${newCount}</b> 个问题` +
+          (hcCount > 0 ? ` (🔴 Critical/High: <b>${hcCount}</b>)` : ''),
+        );
+      }
+    }
+  });
+
+  engine.on('claude_decision_started', (e: WorkflowEvent) => {
+    const round = ensureRound(state, e.round);
+    round.claude = 'running';
+    if (state.cardMode) {
+      scheduleCardUpdate();
+    } else {
+      pushText('🤔 Claude 决策中...');
+    }
   });
 
   engine.on('claude_decision_completed', (e: WorkflowEvent) => {
     const data = e.data as {
-      accepted?: number;
-      rejected?: number;
-      deferred?: number;
-      resolved?: number;
-      spec_updated?: boolean;
-      plan_updated?: boolean;
+      accepted?: number; rejected?: number; deferred?: number; resolved?: number;
+      spec_updated?: boolean; plan_updated?: boolean;
     };
-    const parts: string[] = [];
-    if (data.accepted) parts.push(`accepted: ${data.accepted}`);
-    if (data.resolved) parts.push(`resolved: ${data.resolved}`);
-    if (data.rejected) parts.push(`rejected: ${data.rejected}`);
-    if (data.deferred) parts.push(`deferred: ${data.deferred}`);
-    const updates: string[] = [];
-    if (data.spec_updated) updates.push('spec');
-    if (data.plan_updated) updates.push('plan');
-    push(
-      `✅ Claude 决策完成` +
-      (parts.length > 0 ? ` (${parts.join(', ')})` : '') +
-      (updates.length > 0 ? `\n📝 已更新: ${updates.join(', ')}` : ''),
-    );
+    const round = ensureRound(state, e.round);
+    round.claude = 'done';
+    round.claudeDecision = {
+      accepted: data.accepted ?? 0,
+      rejected: data.rejected ?? 0,
+      deferred: data.deferred ?? 0,
+      resolved: data.resolved ?? 0,
+    };
+    round.specUpdated = data.spec_updated;
+    round.planUpdated = data.plan_updated;
+
+    if (state.cardMode) {
+      scheduleCardUpdate();
+    } else {
+      const parts: string[] = [];
+      if (data.accepted) parts.push(`accepted: ${data.accepted}`);
+      if (data.resolved) parts.push(`resolved: ${data.resolved}`);
+      if (data.rejected) parts.push(`rejected: ${data.rejected}`);
+      if (data.deferred) parts.push(`deferred: ${data.deferred}`);
+      const updates: string[] = [];
+      if (data.spec_updated) updates.push('spec');
+      if (data.plan_updated) updates.push('plan');
+      pushText(
+        `✅ Claude 决策完成` +
+        (parts.length > 0 ? ` (${parts.join(', ')})` : '') +
+        (updates.length > 0 ? `\n📝 已更新: ${updates.join(', ')}` : ''),
+      );
+    }
   });
 
   engine.on('termination_triggered', (e: WorkflowEvent) => {
     const data = e.data as { reason?: string; action?: string; details?: string };
-    push(
-      `⏹ <b>终止判定</b>: ${esc(data.reason ?? 'unknown')}\n` +
-      (data.details ? esc(data.details) : ''),
-    );
+    state.termination = { reason: data.reason ?? 'unknown', details: data.details };
+    if (state.cardMode) {
+      scheduleCardUpdate();
+    } else {
+      pushText(
+        `⏹ <b>终止判定</b>: ${esc(data.reason ?? 'unknown')}\n` +
+        (data.details ? esc(data.details) : ''),
+      );
+    }
   });
 
   engine.on('workflow_completed', (e: WorkflowEvent) => {
     const data = e.data as {
-      total_rounds?: number;
-      total_issues?: number;
-      reason?: string;
+      total_rounds?: number; total_issues?: number; reason?: string;
       severity?: { critical?: number; high?: number; medium?: number; low?: number };
       status?: { open?: number; accepted?: number; rejected?: number; deferred?: number; resolved?: number };
     };
 
-    const lines: string[] = [`🎉 <b>工作流完成！</b>`];
-    lines.push(`Run: <code>${esc(e.run_id)}</code>`);
-    if (data.reason) lines.push(`终止原因: ${esc(data.reason)}`);
-    if (data.total_rounds) lines.push(`轮次: ${data.total_rounds}`);
-    if (data.total_issues != null) lines.push(`Issue 总数: <b>${data.total_issues}</b>`);
-
-    // Severity distribution
-    if (data.severity) {
-      const s = data.severity;
-      const sevParts: string[] = [];
-      if (s.critical) sevParts.push(`🔴 Critical: ${s.critical}`);
-      if (s.high) sevParts.push(`🟠 High: ${s.high}`);
-      if (s.medium) sevParts.push(`🟡 Medium: ${s.medium}`);
-      if (s.low) sevParts.push(`🟢 Low: ${s.low}`);
-      if (sevParts.length > 0) lines.push(`严重度: ${sevParts.join(' · ')}`);
+    if (state.cardMode && state.cardCreated) {
+      const content = renderCompletionMarkdown(state, data);
+      finalizeCard(content, '✅ 工作流完成', 'green', '✅ 已完成');
+    } else {
+      const lines: string[] = [`🎉 <b>工作流完成！</b>`];
+      lines.push(`Run: <code>${esc(e.run_id)}</code>`);
+      if (data.reason) lines.push(`终止原因: ${esc(data.reason)}`);
+      if (data.total_rounds) lines.push(`轮次: ${data.total_rounds}`);
+      if (data.total_issues != null) lines.push(`Issue 总数: <b>${data.total_issues}</b>`);
+      if (data.severity) {
+        const s = data.severity;
+        const sevParts: string[] = [];
+        if (s.critical) sevParts.push(`🔴 Critical: ${s.critical}`);
+        if (s.high) sevParts.push(`🟠 High: ${s.high}`);
+        if (s.medium) sevParts.push(`🟡 Medium: ${s.medium}`);
+        if (s.low) sevParts.push(`🟢 Low: ${s.low}`);
+        if (sevParts.length > 0) lines.push(`严重度: ${sevParts.join(' · ')}`);
+      }
+      if (data.status) {
+        const st = data.status;
+        const stParts: string[] = [];
+        if (st.open) stParts.push(`open: ${st.open}`);
+        if (st.resolved) stParts.push(`resolved: ${st.resolved}`);
+        if (st.accepted) stParts.push(`accepted: ${st.accepted}`);
+        if (st.rejected) stParts.push(`rejected: ${st.rejected}`);
+        if (st.deferred) stParts.push(`deferred: ${st.deferred}`);
+        if (stParts.length > 0) lines.push(`状态: ${stParts.join(' · ')}`);
+      }
+      pushText(lines.join('\n'));
     }
-
-    // Status distribution
-    if (data.status) {
-      const st = data.status;
-      const stParts: string[] = [];
-      if (st.open) stParts.push(`open: ${st.open}`);
-      if (st.resolved) stParts.push(`resolved: ${st.resolved}`);
-      if (st.accepted) stParts.push(`accepted: ${st.accepted}`);
-      if (st.rejected) stParts.push(`rejected: ${st.rejected}`);
-      if (st.deferred) stParts.push(`deferred: ${st.deferred}`);
-      if (stParts.length > 0) lines.push(`状态: ${stParts.join(' · ')}`);
-    }
-
-    push(lines.join('\n'));
   });
 
   engine.on('workflow_failed', (e: WorkflowEvent) => {
     const data = e.data as { error?: string };
-    push(`❌ <b>工作流失败</b>: ${esc(data.error ?? 'unknown error')}`);
+    if (state.cardMode && state.cardCreated) {
+      const content = renderProgressMarkdown(state) + `\n\n---\n\n❌ **工作流失败**: ${data.error ?? 'unknown error'}`;
+      finalizeCard(content, '❌ 工作流失败', 'red', '❌ 失败');
+    } else {
+      pushText(`❌ <b>工作流失败</b>: ${esc(data.error ?? 'unknown error')}`);
+    }
   });
 
   engine.on('human_review_requested', (e: WorkflowEvent) => {
     const data = e.data as { reason?: string };
-    push(
-      `⚠️ <b>需要人工审查</b>\n` +
-      (data.reason ? `原因: ${esc(data.reason)}\n` : '') +
-      `使用 <code>/workflow resume ${esc(e.run_id)}</code> 继续`,
-    );
+    state.humanReview = { reason: data.reason };
+    if (state.cardMode && state.cardCreated) {
+      const content = renderProgressMarkdown(state);
+      finalizeCard(content, '⚠️ 需要人工审查', 'orange', '⏸ 等待人工');
+    } else {
+      pushText(
+        `⚠️ <b>需要人工审查</b>\n` +
+        (data.reason ? `原因: ${esc(data.reason)}\n` : '') +
+        `使用 <code>/workflow resume ${esc(e.run_id)}</code> 继续`,
+      );
+    }
   });
 
   engine.on('workflow_resumed', (e: WorkflowEvent) => {
-    push(`🔄 <b>工作流已恢复</b> (run: <code>${esc(e.run_id)}</code>)`);
+    state.humanReview = undefined;
+    if (state.cardMode) {
+      // Resume reuses the same chat, but card was already finalized.
+      // Need a new card for the resumed workflow.
+      state.cardCreated = false;
+      state.runId = e.run_id;
+      createCard();
+    } else {
+      pushText(`🔄 <b>工作流已恢复</b> (run: <code>${esc(e.run_id)}</code>)`);
+    }
   });
 
   // Error events (non-fatal, informational)
   engine.on('codex_review_timeout', (e: WorkflowEvent) => {
-    push(`⏱ Codex 审查超时 (第 ${e.round} 轮)，已跳过，进入下一轮`);
+    const round = ensureRound(state, e.round);
+    round.codex = 'done';
+    round.warnings.push(`Codex 审查超时，已跳过`);
+    if (state.cardMode) {
+      scheduleCardUpdate();
+    } else {
+      pushText(`⏱ Codex 审查超时 (第 ${e.round} 轮)，已跳过，进入下一轮`);
+    }
   });
 
   engine.on('claude_decision_timeout', (e: WorkflowEvent) => {
-    push(`⏱ Claude 决策超时 (第 ${e.round} 轮)，已跳过，进入下一轮`);
+    const round = ensureRound(state, e.round);
+    round.claude = 'done';
+    round.warnings.push(`Claude 决策超时，已跳过`);
+    if (state.cardMode) {
+      scheduleCardUpdate();
+    } else {
+      pushText(`⏱ Claude 决策超时 (第 ${e.round} 轮)，已跳过，进入下一轮`);
+    }
   });
 
   engine.on('codex_parse_error', (e: WorkflowEvent) => {
-    push(`⚠️ Codex 输出解析失败 (第 ${e.round} 轮)，使用空结果继续`);
+    const round = ensureRound(state, e.round);
+    round.warnings.push(`Codex 输出解析失败`);
+    if (state.cardMode) {
+      scheduleCardUpdate();
+    } else {
+      pushText(`⚠️ Codex 输出解析失败 (第 ${e.round} 轮)，使用空结果继续`);
+    }
   });
 
   engine.on('claude_parse_error', (e: WorkflowEvent) => {
-    push(`⚠️ Claude 输出解析失败 (第 ${e.round} 轮)，使用空结果继续`);
+    const round = ensureRound(state, e.round);
+    round.warnings.push(`Claude 输出解析失败`);
+    if (state.cardMode) {
+      scheduleCardUpdate();
+    } else {
+      pushText(`⚠️ Claude 输出解析失败 (第 ${e.round} 轮)，使用空结果继续`);
+    }
   });
 }
 

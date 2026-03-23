@@ -224,6 +224,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
   /** In-flight card creation promises per chatId — prevents duplicate creation. */
   private cardCreatePromises = new Map<string, Promise<boolean>>();
 
+  /** Active workflow progress card state per chatId (independent of streaming cards). */
+  private workflowCards = new Map<string, { cardId: string; sequence: number }>();
+
   // ── Lifecycle ───────────────────────────────────────────────
 
   async start(): Promise<void> {
@@ -325,6 +328,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     }
     this.activeCards.clear();
     this.cardCreatePromises.clear();
+    this.workflowCards.clear();
 
     // Clear state
     this.seenMessageIds.clear();
@@ -878,6 +882,111 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
   async onStreamEnd(chatId: string, status: 'completed' | 'interrupted' | 'error', responseText: string): Promise<boolean> {
     return this.finalizeCard(chatId, status, responseText);
+  }
+
+  // ── Workflow progress card ────────────────────────────────────
+
+  /**
+   * Create a workflow progress card and send it as a message.
+   * Uses CardKit v1 (non-streaming) — the full card JSON is replaced on each update.
+   *
+   * @returns cardId on success, null on failure.
+   */
+  async createWorkflowCard(chatId: string, cardJson: string, replyToMessageId?: string): Promise<string | null> {
+    if (!this.restClient) return null;
+    if (this.workflowCards.has(chatId)) {
+      console.warn('[feishu-adapter] Workflow card already exists for chat, skipping creation');
+      return null;
+    }
+
+    try {
+      // Step 1: Create card via CardKit v1
+      const createResp = await (this.restClient as any).cardkit.v1.card.create({
+        data: { type: 'card_json', data: cardJson },
+      });
+      const cardId = createResp?.data?.card_id;
+      if (!cardId) {
+        console.warn('[feishu-adapter] Workflow card create returned no card_id');
+        return null;
+      }
+
+      // Step 2: Send card as IM message
+      const cardContent = JSON.stringify({ type: 'card', data: { card_id: cardId } });
+      let msgResp;
+      if (replyToMessageId) {
+        msgResp = await this.restClient.im.message.reply({
+          path: { message_id: replyToMessageId },
+          data: { content: cardContent, msg_type: 'interactive' },
+        });
+      } else {
+        msgResp = await this.restClient.im.message.create({
+          params: { receive_id_type: 'chat_id' },
+          data: { receive_id: chatId, msg_type: 'interactive', content: cardContent },
+        });
+      }
+
+      if (!msgResp?.data?.message_id) {
+        console.warn('[feishu-adapter] Workflow card message send returned no message_id');
+        return null;
+      }
+
+      this.workflowCards.set(chatId, { cardId, sequence: 0 });
+      console.log(`[feishu-adapter] Workflow card created: cardId=${cardId}`);
+      return cardId;
+    } catch (err) {
+      console.warn('[feishu-adapter] Failed to create workflow card:', err instanceof Error ? err.message : err);
+      return null;
+    }
+  }
+
+  /**
+   * Update workflow progress card with new card JSON.
+   */
+  async updateWorkflowCard(chatId: string, cardJson: string): Promise<boolean> {
+    const state = this.workflowCards.get(chatId);
+    if (!state || !this.restClient) return false;
+
+    const nextSeq = state.sequence + 1;
+    try {
+      await (this.restClient as any).cardkit.v1.card.update({
+        path: { card_id: state.cardId },
+        data: { card: { type: 'card_json', data: cardJson }, sequence: nextSeq },
+      });
+      state.sequence = nextSeq; // only bump on success
+      return true;
+    } catch (err) {
+      const payload = findFeishuApiErrorPayload(err);
+      const code = payload?.code ?? null;
+      if (code === FEISHU_TRIGGER_RATE_LIMIT_CODE) {
+        console.warn('[feishu-adapter] Workflow card update rate-limited, will retry on next event');
+      } else {
+        console.warn('[feishu-adapter] Workflow card update failed:', err instanceof Error ? err.message : err);
+      }
+      return false;
+    }
+  }
+
+  /**
+   * Finalize workflow progress card and clean up state.
+   */
+  async finalizeWorkflowCard(chatId: string, cardJson: string): Promise<boolean> {
+    const state = this.workflowCards.get(chatId);
+    if (!state || !this.restClient) return false;
+
+    try {
+      const nextSeq = state.sequence + 1;
+      await (this.restClient as any).cardkit.v1.card.update({
+        path: { card_id: state.cardId },
+        data: { card: { type: 'card_json', data: cardJson }, sequence: nextSeq },
+      });
+      console.log(`[feishu-adapter] Workflow card finalized: cardId=${state.cardId}`);
+      return true;
+    } catch (err) {
+      console.warn('[feishu-adapter] Workflow card finalize failed:', err instanceof Error ? err.message : err);
+      return false;
+    } finally {
+      this.workflowCards.delete(chatId);
+    }
   }
 
   // ── Send ────────────────────────────────────────────────────

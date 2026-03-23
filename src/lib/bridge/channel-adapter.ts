@@ -116,6 +116,27 @@ export abstract class BaseChannelAdapter {
    * Returns true if a card was finalized (caller should skip normal delivery).
    */
   onStreamEnd?(_chatId: string, _status: 'completed' | 'interrupted' | 'error', _responseText: string): Promise<boolean>;
+
+  // ── Workflow progress card (optional) ──────────────────────────
+
+  /**
+   * Create a workflow progress card and send it as a message.
+   * Returns the internal card key (e.g. cardId) on success, or null on failure.
+   * Adapters that do not support interactive cards need not implement this.
+   */
+  createWorkflowCard?(_chatId: string, _cardJson: string, _replyToMessageId?: string): Promise<string | null>;
+
+  /**
+   * Update the content of an existing workflow progress card.
+   * `cardJson` is the full card JSON to replace the current card.
+   */
+  updateWorkflowCard?(_chatId: string, _cardJson: string): Promise<boolean>;
+
+  /**
+   * Finalize and close the workflow progress card.
+   * After this call the card can no longer be updated.
+   */
+  finalizeWorkflowCard?(_chatId: string, _cardJson: string): Promise<boolean>;
 }
 
 // ── Adapter Registry ────────────────────────────────────────────

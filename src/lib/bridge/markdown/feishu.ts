@@ -177,6 +177,69 @@ export function buildFinalCardJson(
   });
 }
 
+// ── Workflow progress card ────────────────────────────────────
+
+/**
+ * Build a workflow progress card JSON (schema 2.0).
+ *
+ * Layout:
+ *   [header]  — title with coloured template
+ *   [markdown] — progress content (rounds, events)
+ *   [hr + notation] — optional footer (elapsed / status)
+ *
+ * Used by workflow-command.ts to create & update the single progress card.
+ */
+export function buildWorkflowCardJson(
+  content: string,
+  opts: {
+    headerTitle?: string;
+    headerTemplate?: string;
+    footer?: { status: string; elapsed: string } | null;
+  } = {},
+): string {
+  const {
+    headerTitle = '🔄 Spec-Review 工作流',
+    headerTemplate = 'blue',
+    footer = null,
+  } = opts;
+
+  const elements: Array<Record<string, unknown>> = [];
+
+  if (content) {
+    elements.push({
+      tag: 'markdown',
+      content,
+      text_align: 'left',
+      text_size: 'normal',
+    });
+  }
+
+  if (footer) {
+    const parts: string[] = [];
+    if (footer.status) parts.push(footer.status);
+    if (footer.elapsed) parts.push(footer.elapsed);
+    if (parts.length > 0) {
+      elements.push({ tag: 'hr' });
+      elements.push({
+        tag: 'markdown',
+        content: parts.join(' · '),
+        text_size: 'notation',
+      });
+    }
+  }
+
+  return JSON.stringify({
+    schema: '2.0',
+    config: { wide_screen_mode: true },
+    header: {
+      title: { tag: 'plain_text', content: headerTitle },
+      template: headerTemplate,
+      icon: { tag: 'standard_icon', token: 'project-and-task_filled' },
+    },
+    body: { elements },
+  });
+}
+
 /**
  * Build a permission card with real action buttons (column_set layout).
  * Structure aligned with CodePilot's working Feishu outbound implementation.
