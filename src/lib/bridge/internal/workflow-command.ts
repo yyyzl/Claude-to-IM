@@ -502,7 +502,7 @@ function renderProgressMarkdown(state: WorkflowProgressState): string {
       if (d.resolved) parts.push(`${d.resolved}↺`);
       if (d.rejected) parts.push(`${d.rejected}✗`);
       if (d.deferred) parts.push(`${d.deferred}⏳`);
-      lines.push(`  🤔 Claude: ${parts.join(' ')}`);
+      lines.push(`  🤔 Claude: ${parts.length > 0 ? parts.join(' ') : '已完成'}`);
 
       const updates: string[] = [];
       if (round.specUpdated) updates.push('spec');
@@ -1109,3 +1109,12 @@ export function _clearActiveWorkflows(): void {
 
 /** @internal Expose resolveSafePath for testing. */
 export const _resolveSafePath = resolveSafePath;
+
+/** @internal Expose renderProgressMarkdown for testing. */
+export const _renderProgressMarkdown = renderProgressMarkdown;
+
+/** @internal Expose renderCompletionMarkdown for testing. */
+export const _renderCompletionMarkdown = renderCompletionMarkdown;
+
+/** @internal Re-export types for testing. */
+export type { RoundProgress as _RoundProgress, WorkflowProgressState as _WorkflowProgressState };
