@@ -1130,3 +1130,68 @@ P1+TP1 批次实施 + 跨 AI 审核修复。包含 5 个代码安全网补全 + 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 23: P1b-CR-0 代码审查工作流设计（3 轮审查迭代）
+
+**Date**: 2026-03-23
+**Task**: P1b-CR-0 代码审查工作流设计（3 轮审查迭代）
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+## 产出
+
+| 产出 | 路径 | 说明 |
+|------|------|------|
+| Code Review Spec | `.claude/plan/code-review-workflow-spec.md` | ~1100 行完整设计文档 |
+| 任务 PRD | `.trellis/tasks/.../03-23-workflow-code-review/prd.md` | 含 7 个核心不变量 + 分类验收清单 |
+| 父 Spec 更新 | `.claude/plan/workflow-engine-spec.md` | P1b 章节精简为链接+核心约束 |
+
+## 核心设计决策
+
+1. **WorkflowProfile 参数化** — 引擎泛化策略，behavior 标志控制步骤差异
+2. **ReviewSnapshot 冻结快照** — blob SHA 按需读取，不用 fs.readFile，解决 staged/resume 一致性
+3. **accepted 终态语义** — acceptedIsTerminal 标志，TerminationJudge 感知
+4. **Issue 结构化扩展** — source_file/line_range/category/fix_instruction 可选字段
+5. **expectedDecisionIds 统一验证** — 覆盖有 findings 和无 findings 两种场景
+6. **数据源分层** — IssueLedger（issue 决策）+ ReviewSnapshot（报告快照）+ WorkflowMeta
+
+## 外部审查闭环
+
+经过 3 轮外部 AI 审查，累计 12+ 个 findings 全部闭环：
+- R1: 状态机不闭合 / 数据混装 / git 合同不完整 / CLI 二义性 → 全部修复
+- R2: 非冻结快照 / 终止语义漂移 / accepted_issues 不闭环 / 真相源表述 → 全部修复
+- R3: IssueMatcher 文字不一致 / reject reason 说明缺失 / prompt 措辞 → 全部修复
+
+## 7 个核心不变量（INV-1~7）
+
+- INV-1: accepted 是终态 + 终止条件对齐（5 条规则）
+- INV-2: reason 和 fix_instruction 分开存储
+- INV-3: 数据真相源分层
+- INV-4: 审查基于冻结快照
+- INV-5: 敏感文件排除 + 审计
+- INV-6: CLI scope 无二义性
+- INV-7: accepted_issues 正式输入 Codex prompt
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3b401ce` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

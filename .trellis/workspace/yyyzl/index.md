@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 22
+- **Total Sessions**: 23
 - **Last Active**: 2026-03-23
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1132 | Active |
+| `journal-1.md` | ~1197 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits |
 |---|------|-------|---------|
+| 23 | 2026-03-23 | P1b-CR-0 代码审查工作流设计（3 轮审查迭代） | `3b401ce` |
 | 22 | 2026-03-23 | 补充工作流卡片渲染函数单元测试 | `a821824` |
 | 21 | 2026-03-23 | feat: workflow 进度推送飞书卡片化 | `e6f7af8` |
 | 20 | 2026-03-23 | Remove /restart command, replace with start/stop management | `7718949` |
