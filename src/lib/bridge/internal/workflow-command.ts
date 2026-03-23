@@ -8,7 +8,7 @@
  *
  * 设计决策：
  * - 每个 chat 同时只能运行一个工作流（防止资源爆炸）
- * - 工作流在后台异步执行，`/workflow start` 立即返回确认
+ * - 工作流在后台异步执行，`/workflow spec-review` / `code-review` 立即返回确认
  * - Engine 实例按需创建（lazy），不在 Bridge 启动时预创建
  * - 事件到消息的映射集中在 `bindProgressEvents()` 中，方便 P2B 卡片化迭代
  * - activeWorkflows 占位在任何 await 之前完成，防止并发 start 竞态
@@ -35,8 +35,8 @@ import { buildWorkflowCardJson, formatElapsed } from '../markdown/feishu.js';
 /** Parsed `/workflow` subcommand. */
 export type WorkflowSubcommand =
   | { kind: 'help' }
-  | { kind: 'start'; workflowType: 'spec-review'; specPath: string; planPath: string; contextPaths: string[]; claudeModel?: string; codexBackend?: string }
-  | { kind: 'start'; workflowType: 'code-review'; range?: string; branchDiff?: string; excludePatterns?: string[]; contextPaths: string[]; claudeModel?: string; codexBackend?: string }
+  | { kind: 'spec-review'; specPath: string; planPath: string; contextPaths: string[]; claudeModel?: string; codexBackend?: string }
+  | { kind: 'code-review'; range?: string; branchDiff?: string; excludePatterns?: string[]; contextPaths: string[]; claudeModel?: string; codexBackend?: string }
   | { kind: 'status'; runId?: string }
   | { kind: 'resume'; runId: string }
   | { kind: 'stop'; runId?: string };
@@ -70,8 +70,8 @@ function chatKey(channelType: string, chatId: string): string {
  *
  * Formats:
  *   /workflow help
- *   /workflow start <spec> <plan> [--context file1,file2]
- *   /workflow start --type code-review [--range A..B] [--branch-diff base] [--exclude pat1,pat2]
+ *   /workflow spec-review <spec> <plan> [--context file1,file2]
+ *   /workflow code-review [--range A..B] [--branch-diff base] [--exclude pat1,pat2]
  *   /workflow status [run-id]
  *   /workflow resume <run-id>
  *   /workflow stop [run-id]
@@ -84,7 +84,8 @@ export function parseWorkflowArgs(argsRaw: string): WorkflowSubcommand {
   const sub = parts[0].toLowerCase();
 
   switch (sub) {
-    case 'start': {
+    case 'spec-review':
+    case 'code-review': {
       // Extract common named options first
       let claudeModel: string | undefined;
       let codexBackend: string | undefined;
@@ -105,9 +106,7 @@ export function parseWorkflowArgs(argsRaw: string): WorkflowSubcommand {
         codexBackend = parts[backendIdx + 1];
       }
 
-      // ── Check for --type code-review ──
-      const typeIdx = parts.indexOf('--type');
-      if (typeIdx !== -1 && parts[typeIdx + 1]?.toLowerCase() === 'code-review') {
+      if (sub === 'code-review') {
         let range: string | undefined;
         let branchDiff: string | undefined;
         let excludePatterns: string[] | undefined;
@@ -128,19 +127,19 @@ export function parseWorkflowArgs(argsRaw: string): WorkflowSubcommand {
         }
 
         return {
-          kind: 'start', workflowType: 'code-review',
+          kind: 'code-review',
           range, branchDiff, excludePatterns,
           contextPaths, claudeModel, codexBackend,
         };
       }
 
-      // ── Default: spec-review (requires <spec> <plan>) ──
+      // ── spec-review (requires <spec> <plan>) ──
       if (parts.length < 3 || parts[1].startsWith('--')) return { kind: 'help' };
       const specPath = parts[1];
       const planPath = parts[2];
 
       return {
-        kind: 'start', workflowType: 'spec-review',
+        kind: 'spec-review',
         specPath, planPath, contextPaths, claudeModel, codexBackend,
       };
     }
@@ -196,12 +195,12 @@ export async function handleWorkflowCommand(
       await deliverText(adapter, msg, buildHelpText());
       return;
 
-    case 'start':
-      if (cmd.workflowType === 'code-review') {
-        await handleStartCodeReview(adapter, msg, cmd, cwd, key);
-      } else {
-        await handleStartSpecReview(adapter, msg, cmd, cwd, key);
-      }
+    case 'spec-review':
+      await handleStartSpecReview(adapter, msg, cmd, cwd, key);
+      return;
+
+    case 'code-review':
+      await handleStartCodeReview(adapter, msg, cmd, cwd, key);
       return;
 
     case 'status':
@@ -223,13 +222,13 @@ export async function handleWorkflowCommand(
 async function handleStartSpecReview(
   adapter: BaseChannelAdapter,
   msg: InboundMessage,
-  cmd: Extract<WorkflowSubcommand, { kind: 'start'; workflowType: 'spec-review' }>,
+  cmd: Extract<WorkflowSubcommand, { kind: 'spec-review' }>,
   cwd: string,
   key: string,
 ): Promise<void> {
   // ── Guard: only one workflow per chat ──
   // CRITICAL: check + set MUST happen synchronously (before any await)
-  // to prevent concurrent /workflow start from both passing the guard.
+  // to prevent concurrent workflow starts from both passing the guard.
   if (activeWorkflows.has(key)) {
     const running = activeWorkflows.get(key)!;
     await deliverText(adapter, msg,
@@ -363,7 +362,7 @@ async function handleStartSpecReview(
 async function handleStartCodeReview(
   adapter: BaseChannelAdapter,
   msg: InboundMessage,
-  cmd: Extract<WorkflowSubcommand, { kind: 'start'; workflowType: 'code-review' }>,
+  cmd: Extract<WorkflowSubcommand, { kind: 'code-review' }>,
   cwd: string,
   key: string,
 ): Promise<void> {
@@ -563,7 +562,11 @@ async function handleStatus(
   if (running) {
     await deliverRunStatus(adapter, msg, running.runId, cwd);
   } else {
-    await deliverText(adapter, msg, '当前聊天没有运行中的工作流。\n使用 <code>/workflow start</code> 启动。');
+    await deliverText(
+      adapter,
+      msg,
+      '当前聊天没有运行中的工作流。\n使用 <code>/workflow spec-review &lt;spec&gt; &lt;plan&gt;</code> 或 <code>/workflow code-review</code> 启动。',
+    );
   }
 }
 
@@ -1275,23 +1278,23 @@ function buildHelpText(): string {
     '<b>/workflow 命令</b>',
     '',
     '<b>Spec-Review</b>',
-    '<code>/workflow start &lt;spec&gt; &lt;plan&gt;</code>',
+    '<code>/workflow spec-review &lt;spec&gt; &lt;plan&gt;</code>',
     '  启动 Spec-Review 工作流',
     '',
-    '<code>/workflow start &lt;spec&gt; &lt;plan&gt; --context f1,f2</code>',
+    '<code>/workflow spec-review &lt;spec&gt; &lt;plan&gt; --context f1,f2</code>',
     '  启动并附加上下文文件',
     '',
     '<b>Code-Review</b>',
-    '<code>/workflow start --type code-review</code>',
+    '<code>/workflow code-review</code>',
     '  审查 staged changes（默认）',
     '',
-    '<code>/workflow start --type code-review --range A..B</code>',
+    '<code>/workflow code-review --range A..B</code>',
     '  审查两个 commit 之间的变更',
     '',
-    '<code>/workflow start --type code-review --branch-diff main</code>',
+    '<code>/workflow code-review --branch-diff main</code>',
     '  审查相对于 base 分支的所有变更',
     '',
-    '<code>/workflow start --type code-review --exclude "*.test.ts,*.md"</code>',
+    '<code>/workflow code-review --exclude "*.test.ts,*.md"</code>',
     '  排除指定文件模式',
     '',
     '<b>通用选项</b>',

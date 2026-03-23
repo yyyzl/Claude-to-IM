@@ -2,7 +2,7 @@
  * Unit tests for workflow-command — `/workflow` 命令解析与子命令分发。
  *
  * 测试范围：
- * - parseWorkflowArgs(): 子命令解析（help/start/status/resume/stop）
+ * - parseWorkflowArgs(): 子命令解析（help/spec-review/code-review/status/resume/stop）
  * - _resolveSafePath(): 路径遍历防护
  * - Edge cases: 空输入、缺参、多余参数、--context 解析
  */
@@ -45,15 +45,14 @@ describe('parseWorkflowArgs', () => {
   });
 
   // ================================================================
-  // start
+  // spec-review / code-review
   // ================================================================
 
-  describe('start', () => {
-    it('parses start with spec and plan paths', () => {
-      const result = parseWorkflowArgs('start spec.md plan.md');
+  describe('spec-review', () => {
+    it('parses spec-review with spec and plan paths', () => {
+      const result = parseWorkflowArgs('spec-review spec.md plan.md');
       assert.deepStrictEqual(result, {
-        kind: 'start',
-        workflowType: 'spec-review',
+        kind: 'spec-review',
         specPath: 'spec.md',
         planPath: 'plan.md',
         contextPaths: [],
@@ -62,11 +61,10 @@ describe('parseWorkflowArgs', () => {
       });
     });
 
-    it('parses start with --context files', () => {
-      const result = parseWorkflowArgs('start spec.md plan.md --context a.md,b.md');
+    it('parses spec-review with --context files', () => {
+      const result = parseWorkflowArgs('spec-review spec.md plan.md --context a.md,b.md');
       assert.deepStrictEqual(result, {
-        kind: 'start',
-        workflowType: 'spec-review',
+        kind: 'spec-review',
         specPath: 'spec.md',
         planPath: 'plan.md',
         contextPaths: ['a.md', 'b.md'],
@@ -76,10 +74,9 @@ describe('parseWorkflowArgs', () => {
     });
 
     it('handles single context file', () => {
-      const result = parseWorkflowArgs('start spec.md plan.md --context readme.md');
+      const result = parseWorkflowArgs('spec-review spec.md plan.md --context readme.md');
       assert.deepStrictEqual(result, {
-        kind: 'start',
-        workflowType: 'spec-review',
+        kind: 'spec-review',
         specPath: 'spec.md',
         planPath: 'plan.md',
         contextPaths: ['readme.md'],
@@ -89,20 +86,19 @@ describe('parseWorkflowArgs', () => {
     });
 
     it('returns help when spec is missing', () => {
-      const result = parseWorkflowArgs('start');
+      const result = parseWorkflowArgs('spec-review');
       assert.deepStrictEqual(result, { kind: 'help' });
     });
 
     it('returns help when plan is missing', () => {
-      const result = parseWorkflowArgs('start spec.md');
+      const result = parseWorkflowArgs('spec-review spec.md');
       assert.deepStrictEqual(result, { kind: 'help' });
     });
 
     it('handles paths with directories', () => {
-      const result = parseWorkflowArgs('start .claude/plan/spec.md .claude/plan/plan.md');
+      const result = parseWorkflowArgs('spec-review .claude/plan/spec.md .claude/plan/plan.md');
       assert.deepStrictEqual(result, {
-        kind: 'start',
-        workflowType: 'spec-review',
+        kind: 'spec-review',
         specPath: '.claude/plan/spec.md',
         planPath: '.claude/plan/plan.md',
         contextPaths: [],
@@ -112,11 +108,10 @@ describe('parseWorkflowArgs', () => {
     });
 
     it('handles spec and plan in different subdirectories', () => {
-      // /workflow start docs/spec.md plans/plan.md  ✅ 可以不同子目录
-      const result = parseWorkflowArgs('start docs/spec.md plans/plan.md');
+      // /workflow spec-review docs/spec.md plans/plan.md  ✅ 可以不同子目录
+      const result = parseWorkflowArgs('spec-review docs/spec.md plans/plan.md');
       assert.deepStrictEqual(result, {
-        kind: 'start',
-        workflowType: 'spec-review',
+        kind: 'spec-review',
         specPath: 'docs/spec.md',
         planPath: 'plans/plan.md',
         contextPaths: [],
@@ -126,10 +121,9 @@ describe('parseWorkflowArgs', () => {
     });
 
     it('ignores --context without value', () => {
-      const result = parseWorkflowArgs('start spec.md plan.md --context');
+      const result = parseWorkflowArgs('spec-review spec.md plan.md --context');
       assert.deepStrictEqual(result, {
-        kind: 'start',
-        workflowType: 'spec-review',
+        kind: 'spec-review',
         specPath: 'spec.md',
         planPath: 'plan.md',
         contextPaths: [],
@@ -139,10 +133,9 @@ describe('parseWorkflowArgs', () => {
     });
 
     it('parses --model flag', () => {
-      const result = parseWorkflowArgs('start spec.md plan.md --model claude-opus-4-20250514');
+      const result = parseWorkflowArgs('spec-review spec.md plan.md --model claude-opus-4-20250514');
       assert.deepStrictEqual(result, {
-        kind: 'start',
-        workflowType: 'spec-review',
+        kind: 'spec-review',
         specPath: 'spec.md',
         planPath: 'plan.md',
         contextPaths: [],
@@ -152,10 +145,9 @@ describe('parseWorkflowArgs', () => {
     });
 
     it('parses --codex-backend flag', () => {
-      const result = parseWorkflowArgs('start spec.md plan.md --codex-backend gemini');
+      const result = parseWorkflowArgs('spec-review spec.md plan.md --codex-backend gemini');
       assert.deepStrictEqual(result, {
-        kind: 'start',
-        workflowType: 'spec-review',
+        kind: 'spec-review',
         specPath: 'spec.md',
         planPath: 'plan.md',
         contextPaths: [],
@@ -165,13 +157,55 @@ describe('parseWorkflowArgs', () => {
     });
 
     it('parses all flags together', () => {
-      const result = parseWorkflowArgs('start spec.md plan.md --context a.md --model claude-opus-4-20250514 --codex-backend gemini');
+      const result = parseWorkflowArgs('spec-review spec.md plan.md --context a.md --model claude-opus-4-20250514 --codex-backend gemini');
       assert.deepStrictEqual(result, {
-        kind: 'start',
-        workflowType: 'spec-review',
+        kind: 'spec-review',
         specPath: 'spec.md',
         planPath: 'plan.md',
         contextPaths: ['a.md'],
+        claudeModel: 'claude-opus-4-20250514',
+        codexBackend: 'gemini',
+      });
+    });
+  });
+
+  describe('code-review', () => {
+    it('parses code-review with default staged scope', () => {
+      const result = parseWorkflowArgs('code-review');
+      assert.deepStrictEqual(result, {
+        kind: 'code-review',
+        range: undefined,
+        branchDiff: undefined,
+        excludePatterns: undefined,
+        contextPaths: [],
+        claudeModel: undefined,
+        codexBackend: undefined,
+      });
+    });
+
+    it('parses code-review with --range', () => {
+      const result = parseWorkflowArgs('code-review --range main..HEAD');
+      assert.deepStrictEqual(result, {
+        kind: 'code-review',
+        range: 'main..HEAD',
+        branchDiff: undefined,
+        excludePatterns: undefined,
+        contextPaths: [],
+        claudeModel: undefined,
+        codexBackend: undefined,
+      });
+    });
+
+    it('parses code-review with branch diff, exclude, context and model flags', () => {
+      const result = parseWorkflowArgs(
+        'code-review --branch-diff main --exclude *.test.ts,*.md --context docs/review.md --model claude-opus-4-20250514 --codex-backend gemini',
+      );
+      assert.deepStrictEqual(result, {
+        kind: 'code-review',
+        range: undefined,
+        branchDiff: 'main',
+        excludePatterns: ['*.test.ts', '*.md'],
+        contextPaths: ['docs/review.md'],
         claudeModel: 'claude-opus-4-20250514',
         codexBackend: 'gemini',
       });
@@ -231,13 +265,25 @@ describe('parseWorkflowArgs', () => {
   // ================================================================
 
   describe('case insensitivity', () => {
-    it('handles uppercase START', () => {
-      const result = parseWorkflowArgs('START spec.md plan.md');
+    it('handles uppercase SPEC-REVIEW', () => {
+      const result = parseWorkflowArgs('SPEC-REVIEW spec.md plan.md');
       assert.deepStrictEqual(result, {
-        kind: 'start',
-        workflowType: 'spec-review',
+        kind: 'spec-review',
         specPath: 'spec.md',
         planPath: 'plan.md',
+        contextPaths: [],
+        claudeModel: undefined,
+        codexBackend: undefined,
+      });
+    });
+
+    it('handles uppercase CODE-REVIEW', () => {
+      const result = parseWorkflowArgs('CODE-REVIEW --range HEAD~1..HEAD');
+      assert.deepStrictEqual(result, {
+        kind: 'code-review',
+        range: 'HEAD~1..HEAD',
+        branchDiff: undefined,
+        excludePatterns: undefined,
         contextPaths: [],
         claudeModel: undefined,
         codexBackend: undefined,
@@ -252,6 +298,13 @@ describe('parseWorkflowArgs', () => {
     it('handles RESUME with run-id', () => {
       const result = parseWorkflowArgs('RESUME abc123');
       assert.deepStrictEqual(result, { kind: 'resume', runId: 'abc123' });
+    });
+  });
+
+  describe('compat removal', () => {
+    it('returns help for legacy start syntax', () => {
+      const result = parseWorkflowArgs('start spec.md plan.md');
+      assert.deepStrictEqual(result, { kind: 'help' });
     });
   });
 });
@@ -296,7 +349,7 @@ describe('resolveSafePath', () => {
     });
 
     it('rejects cross-repo traversal as spec path', () => {
-      // /workflow start ../../other-repo/spec.md plan.md  ❌ 被路径遍历保护拦住
+      // /workflow spec-review ../../other-repo/spec.md plan.md  ❌ 被路径遍历保护拦住
       assert.equal(_resolveSafePath(cwd, '../../other-repo/spec.md'), null);
     });
 

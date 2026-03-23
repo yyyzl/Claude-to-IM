@@ -14,7 +14,7 @@ export function buildBridgeCommandHelp(): string {
     '/git draft - Generate commit draft (LLM)',
     '/git push - Push current branch',
     '/usage [今天|昨天|最近N天] - Show token usage summary',
-    '/workflow start|status|resume|stop - Spec-Review 工作流',
+    '/workflow spec-review|code-review|status|resume|stop - Workflow 工作流',
     '/perm allow|allow_session|deny &lt;id&gt; - Respond to permission request',
     '1/2/3 - Quick permission reply (Feishu/QQ, single pending)',
     '/help - Show this help',

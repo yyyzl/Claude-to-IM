@@ -332,15 +332,15 @@ interface ClaudeDecisionOutput {
 | 项目 | 详情 |
 |------|------|
 | 新增文件 | `internal/workflow-command.ts` (~400 行) |
-| 命令 | `start <spec> <plan>` / `status [run-id]` / `resume <run-id>` / `stop` |
-| 架构决策 | 每 chat 单工作流，Map 防并发；后台异步执行，start 立即返回 |
+| 命令 | `spec-review <spec> <plan>` / `code-review` / `status [run-id]` / `resume <run-id>` / `stop` |
+| 架构决策 | 每 chat 单工作流，Map 防并发；后台异步执行，审查命令立即返回 |
 | 测试 | 20 个子命令解析测试，总 128 tests |
 
 ### 6.3 Session 6：竞态 + 安全 + 健壮性修复（⚠ 重要）
 
 | 严重度 | 问题 | 修复 |
 |--------|------|------|
-| **Critical** | 并发 `/workflow start` 竞态 → 孤儿 engine 泄漏 | has()+set() 同步完成，finally 自动清理 |
+| **Critical** | 并发 `/workflow spec-review` / `code-review` 竞态 → 孤儿 engine 泄漏 | has()+set() 同步完成，finally 自动清理 |
 | **High** | 路径遍历可读任意文件（spec/plan 参数未校验） | 新增 `resolveSafePath()` 校验路径在 cwd 内 |
 | **High** | `/stop` 语义矛盾 + 丢弃 runId 参数 | handleStop 接收 cmd，支持 run-id |
 | **Medium** | fire-and-forget 中 unhandled rejection | `.catch(() => {})` 吞掉 delivery 失败 |
@@ -491,9 +491,10 @@ src/lib/bridge/internal/
 
 | 命令 | 功能 | 状态 |
 |------|------|------|
-| `/workflow start <spec> <plan>` | 启动 Spec-Review 工作流 | ✅ |
-| `/workflow start --type code-review [--range A..B|--branch-diff base]` | 启动 Code-Review review-only MVP（IM 入口） | ✅ |
-| `/workflow start --model <m> --codex-backend <b>` | 指定模型 | ✅ |
+| `/workflow spec-review <spec> <plan>` | 启动 Spec-Review 工作流 | ✅ |
+| `/workflow code-review [--range A..B|--branch-diff base]` | 启动 Code-Review review-only MVP（IM 入口） | ✅ |
+| `/workflow spec-review ... --model <m> --codex-backend <b>` | 为文档审查指定模型 | ✅ |
+| `/workflow code-review --model <m> --codex-backend <b>` | 为代码审查指定模型 | ✅ |
 | `/workflow status [run-id]` | 查看进度 | ✅ |
 | `/workflow resume <run-id>` | 恢复暂停的工作流 | ✅ |
 | `/workflow stop` | 停止当前工作流 | ✅ |
@@ -528,7 +529,7 @@ src/lib/bridge/internal/
 
 | 子项 | 状态 | 说明 |
 |------|------|------|
-| Code-Review review-only MVP | ✅ 完成 | IM `/workflow start --type code-review` 可用，完成后落地 Markdown / JSON 报告 |
+| Code-Review review-only MVP | ✅ 完成 | IM `/workflow code-review` 可用，完成后落地 Markdown / JSON 报告 |
 | 独立 CLI `code-review` 子命令 | ⬜ 未完成 | 当前仅 IM 入口，需单独实现 CLI 命令与帮助文案 |
 | Dev workflow | ⬜ 未开始 | TaskPack / DeliveryPack / Manager-Worker 状态机仍待实现 |
 
