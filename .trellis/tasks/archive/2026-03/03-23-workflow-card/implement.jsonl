@@ -1,0 +1,7 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": "src/lib/bridge/internal/workflow-command.ts", "reason": "核心改动文件 - bindProgressEvents函数"}
+{"file": "src/lib/bridge/adapters/feishu-adapter.ts", "reason": "飞书卡片基础设施 - 流式卡片方法"}
+{"file": "src/lib/bridge/markdown/feishu.ts", "reason": "卡片构建工具函数"}
+{"file": "src/lib/bridge/channel-adapter.ts", "reason": "适配器接口 - 需添加可选方法"}
+{"file": "src/lib/workflow/types.ts", "reason": "WorkflowEvent类型定义"}

@@ -1,0 +1,5 @@
+{"file": ".claude/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".claude/commands/trellis/check-backend.md", "reason": "Backend check spec"}
+{"file": "src/lib/bridge/internal/workflow-command.ts", "reason": "检查卡片化实现"}
+{"file": "src/lib/bridge/adapters/feishu-adapter.ts", "reason": "检查适配器新方法"}
+{"file": "src/lib/bridge/markdown/feishu.ts", "reason": "检查卡片构建函数"}
