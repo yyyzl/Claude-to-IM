@@ -481,22 +481,25 @@ src/lib/bridge/internal/
 
 ### 8.3 测试覆盖
 
-| 测试集 | 数量 | 覆盖范围 |
+| 测试集 | 状态 | 覆盖范围 |
 |--------|------|---------|
-| Workflow Engine 单元测试 | 108 个 | 所有模块 |
-| /workflow 命令测试 | 28 个 | 子命令解析 + 路径安全 |
-| 回归测试 | 17 个 | 引擎核心逻辑 |
-| **总计** | 253+ | 全项目 |
+| Workflow / Bridge 单元测试 | ✅ | 覆盖引擎、命令解析、路径安全、桥接核心、回归路径 |
+| Code-Review 集成测试 | ✅ | 覆盖 review-only MVP 主链路、报告生成、resume、完成态提示 |
+| **当前基线** | `367/367` | `npm run test:unit` |
 
 ### 8.4 /workflow 命令当前能力
 
 | 命令 | 功能 | 状态 |
 |------|------|------|
 | `/workflow start <spec> <plan>` | 启动 Spec-Review 工作流 | ✅ |
+| `/workflow start --type code-review [--range A..B|--branch-diff base]` | 启动 Code-Review review-only MVP（IM 入口） | ✅ |
 | `/workflow start --model <m> --codex-backend <b>` | 指定模型 | ✅ |
 | `/workflow status [run-id]` | 查看进度 | ✅ |
 | `/workflow resume <run-id>` | 恢复暂停的工作流 | ✅ |
 | `/workflow stop` | 停止当前工作流 | ✅ |
+
+> **说明**：当前 `code-review` 只支持 IM `/workflow` 入口。
+> 独立 CLI `code-review` 子命令尚未实现，需要单独排期。
 
 ### 8.5 事件推送（已实现）
 
@@ -505,7 +508,7 @@ src/lib/bridge/internal/
 | 轮次开始 | "🔄 Round {N} started" |
 | Codex 审查完成 | 发现数量 + 严重度分布 |
 | Claude 裁决完成 | 接受/拒绝/延后/解决统计 |
-| 终止 | 原因 + 总结 |
+| 终止 | 原因 + 总结 + 报告路径提示 |
 | 人工介入 | 暂停提示 |
 | 错误/超时 | 错误详情 |
 
@@ -513,9 +516,21 @@ src/lib/bridge/internal/
 
 ## 九、未完成阶段及待优化方向
 
-### 9.1 P1b：开发流 + 代码审查流（⬜ 未开始）
+### 9.1 P1b：开发流 + 代码审查流（🟡 部分完成）
 
 **预估工作量**：3-5 天
+
+**当前状态说明**：
+
+- `code-review review-only MVP` 已完成 IM 闭环：真实 `diff + changed_files` 输入、Issue Ledger、报告 artifact、resume、完成态提示都已打通
+- 独立 CLI `code-review` 子命令 **未实现**
+- `dev workflow` 仍未开始
+
+| 子项 | 状态 | 说明 |
+|------|------|------|
+| Code-Review review-only MVP | ✅ 完成 | IM `/workflow start --type code-review` 可用，完成后落地 Markdown / JSON 报告 |
+| 独立 CLI `code-review` 子命令 | ⬜ 未完成 | 当前仅 IM 入口，需单独实现 CLI 命令与帮助文案 |
+| Dev workflow | ⬜ 未开始 | TaskPack / DeliveryPack / Manager-Worker 状态机仍待实现 |
 
 | 任务 | 说明 |
 |------|------|

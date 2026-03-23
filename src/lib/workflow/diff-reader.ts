@@ -87,8 +87,9 @@ export class DiffReader {
   /**
    * Create a frozen review snapshot.
    *
-   * Called once at workflow start. The snapshot captures file metadata and
-   * blob SHAs but NOT file content (content is read on-demand via blob SHA).
+ * Called once at workflow start. The snapshot captures the frozen diff,
+ * blob SHAs, and preloaded changed file content so later rounds / resume
+ * reuse the exact same review context.
    *
    * @param scope - Review scope configuration.
    * @returns Frozen ReviewSnapshot.
@@ -208,12 +209,16 @@ export class DiffReader {
       });
     }
 
+    const changedFiles = await this.readFileContents(files, diff);
+
     return {
       created_at: new Date().toISOString(),
       head_commit: headCommit,
       base_ref: baseRef,
       scope,
+      diff,
       files,
+      changed_files: changedFiles,
       excluded_files: excludedFiles,
     };
   }
@@ -246,18 +251,25 @@ export class DiffReader {
       const diffHunks = perFileDiffs.get(file.path) ?? '';
       let content: string;
 
-      try {
-        const raw = await this.readFileContent(file.blob_sha);
-        const lineCount = raw.split('\n').length;
+      if (results.length >= MAX_CHANGED_FILES_FULL_CONTENT) {
+        content =
+          `[Full content omitted: exceeded ${MAX_CHANGED_FILES_FULL_CONTENT} changed files. ` +
+          'Showing diff hunks only.]\n\n' +
+          diffHunks;
+      } else {
+        try {
+          const raw = await this.readFileContent(file.blob_sha);
+          const lineCount = raw.split('\n').length;
 
-        if (lineCount > MAX_FILE_LINES) {
-          // Too large — only keep diff hunks context
-          content = `[File truncated: ${lineCount} lines. Showing diff hunks only.]\n\n${diffHunks}`;
-        } else {
-          content = raw;
+          if (lineCount > MAX_FILE_LINES) {
+            // Too large — only keep diff hunks context
+            content = `[File truncated: ${lineCount} lines. Showing diff hunks only.]\n\n${diffHunks}`;
+          } else {
+            content = raw;
+          }
+        } catch {
+          content = `[Unable to read file content for ${file.path}]`;
         }
-      } catch {
-        content = `[Unable to read file content for ${file.path}]`;
       }
 
       // Count additions/deletions from diff hunks

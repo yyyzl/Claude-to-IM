@@ -11,7 +11,12 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as path from 'node:path';
 
-import { parseWorkflowArgs, _resolveSafePath } from '../../lib/bridge/internal/workflow-command.js';
+import {
+  parseWorkflowArgs,
+  _resolveSafePath,
+  _renderCompletionMarkdown,
+  type _WorkflowProgressState,
+} from '../../lib/bridge/internal/workflow-command.js';
 
 // ── Tests ────────────────────────────────────────────────────────
 
@@ -304,5 +309,39 @@ describe('resolveSafePath', () => {
       const outsidePath = path.resolve('/other/project/file.md');
       assert.equal(_resolveSafePath(cwd, outsidePath), null);
     });
+  });
+});
+
+describe('renderCompletionMarkdown', () => {
+  it('includes report artifact hints when provided', () => {
+    const state: _WorkflowProgressState = {
+      runId: 'run-123',
+      currentRound: 2,
+      rounds: new Map(),
+      cardMode: false,
+      cardCreated: false,
+      startedAt: Date.now(),
+      updateTimer: null,
+    };
+
+    const output = _renderCompletionMarkdown(state, {
+      reason: 'lgtm',
+      total_rounds: 2,
+      total_issues: 3,
+      report_markdown_path: '.claude-workflows/runs/run-123/code-review-report.md',
+      report_json_path: '.claude-workflows/runs/run-123/code-review-report.json',
+    } as {
+      total_rounds?: number;
+      total_issues?: number;
+      reason?: string;
+      severity?: { critical?: number; high?: number; medium?: number; low?: number };
+      status?: { open?: number; accepted?: number; rejected?: number; deferred?: number; resolved?: number };
+      report_markdown_path?: string;
+      report_json_path?: string;
+    });
+
+    assert.ok(output.includes('code-review-report.md'));
+    assert.ok(output.includes('code-review-report.json'));
+    assert.ok(output.includes('报告'));
   });
 });

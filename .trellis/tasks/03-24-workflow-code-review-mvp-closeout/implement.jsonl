@@ -1,0 +1,5 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": "src/lib/workflow/workflow-engine.ts", "reason": "code-review 主链路上下文注入与完成态产物生成"}
+{"file": "src/lib/bridge/internal/workflow-command.ts", "reason": "IM 完成态提示与 code-review 主入口"}
+{"file": "src/lib/workflow/diff-reader.ts", "reason": "复用 snapshot 读取真实 diff 与 blob 内容"}

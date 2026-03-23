@@ -4,7 +4,7 @@
 >
 > **前置依赖**: P0 ✅ · P1a ✅ · P2a ✅（Spec-Review 已完整实现）
 >
-> **状态**: ✅ **Phase 1-5 全部完成** — 238 测试通过，TS 编译零错误，Acceptance Criteria 全勾选（除独立 CLI 子命令）
+> **状态**: ✅ **IM 闭环 MVP 已收尾** — `Phase 1-5` 完成，真实 `diff + changed_files` 已接入主链路，完成态会落地 Markdown/JSON 报告，`367/367` 单元测试通过，TS 编译零错误；**独立 CLI `code-review` 子命令仍未实现**
 >
 > **目标**: 复用 Workflow Engine 核心循环，新增 `code-review` 工作流类型
 
@@ -1322,12 +1322,15 @@ options:
 - [x] 二进制文件：跳过并记入 excludedFiles
 - [x] 敏感文件：默认排除并记入 excludedFiles，`--include-sensitive` 可覆盖
 - [x] diff 为空：报告 "No changes to review"，workflow 正常终止（非 failed）
+- [x] 冻结 `ReviewSnapshot` 持久化真实 `diff` 与 `changed_files`，Step A / C 不再使用空占位上下文
 
 **CLI/IM（INV-5 + INV-6）**
 
 - [x] `--range A..B`（两点 diff）和 `--branch-diff base`（三点 diff）语义分离
 - [x] code-review 不要求 `<spec> <plan>` 位置参数
 - [x] 报告含 "Excluded Files" 节（敏感/二进制/超限/pattern 排除）
+- [x] workflow 完成后在 run 目录生成 `code-review-report.md` 与 `code-review-report.json`
+- [x] IM 完成消息显式提示报告路径
 
 **引擎泛化**
 
@@ -1335,7 +1338,7 @@ options:
 - [x] SPEC_REVIEW_PROFILE 和 CODE_REVIEW_PROFILE 预定义
 - [x] `workflow-engine.ts` 根据 profile.behavior 条件执行 PatchApplier/resolves_issues/fix_instruction
 - [x] `workflow-engine.ts` runLoop Step A/C 根据 profile.type 路由 pack/prompt 方法
-- [x] 现有 spec-review 全部测试通过（回归安全）— 238/238
+- [x] 现有 spec-review / workflow 回归通过（回归安全）— 当前单元测试基线 `367/367`
 
 **模块实现**
 
@@ -1359,6 +1362,7 @@ options:
 - [x] 完整 2-3 轮代码审查集成测试（mock ModelInvoker）— 4 组 14 个用例
 - [x] Checkpoint resume 在 code-review 模式下正常工作（resolveProfileFromType）
 - [x] TypeScript 编译通过，无类型错误
+- [x] 完成事件携带报告路径，文本/卡片完成态均可提示报告已生成
 
 ---
 

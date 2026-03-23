@@ -773,8 +773,12 @@ export interface ReviewSnapshot {
   base_ref: string;
   /** Review scope. */
   scope: ReviewScope;
+  /** Frozen full git diff used for all rounds and resume. */
+  diff: string;
   /** Snapshotted files with blob SHAs. */
   files: SnapshotFile[];
+  /** Preloaded changed files derived from frozen blob SHAs and diff hunks. */
+  changed_files: ChangedFile[];
   /** Files excluded from review (with reasons). */
   excluded_files: Array<{ path: string; reason: string }>;
 }

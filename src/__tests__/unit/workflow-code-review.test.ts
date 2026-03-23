@@ -71,6 +71,31 @@ const ROUND_SUMMARY_TEMPLATE = `## Round {{round}} Summary
 - **Overall assessment**: {{overall_assessment}}
 {{additional_notes}}`;
 
+const TEST_DIFF = `diff --git a/src/auth.ts b/src/auth.ts
+index 1111111..2222222 100644
+--- a/src/auth.ts
++++ b/src/auth.ts
+@@ -1,3 +1,7 @@
+-export async function login(input: unknown) {
+-  return db.query(input as string);
++export async function login(input: unknown) {
++  if (!input) {
++    throw new Error('missing input');
++  }
++  return db.query(String(input));
+ }
+
+diff --git a/src/utils.ts b/src/utils.ts
+new file mode 100644
+index 0000000..3333333
+--- /dev/null
++++ b/src/utils.ts
+@@ -0,0 +1,4 @@
++export function formatName(name: string): string {
++  return name.trim();
++}
+`;
+
 // ── Helpers ───────────────────────────────────────────────────────
 
 async function makeTmpDir(): Promise<string> {
@@ -136,7 +161,47 @@ function createTestSnapshot(): ReviewSnapshot {
     excluded_files: [
       { path: '.env', reason: 'sensitive' },
     ],
-  };
+    diff: TEST_DIFF,
+    changed_files: [
+      {
+        path: 'src/auth.ts',
+        content: `export async function login(input: unknown) {
+  if (!input) {
+    throw new Error('missing input');
+  }
+  return db.query(String(input));
+}
+`,
+        diff_hunks: `@@ -1,3 +1,7 @@
+-export async function login(input: unknown) {
+-  return db.query(input as string);
++export async function login(input: unknown) {
++  if (!input) {
++    throw new Error('missing input');
++  }
++  return db.query(String(input));
+ }`,
+        language: 'typescript',
+        stats: { additions: 4, deletions: 1 },
+        change_type: 'modified',
+      },
+      {
+        path: 'src/utils.ts',
+        content: `export function formatName(name: string): string {
+  return name.trim();
+}
+`,
+        diff_hunks: `@@ -0,0 +1,4 @@
++export function formatName(name: string): string {
++  return name.trim();
++}
+`,
+        language: 'typescript',
+        stats: { additions: 3, deletions: 0 },
+        change_type: 'added',
+      },
+    ],
+  } as ReviewSnapshot;
 }
 
 // ── MockModelInvoker ──────────────────────────────────────────────
@@ -319,6 +384,25 @@ describe('Code-Review Workflow Integration (P1b-CR-0)', () => {
       assert.ok(!types.includes('spec_updated'));
       assert.ok(!types.includes('plan_updated'));
       assert.ok(!types.includes('patch_apply_failed'));
+    });
+
+    it('persists non-empty diff and changed file content for code-review prompts', async () => {
+      const packRaw = await store.loadRoundArtifact(runId, 1, 'pack.json');
+      assert.ok(packRaw);
+      const pack = JSON.parse(packRaw) as {
+        diff: string;
+        changed_files: Array<{ path: string; content: string }>;
+      };
+
+      assert.ok(pack.diff.includes('diff --git a/src/auth.ts b/src/auth.ts'));
+      assert.ok(pack.changed_files.length >= 2);
+      assert.ok(pack.changed_files[0].content.includes("throw new Error('missing input')"));
+
+      const claudeInput = await store.loadRoundArtifact(runId, 1, 'claude-input.md');
+      assert.ok(claudeInput);
+      assert.ok(claudeInput.includes('src/auth.ts'));
+      assert.ok(claudeInput.includes("throw new Error('missing input')"));
+      assert.ok(claudeInput.includes('diff --git a/src/auth.ts b/src/auth.ts'));
     });
   });
 
@@ -577,6 +661,19 @@ describe('Code-Review Workflow Integration (P1b-CR-0)', () => {
       assert.ok(authIssue.reason.includes('SQL injection'));
       assert.ok(authIssue.fix_instruction?.includes('parameterized query'));
       assert.notEqual(authIssue.reason, authIssue.fix_instruction);
+    });
+
+    it('writes final report artifacts to the run directory', async () => {
+      const markdownPath = path.join(tmpDir, 'runs', runId, 'code-review-report.md');
+      const jsonPath = path.join(tmpDir, 'runs', runId, 'code-review-report.json');
+
+      const markdown = await fs.readFile(markdownPath, 'utf-8');
+      const jsonRaw = await fs.readFile(jsonPath, 'utf-8');
+      const report = JSON.parse(jsonRaw) as { run_id: string; stats: { total_findings: number } };
+
+      assert.ok(markdown.includes('# Code Review Report'));
+      assert.equal(report.run_id, runId);
+      assert.equal(report.stats.total_findings, 3);
     });
   });
 

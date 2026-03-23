@@ -31,6 +31,7 @@ import { JsonParser } from './json-parser.js';
 import { IssueMatcher } from './issue-matcher.js';
 import { PatchApplier } from './patch-applier.js';
 import { DecisionValidator } from './decision-validator.js';
+import { ReportGenerator } from './report-generator.js';
 import {
   TimeoutError,
   AbortError,
@@ -1158,6 +1159,17 @@ export class WorkflowEngine {
       resolved: allIssues.filter((i) => i.status === 'resolved').length,
     };
 
+    await this.store.updateMeta(runId, {
+      status: 'completed',
+      current_round: round,
+      last_completed: { round, step: 'post_decision' },
+    });
+
+    let reportPaths: { markdown?: string; json?: string } = {};
+    if (meta?.workflow_type === 'code-review') {
+      reportPaths = await this.persistCodeReviewReport(runId);
+    }
+
     await this.emit(runId, round, 'workflow_completed', {
       reason,
       final_round: round,
@@ -1165,12 +1177,8 @@ export class WorkflowEngine {
       total_issues: allIssues.length,
       severity: severityCounts,
       status: statusCounts,
-    });
-
-    await this.store.updateMeta(runId, {
-      status: 'completed',
-      current_round: round,
-      last_completed: { round, step: 'post_decision' },
+      report_markdown_path: reportPaths.markdown,
+      report_json_path: reportPaths.json,
     });
   }
 
@@ -1300,11 +1308,9 @@ export class WorkflowEngine {
   /**
    * Load code-review context (changed files + diff) from the persisted snapshot.
    *
-   * For now, changed files have empty content since actual file content
-   * would require `git show <blob_sha>` calls. The diff is loaded from
-   * the stored snapshot metadata.
-   *
-   * TODO (P1b-CR-1): use DiffReader.readFileContent() to hydrate content from blob SHAs.
+   * The review snapshot already contains the frozen diff and preloaded
+   * changed file context created at workflow start. This keeps every
+   * round and resume path on the exact same input.
    */
   private async loadCodeReviewContext(
     _runId: string,
@@ -1314,18 +1320,31 @@ export class WorkflowEngine {
       return { changedFiles: [], diff: '' };
     }
 
-    // Build ChangedFile stubs from snapshot
-    const changedFiles: ChangedFile[] = snapshot.files.map((f) => ({
-      path: f.path,
-      old_path: f.old_path,
-      content: '',  // Placeholder — real content needs git show
-      diff_hunks: '',
-      language: f.language,
-      stats: { additions: 0, deletions: 0 },
-      change_type: f.change_type,
-    }));
+    return { changedFiles: snapshot.changed_files, diff: snapshot.diff };
+  }
 
-    return { changedFiles, diff: '' };
+  /**
+   * Generate and persist final code-review report artifacts.
+   *
+   * The report is stored as both Markdown and JSON under the run directory.
+   * Relative paths are returned so IM/UI layers can surface them directly.
+   */
+  private async persistCodeReviewReport(
+    runId: string,
+  ): Promise<{ markdown: string; json: string }> {
+    const reporter = new ReportGenerator(this.store);
+    const { markdown, data } = await reporter.generate(runId);
+
+    const markdownName = 'code-review-report.md';
+    const jsonName = 'code-review-report.json';
+
+    await this.store.saveRunArtifact(runId, markdownName, markdown);
+    await this.store.saveRunArtifact(runId, jsonName, JSON.stringify(data, null, 2));
+
+    return {
+      markdown: `${runId}/${markdownName}`,
+      json: `${runId}/${jsonName}`,
+    };
   }
 
   /**

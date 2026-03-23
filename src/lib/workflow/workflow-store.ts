@@ -239,6 +239,31 @@ export class WorkflowStore {
     }
   }
 
+  // ── Run artifacts ────────────────────────────────────────────
+
+  /**
+   * Save a run-level artifact directly under the run directory.
+   * Useful for final reports and other outputs that are not round-specific.
+   */
+  async saveRunArtifact(runId: string, name: string, content: string): Promise<void> {
+    const filePath = path.join(this.runDir(runId), name);
+    await fs.writeFile(filePath, content, 'utf-8');
+  }
+
+  /**
+   * Load a run-level artifact from the run directory.
+   * Returns null when the artifact does not exist.
+   */
+  async loadRunArtifact(runId: string, name: string): Promise<string | null> {
+    const filePath = path.join(this.runDir(runId), name);
+    try {
+      return await fs.readFile(filePath, 'utf-8');
+    } catch (err: unknown) {
+      if (isNotFoundError(err)) return null;
+      throw err;
+    }
+  }
+
   // ── Events (ndjson append) ───────────────────────────────────
 
   /**

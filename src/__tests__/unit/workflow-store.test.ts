@@ -402,6 +402,7 @@ describe('WorkflowStore', () => {
         head_commit: 'abc1234567890',
         base_ref: 'HEAD',
         scope: { type: 'staged' },
+        diff: 'diff --git a/src/index.ts b/src/index.ts',
         files: [
           {
             path: 'src/index.ts',
@@ -416,6 +417,25 @@ describe('WorkflowStore', () => {
             base_blob_sha: 'oldcafe0000',
             change_type: 'renamed',
             language: 'typescript',
+          },
+        ],
+        changed_files: [
+          {
+            path: 'src/index.ts',
+            content: 'export const value = 1;\n',
+            diff_hunks: '@@ -1 +1 @@',
+            language: 'typescript',
+            stats: { additions: 1, deletions: 1 },
+            change_type: 'modified',
+          },
+          {
+            path: 'src/utils.ts',
+            old_path: 'src/helpers.ts',
+            content: 'export const helper = true;\n',
+            diff_hunks: '@@ -1 +1 @@',
+            language: 'typescript',
+            stats: { additions: 1, deletions: 1 },
+            change_type: 'renamed',
           },
         ],
         excluded_files: [

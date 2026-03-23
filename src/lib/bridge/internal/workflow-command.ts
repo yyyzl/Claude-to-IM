@@ -780,6 +780,8 @@ function renderCompletionMarkdown(
     reason?: string;
     severity?: { critical?: number; high?: number; medium?: number; low?: number };
     status?: { open?: number; accepted?: number; rejected?: number; deferred?: number; resolved?: number };
+    report_markdown_path?: string;
+    report_json_path?: string;
   },
 ): string {
   const lines: string[] = [];
@@ -814,6 +816,12 @@ function renderCompletionMarkdown(
     if (st.rejected) parts.push(`rejected: ${st.rejected}`);
     if (st.deferred) parts.push(`deferred: ${st.deferred}`);
     if (parts.length > 0) lines.push(`状态: ${parts.join(' · ')}`);
+  }
+
+  if (data.report_markdown_path || data.report_json_path) {
+    lines.push('报告:');
+    if (data.report_markdown_path) lines.push(`- Markdown: \`${data.report_markdown_path}\``);
+    if (data.report_json_path) lines.push(`- JSON: \`${data.report_json_path}\``);
   }
 
   return lines.join('\n');
@@ -1082,6 +1090,7 @@ function bindProgressEvents(
       total_rounds?: number; total_issues?: number; reason?: string;
       severity?: { critical?: number; high?: number; medium?: number; low?: number };
       status?: { open?: number; accepted?: number; rejected?: number; deferred?: number; resolved?: number };
+      report_markdown_path?: string; report_json_path?: string;
     };
 
     if (state.cardMode && state.cardCreated) {
@@ -1111,6 +1120,11 @@ function bindProgressEvents(
         if (st.rejected) stParts.push(`rejected: ${st.rejected}`);
         if (st.deferred) stParts.push(`deferred: ${st.deferred}`);
         if (stParts.length > 0) lines.push(`状态: ${stParts.join(' · ')}`);
+      }
+      if (data.report_markdown_path || data.report_json_path) {
+        lines.push('报告已生成:');
+        if (data.report_markdown_path) lines.push(`Markdown: <code>${esc(data.report_markdown_path)}</code>`);
+        if (data.report_json_path) lines.push(`JSON: <code>${esc(data.report_json_path)}</code>`);
       }
       pushText(lines.join('\n'));
     }
