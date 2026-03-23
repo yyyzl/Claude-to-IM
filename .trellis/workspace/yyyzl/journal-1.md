@@ -1195,3 +1195,35 @@ P1+TP1 批次实施 + 跨 AI 审核修复。包含 5 个代码安全网补全 + 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 24: P1b-CR-0 Phase 1+2: Code Review Workflow 引擎泛化 + 数据管道
+
+**Date**: 2026-03-23
+**Task**: P1b-CR-0 Phase 1+2: Code Review Workflow 引擎泛化 + 数据管道
+
+### Summary
+
+Phase 1: WorkflowProfile 接口 + 15 个 Code Review 类型 + Issue 扩展 + engine/termination-judge 泛化。Phase 2: DiffReader (git diff+冻结快照) + PackBuilder/PromptAssembler 扩展 + 3 个新 prompt 模板。221 测试全部通过，向后兼容。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3a848c1` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
