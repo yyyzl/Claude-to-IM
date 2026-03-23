@@ -1,8 +1,12 @@
 /**
  * Workflow Engine -- Core orchestrator for the dual-model collaboration workflow.
  *
- * Manages the lifecycle of Spec-Review workflows through a 5-step round loop:
+ * Manages the lifecycle of workflows through a 5-step round loop:
  *   `codex_review` -> `issue_matching` -> `pre_termination` -> `claude_decision` -> `post_decision`
+ *
+ * Supports multiple workflow types via {@link WorkflowProfile}:
+ * - **spec-review**: Codex reviews spec/plan, Claude decides + patches documents
+ * - **code-review**: Codex blind-reviews code diff, Claude arbitrates findings (review-only)
  *
  * Key design decisions:
  * - **Crash-safe resume**: each step persists its output before advancing; the meta
@@ -12,6 +16,8 @@
  *   ndjson log for observability and replay.
  * - **Abort support**: external callers can pause a running workflow via `pause()`,
  *   which triggers an AbortController that propagates to model invocations.
+ * - **Profile-driven**: step behavior is parameterized via WorkflowProfile.behavior
+ *   flags, eliminating hardcoded workflow-type checks.
  *
  * @module workflow/workflow-engine
  */
@@ -30,8 +36,10 @@ import {
   AbortError,
   ModelInvocationError,
   DEFAULT_CONFIG,
+  SPEC_REVIEW_PROFILE,
   type WorkflowMeta,
   type WorkflowConfig,
+  type WorkflowProfile,
   type WorkflowEvent,
   type WorkflowEventType,
   type WorkflowStep,
@@ -87,10 +95,13 @@ export class WorkflowEngine {
   // ── Public API ──────────────────────────────────────────────────
 
   /**
-   * Start a new Spec-Review workflow.
+   * Start a new workflow.
    *
    * Creates all initial artifacts (meta, spec, plan, ledger), emits the
    * `workflow_started` event, and enters the main round loop.
+   *
+   * The workflow type is determined by the `profile` parameter. If omitted,
+   * defaults to {@link SPEC_REVIEW_PROFILE} for backward compatibility.
    *
    * @param params.spec - The spec document to review.
    * @param params.plan - The plan document to review.
@@ -100,6 +111,7 @@ export class WorkflowEngine {
    *   provided, they are merged (contextFiles first, then config.context_files).
    *   This ensures consistency with resume(), which only reads from
    *   `meta.config.context_files`.
+   * @param params.profile - Workflow profile (defaults to SPEC_REVIEW_PROFILE).
    * @returns The generated `run_id`.
    */
   async start(params: {
@@ -107,7 +119,9 @@ export class WorkflowEngine {
     plan: string;
     config?: Partial<WorkflowConfig>;
     contextFiles?: ContextFile[];
+    profile?: WorkflowProfile;
   }): Promise<string> {
+    const profile = params.profile ?? SPEC_REVIEW_PROFILE;
     const runId = generateRunId();
 
     // Merge context files from both sources into config.context_files
@@ -117,9 +131,10 @@ export class WorkflowEngine {
       ...(params.config?.context_files ?? []),
     ];
 
-    // Merge config: defaults <- user overrides <- unified context_files
+    // Merge config: defaults <- profile overrides <- user overrides <- unified context_files
     const config: WorkflowConfig = {
       ...DEFAULT_CONFIG,
+      ...profile.configOverrides,
       ...params.config,
       context_files: mergedContextFiles,
     };
@@ -128,7 +143,7 @@ export class WorkflowEngine {
     const now = new Date().toISOString();
     const meta: WorkflowMeta = {
       run_id: runId,
-      workflow_type: 'spec-review',
+      workflow_type: profile.type,
       status: 'running',
       current_round: 1,
       current_step: 'codex_review',
@@ -146,11 +161,13 @@ export class WorkflowEngine {
     await this.store.saveLedger(runId, { run_id: runId, issues: [] });
 
     // Emit workflow_started event
-    await this.emit(runId, 1, 'workflow_started', {});
+    await this.emit(runId, 1, 'workflow_started', {
+      workflow_type: profile.type,
+    });
 
     // Initialize abort controller and enter the main loop
     this.abortController = new AbortController();
-    await this.runLoop(runId, meta);
+    await this.runLoop(runId, meta, profile);
 
     return runId;
   }
@@ -162,10 +179,14 @@ export class WorkflowEngine {
    * recomputes transient state (e.g. `previousRoundHadNewHighCritical`)
    * from the event log and ledger, then re-enters the main loop.
    *
+   * The workflow profile is resolved from `meta.workflow_type`. If an explicit
+   * profile is provided, it takes precedence (useful for testing or migration).
+   *
    * @param runId - The workflow run to resume.
+   * @param profile - Optional explicit profile override.
    * @throws If the run does not exist or is not in a resumable state.
    */
-  async resume(runId: string): Promise<void> {
+  async resume(runId: string, profile?: WorkflowProfile): Promise<void> {
     const meta = await this.store.getMeta(runId);
     if (!meta) {
       throw new Error(`[WorkflowEngine] Run not found: ${runId}`);
@@ -179,6 +200,9 @@ export class WorkflowEngine {
       );
     }
 
+    // Resolve profile: explicit > lookup by workflow_type > default
+    const resolvedProfile = profile ?? resolveProfileFromType(meta.workflow_type);
+
     // Transition to running
     meta.status = 'running';
     await this.store.updateMeta(runId, { status: 'running' });
@@ -191,7 +215,7 @@ export class WorkflowEngine {
 
     // Initialize abort controller and enter the main loop
     this.abortController = new AbortController();
-    await this.runLoop(runId, meta);
+    await this.runLoop(runId, meta, resolvedProfile);
   }
 
   /**
@@ -246,14 +270,20 @@ export class WorkflowEngine {
    *   C. claude_decision  -- invoke Claude to make decisions on issues
    *   D. post_decision    -- check termination and advance to the next round
    *
+   * Step behavior is parameterized by the workflow profile:
+   * - `profile.behavior.applyPatches` controls PatchApplier execution in Step C
+   * - `profile.behavior.trackResolvesIssues` controls resolves_issues processing
+   * - `profile.behavior.acceptedIsTerminal` is forwarded to TerminationJudge
+   *
    * The loop supports resume by checking `meta.current_step` and skipping
    * already-completed steps. Transient variables (codexOutput, matchResult)
    * are reloaded from the store when resuming mid-round.
    *
    * @param runId - The workflow run identifier.
    * @param meta - The current workflow metadata (mutated during execution).
+   * @param profile - Workflow profile controlling step behavior.
    */
-  private async runLoop(runId: string, meta: WorkflowMeta): Promise<void> {
+  private async runLoop(runId: string, meta: WorkflowMeta, profile: WorkflowProfile): Promise<void> {
     const config = meta.config;
 
     // Compute initial previousRoundHadNewHighCritical for resume support.
@@ -468,6 +498,7 @@ export class WorkflowEngine {
           previousRoundHadNewHighCritical,
           isSkippedRound: false,
           isPreTermination: true,
+          acceptedIsTerminal: profile.behavior.acceptedIsTerminal,
         });
 
         if (termResult) {
@@ -723,130 +754,137 @@ export class WorkflowEngine {
           }
         }
 
-        // Apply spec patch — track whether any sections failed
+        // ── Patch application (spec-review only) ──────────────────
+        // When profile.behavior.applyPatches is false (e.g. code-review),
+        // skip all patch extraction, application, and resolves_issues logic.
         let hasPatchFailure = false;
 
-        // Guard: Claude claims patch exists but extraction failed → treat as patch failure
-        // Prevents false-positive resolves when markers don't match or extraction breaks
-        if (claudeOutput?.spec_updated && !patches.specPatch) {
-          hasPatchFailure = true;
-          await this.emit(runId, round, 'patch_extraction_failed', {
-            target: 'spec',
-            reason: 'Claude reported spec_updated=true but no spec patch could be extracted',
-          });
-        }
-        if (claudeOutput?.plan_updated && !patches.planPatch) {
-          hasPatchFailure = true;
-          await this.emit(runId, round, 'patch_extraction_failed', {
-            target: 'plan',
-            reason: 'Claude reported plan_updated=true but no plan patch could be extracted',
-          });
-        }
-
-        if (patches.specPatch) {
-          const currentSpec = await this.store.loadSpec(runId);
-          if (currentSpec) {
-            const result = this.patchApplier.apply(currentSpec, patches.specPatch);
-            await this.store.saveSpec(runId, result.merged);
-            await this.emit(runId, round, 'spec_updated', {
-              applied_sections: result.appliedSections,
-              failed_sections: result.failedSections,
+        if (profile.behavior.applyPatches) {
+          // Guard: Claude claims patch exists but extraction failed → treat as patch failure
+          // Prevents false-positive resolves when markers don't match or extraction breaks
+          if (claudeOutput?.spec_updated && !patches.specPatch) {
+            hasPatchFailure = true;
+            await this.emit(runId, round, 'patch_extraction_failed', {
+              target: 'spec',
+              reason: 'Claude reported spec_updated=true but no spec patch could be extracted',
             });
-            if (result.failedSections.length > 0) {
-              hasPatchFailure = true;
-              await this.emit(runId, round, 'patch_apply_failed', {
-                target: 'spec',
+          }
+          if (claudeOutput?.plan_updated && !patches.planPatch) {
+            hasPatchFailure = true;
+            await this.emit(runId, round, 'patch_extraction_failed', {
+              target: 'plan',
+              reason: 'Claude reported plan_updated=true but no plan patch could be extracted',
+            });
+          }
+
+          if (patches.specPatch) {
+            const currentSpec = await this.store.loadSpec(runId);
+            if (currentSpec) {
+              const result = this.patchApplier.apply(currentSpec, patches.specPatch);
+              await this.store.saveSpec(runId, result.merged);
+              await this.emit(runId, round, 'spec_updated', {
+                applied_sections: result.appliedSections,
                 failed_sections: result.failedSections,
               });
-            }
-          }
-        }
-
-        // Apply plan patch
-        if (patches.planPatch) {
-          const currentPlan = await this.store.loadPlan(runId);
-          if (currentPlan) {
-            const result = this.patchApplier.apply(currentPlan, patches.planPatch);
-            await this.store.savePlan(runId, result.merged);
-            await this.emit(runId, round, 'plan_updated', {
-              applied_sections: result.appliedSections,
-              failed_sections: result.failedSections,
-            });
-            if (result.failedSections.length > 0) {
-              hasPatchFailure = true;
-              await this.emit(runId, round, 'patch_apply_failed', {
-                target: 'plan',
-                failed_sections: result.failedSections,
-              });
-            }
-          }
-        }
-
-        // Finalize accept_and_resolve decisions based on patch results (H-NEW-2)
-        for (const issueId of pendingAcceptAndResolve) {
-          const issue = ledger.issues.find((i) => i.id === issueId);
-          if (!issue) continue;
-          if (hasPatchFailure) {
-            // Patch failed — keep as accepted, do not auto-resolve
-            console.warn(
-              `[WorkflowEngine] accept_and_resolve for ${issueId} downgraded to accepted due to patch failure`,
-            );
-            await this.emit(runId, round, 'issue_status_changed', {
-              issue_id: issueId,
-              new_status: 'accepted',
-              action: 'accept_and_resolve_downgraded',
-              reason: 'patch_apply_failed',
-            });
-          } else {
-            issue.status = 'resolved';
-            issue.resolved_in_round = round;
-            await this.emit(runId, round, 'issue_status_changed', {
-              issue_id: issueId,
-              new_status: 'resolved',
-              action: 'accept_and_resolve',
-            });
-          }
-        }
-
-        // Handle resolves_issues — block resolution when patches failed
-        if (claudeOutput?.resolves_issues) {
-          if (hasPatchFailure) {
-            // Patches partially failed — do NOT mark issues as resolved
-            // to prevent ledger/document state divergence (ISS-002)
-            console.warn(
-              `[WorkflowEngine] Skipping resolves_issues (run=${runId}, round=${round}): ` +
-              `patch apply had failures, cannot confirm issues are truly resolved`,
-            );
-            await this.emit(runId, round, 'resolves_issues_missing', {
-              round,
-              reason: 'patch_apply_failed',
-              blocked_issue_ids: claudeOutput.resolves_issues,
-            });
-          } else {
-            for (const issueId of claudeOutput.resolves_issues) {
-              const issue = ledger.issues.find(
-                (i) => i.id === issueId && i.status === 'accepted',
-              );
-              if (issue) {
-                issue.status = 'resolved';
-                issue.resolved_in_round = round;
-
-                await this.emit(runId, round, 'issue_status_changed', {
-                  issue_id: issue.id,
-                  new_status: 'resolved',
-                  action: 'resolve_via_patch',
+              if (result.failedSections.length > 0) {
+                hasPatchFailure = true;
+                await this.emit(runId, round, 'patch_apply_failed', {
+                  target: 'spec',
+                  failed_sections: result.failedSections,
                 });
               }
             }
           }
-        } else if (claudeOutput?.decisions?.some((d) => d.action === 'accept')) {
-          // Claude accepted issues but did not specify which are resolved by patches
-          await this.emit(runId, round, 'resolves_issues_missing', {
-            round,
-            accepted_issue_ids: claudeOutput.decisions
-              .filter((d) => d.action === 'accept')
-              .map((d) => d.issue_id),
-          });
+
+          // Apply plan patch
+          if (patches.planPatch) {
+            const currentPlan = await this.store.loadPlan(runId);
+            if (currentPlan) {
+              const result = this.patchApplier.apply(currentPlan, patches.planPatch);
+              await this.store.savePlan(runId, result.merged);
+              await this.emit(runId, round, 'plan_updated', {
+                applied_sections: result.appliedSections,
+                failed_sections: result.failedSections,
+              });
+              if (result.failedSections.length > 0) {
+                hasPatchFailure = true;
+                await this.emit(runId, round, 'patch_apply_failed', {
+                  target: 'plan',
+                  failed_sections: result.failedSections,
+                });
+              }
+            }
+          }
+
+          // Finalize accept_and_resolve decisions based on patch results (H-NEW-2)
+          for (const issueId of pendingAcceptAndResolve) {
+            const issue = ledger.issues.find((i) => i.id === issueId);
+            if (!issue) continue;
+            if (hasPatchFailure) {
+              // Patch failed — keep as accepted, do not auto-resolve
+              console.warn(
+                `[WorkflowEngine] accept_and_resolve for ${issueId} downgraded to accepted due to patch failure`,
+              );
+              await this.emit(runId, round, 'issue_status_changed', {
+                issue_id: issueId,
+                new_status: 'accepted',
+                action: 'accept_and_resolve_downgraded',
+                reason: 'patch_apply_failed',
+              });
+            } else {
+              issue.status = 'resolved';
+              issue.resolved_in_round = round;
+              await this.emit(runId, round, 'issue_status_changed', {
+                issue_id: issueId,
+                new_status: 'resolved',
+                action: 'accept_and_resolve',
+              });
+            }
+          }
+        }
+
+        // ── Resolves_issues tracking (spec-review only) ──────────
+        if (profile.behavior.trackResolvesIssues) {
+          // Handle resolves_issues — block resolution when patches failed
+          if (claudeOutput?.resolves_issues) {
+            if (hasPatchFailure) {
+              // Patches partially failed — do NOT mark issues as resolved
+              // to prevent ledger/document state divergence (ISS-002)
+              console.warn(
+                `[WorkflowEngine] Skipping resolves_issues (run=${runId}, round=${round}): ` +
+                `patch apply had failures, cannot confirm issues are truly resolved`,
+              );
+              await this.emit(runId, round, 'resolves_issues_missing', {
+                round,
+                reason: 'patch_apply_failed',
+                blocked_issue_ids: claudeOutput.resolves_issues,
+              });
+            } else {
+              for (const issueId of claudeOutput.resolves_issues) {
+                const issue = ledger.issues.find(
+                  (i) => i.id === issueId && i.status === 'accepted',
+                );
+                if (issue) {
+                  issue.status = 'resolved';
+                  issue.resolved_in_round = round;
+
+                  await this.emit(runId, round, 'issue_status_changed', {
+                    issue_id: issue.id,
+                    new_status: 'resolved',
+                    action: 'resolve_via_patch',
+                  });
+                }
+              }
+            }
+          } else if (claudeOutput?.decisions?.some((d) => d.action === 'accept')) {
+            // Claude accepted issues but did not specify which are resolved by patches
+            await this.emit(runId, round, 'resolves_issues_missing', {
+              round,
+              accepted_issue_ids: claudeOutput.decisions
+                .filter((d) => d.action === 'accept')
+                .map((d) => d.issue_id),
+            });
+          }
         }
 
         // Persist updated ledger (crash-safe ordering: ledger -> spec/plan -> meta)
@@ -907,6 +945,7 @@ export class WorkflowEngine {
           ledger,
           latestOutput: codexOutput,
           previousRoundHadNewHighCritical,
+          acceptedIsTerminal: profile.behavior.acceptedIsTerminal,
         });
 
         if (termResult) {
@@ -1247,5 +1286,30 @@ export class WorkflowEngine {
         issue.round === previousRound &&
         (issue.severity === 'critical' || issue.severity === 'high'),
     );
+  }
+}
+
+// ── Module-level helpers ──────────────────────────────────────────
+
+import { CODE_REVIEW_PROFILE } from './types.js';
+import type { WorkflowType } from './types.js';
+
+/**
+ * Resolve a {@link WorkflowProfile} from a persisted {@link WorkflowType}.
+ *
+ * Used by `resume()` to reconstruct the profile from meta.workflow_type
+ * without requiring callers to pass it explicitly.
+ *
+ * @param workflowType - The workflow type string from persisted meta.
+ * @returns The corresponding profile (defaults to SPEC_REVIEW_PROFILE).
+ */
+function resolveProfileFromType(workflowType: WorkflowType): WorkflowProfile {
+  switch (workflowType) {
+    case 'code-review':
+      return CODE_REVIEW_PROFILE;
+    case 'spec-review':
+    case 'dev':
+    default:
+      return SPEC_REVIEW_PROFILE;
   }
 }

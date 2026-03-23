@@ -2,8 +2,10 @@
  * Pack Builder — assembles input packs for Codex and Claude.
  *
  * Reads data from {@link WorkflowStore} and composes:
- * - {@link SpecReviewPack} for Codex (blind review input)
- * - {@link ClaudeDecisionInput} for Claude (structured decision input)
+ * - {@link SpecReviewPack} for Codex spec-review (blind review input)
+ * - {@link ClaudeDecisionInput} for Claude spec-review (structured decision input)
+ * - {@link CodeReviewPack} for Codex code-review (blind code review input)
+ * - {@link ClaudeCodeReviewInput} for Claude code-review (fresh context, no prior decisions)
  *
  * The builder is stateless — all state comes from the store.
  * Context compression is triggered internally when payload exceeds threshold.
@@ -15,6 +17,11 @@ import { WorkflowStore } from './workflow-store.js';
 import type {
   SpecReviewPack,
   ClaudeDecisionInput,
+  CodeReviewPack,
+  ClaudeCodeReviewInput,
+  ReviewSnapshot,
+  ChangedFile,
+  CodeFinding,
   IssueLedger,
   Issue,
   Finding,
@@ -160,6 +167,141 @@ export class PackBuilder {
       previousDecisions,
       hasNewFindings,
     };
+  }
+
+  // ── Code Review Pack Builders (P1b-CR-0) ────────────────────────
+
+  /**
+   * Assemble {@link CodeReviewPack} for Codex blind code review.
+   *
+   * Reads the frozen snapshot and file contents, then composes the pack
+   * with unresolved/rejected/accepted issue summaries.
+   *
+   * @param runId - Workflow run identifier.
+   * @param round - Current round number (1-based).
+   * @param config - Workflow configuration.
+   * @param snapshot - Frozen review snapshot.
+   * @param changedFiles - Pre-loaded changed files with content.
+   * @param diff - Full diff text.
+   * @returns Assembled CodeReviewPack ready for prompt rendering.
+   */
+  async buildCodeReviewPack(
+    runId: string,
+    round: number,
+    config: WorkflowConfig,
+    snapshot: ReviewSnapshot,
+    changedFiles: ChangedFile[],
+    diff: string,
+  ): Promise<CodeReviewPack> {
+    // Load ledger
+    const ledger = (await this.store.loadLedger(runId)) ?? {
+      run_id: runId,
+      issues: [],
+    };
+
+    // Filter issues by status
+    const unresolvedIssues = this.filterUnresolvedIssues(ledger.issues);
+    const rejectedIssues = this.buildRejectedIssues(ledger.issues);
+    // INV-7: accepted_issues is a formal field (not optional) for code-review
+    const acceptedIssues = this.buildAcceptedIssues(ledger.issues);
+
+    // Round summary
+    const roundSummary = this.generateCodeReviewRoundSummary(round, ledger);
+
+    return {
+      diff,
+      changed_files: changedFiles,
+      review_scope: snapshot.scope,
+      context_files: config.context_files,
+      unresolved_issues: unresolvedIssues,
+      rejected_issues: rejectedIssues,
+      accepted_issues: acceptedIssues,
+      round_summary: roundSummary,
+      round,
+    };
+  }
+
+  /**
+   * Assemble {@link ClaudeCodeReviewInput} for Claude code-review decision.
+   *
+   * Unlike {@link buildClaudeDecisionInput}, this uses FRESH context:
+   * - No previousDecisions (avoids confirmation bias)
+   * - No currentSpec/currentPlan (reviewing code, not documents)
+   * - Ledger summary contains status only, no decision reasons
+   *
+   * @param runId - Workflow run identifier.
+   * @param round - Current round number (1-based).
+   * @param matchedFindings - Findings enriched with issue IDs from IssueMatcher.
+   * @param changedFiles - Changed files with content.
+   * @param diff - Full diff text.
+   * @returns Structured input for Claude code-review decision prompt rendering.
+   */
+  async buildClaudeCodeReviewInput(
+    runId: string,
+    round: number,
+    matchedFindings: Array<{ issueId: string; finding: CodeFinding; isNew: boolean }>,
+    changedFiles: ChangedFile[],
+    diff: string,
+  ): Promise<ClaudeCodeReviewInput> {
+    // Load ledger
+    const ledger = (await this.store.loadLedger(runId)) ?? {
+      run_id: runId,
+      issues: [],
+    };
+
+    // Build ledger summary (status only, no decision_reason — fresh review)
+    const ledgerSummary = this.buildCodeReviewLedgerSummary(ledger);
+
+    // Determine if there are new findings
+    const hasNewFindings = matchedFindings.some((f) => f.isNew);
+
+    return {
+      round,
+      codexFindingsWithIds: matchedFindings,
+      ledgerSummary,
+      diff,
+      changed_files: changedFiles,
+      hasNewFindings,
+    };
+  }
+
+  /**
+   * Build ledger summary for code-review (fresh context — no decision reasons).
+   *
+   * Table columns: `| ID | Description | Status | Severity | File | Category |`
+   * Intentionally omits `decision_reason` to avoid biasing Claude.
+   */
+  private buildCodeReviewLedgerSummary(ledger: IssueLedger): string {
+    if (!ledger.issues || ledger.issues.length === 0) {
+      return 'No issues recorded yet.';
+    }
+
+    const header = '| ID | Description | Status | Severity | File | Category |';
+    const separator = '|---|---|---|---|---|---|';
+    const rows = ledger.issues.map(
+      (issue) =>
+        `| ${issue.id} | ${issue.description} | ${issue.status} | ${issue.severity} | ${issue.source_file ?? '-'} | ${issue.category ?? '-'} |`,
+    );
+
+    return [header, separator, ...rows].join('\n');
+  }
+
+  /**
+   * Generate round summary for code-review workflows.
+   */
+  private generateCodeReviewRoundSummary(round: number, ledger: IssueLedger): string {
+    if (round === 1) {
+      return 'First code review round. Focus on comprehensive coverage of all changed files.';
+    }
+
+    const stats = this.computeLedgerStats(ledger.issues);
+    return (
+      `Round ${round - 1}: ` +
+      `${stats.open} open, ` +
+      `${stats.accepted} accepted, ` +
+      `${stats.rejected} rejected, ` +
+      `${stats.deferred} deferred`
+    );
   }
 
   /**

@@ -1,0 +1,7 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".claude/plan/code-review-workflow-spec.md", "reason": "Complete spec for code-review workflow"}
+{"file": "src/lib/workflow/types.ts", "reason": "Current type definitions to extend"}
+{"file": "src/lib/workflow/workflow-engine.ts", "reason": "Engine to generalize with profile"}
+{"file": "src/lib/workflow/termination-judge.ts", "reason": "Termination logic to adapt"}
+{"file": "src/lib/workflow/index.ts", "reason": "Public exports to extend"}

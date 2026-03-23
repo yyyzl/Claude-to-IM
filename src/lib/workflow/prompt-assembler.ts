@@ -15,6 +15,10 @@ import { WorkflowStore } from './workflow-store.js';
 import type {
   SpecReviewPack,
   ClaudeDecisionInput,
+  CodeReviewPack,
+  ClaudeCodeReviewInput,
+  ChangedFile,
+  CodeFinding,
   Issue,
   RejectedIssueSummary,
   ResolvedIssueSummary,
@@ -31,6 +35,15 @@ const CLAUDE_DECISION_TEMPLATE = 'claude-decision.md';
 
 /** Template file name for the Claude decision system prompt. */
 const CLAUDE_DECISION_SYSTEM_TEMPLATE = 'claude-decision-system.md';
+
+/** Template file name for the Codex code-review prompt. */
+const CODE_REVIEW_TEMPLATE = 'code-review-pack.md';
+
+/** Template file name for the Claude code-review decision prompt. */
+const CLAUDE_CODE_REVIEW_TEMPLATE = 'code-review-decision.md';
+
+/** Template file name for the Claude code-review system prompt. */
+const CLAUDE_CODE_REVIEW_SYSTEM_TEMPLATE = 'code-review-decision-system.md';
 
 /** Separated prompt components for Claude API calls. */
 export interface ClaudePromptParts {
@@ -134,6 +147,87 @@ export class PromptAssembler {
 
     // Load system prompt template
     const system = await this.store.loadTemplate(CLAUDE_DECISION_SYSTEM_TEMPLATE);
+
+    return { system, user: result };
+  }
+
+  // ── Code Review Prompts (P1b-CR-0) ──────────────────────────────
+
+  /**
+   * Render a {@link CodeReviewPack} into the final Codex code-review prompt.
+   *
+   * Loads the `code-review-pack.md` template and replaces placeholders.
+   */
+  async renderCodeReviewPrompt(pack: CodeReviewPack): Promise<string> {
+    const template = await this.store.loadTemplate(CODE_REVIEW_TEMPLATE);
+
+    let result = template;
+    result = this.replacePlaceholder(result, 'diff', pack.diff);
+    result = this.replacePlaceholder(
+      result,
+      'changed_files',
+      this.renderChangedFiles(pack.changed_files),
+    );
+    result = this.replacePlaceholder(
+      result,
+      'unresolved_issues',
+      this.renderUnresolvedIssues(pack.unresolved_issues),
+    );
+    result = this.replacePlaceholder(
+      result,
+      'accepted_issues',
+      this.renderAcceptedIssues(pack.accepted_issues),
+    );
+    result = this.replacePlaceholder(
+      result,
+      'rejected_issues',
+      this.renderRejectedIssues(pack.rejected_issues),
+    );
+    result = this.replacePlaceholder(
+      result,
+      'round_summary',
+      pack.round_summary || 'First round',
+    );
+    result = this.replacePlaceholder(result, 'round', pack.round.toString());
+    result = this.replacePlaceholder(
+      result,
+      'context_files',
+      this.renderContextFiles(pack.context_files),
+    );
+    result = this.replacePlaceholder(
+      result,
+      'review_scope',
+      this.renderReviewScope(pack.review_scope),
+    );
+
+    return result;
+  }
+
+  /**
+   * Render a {@link ClaudeCodeReviewInput} into separated system + user prompts.
+   *
+   * Fresh context — no previousDecisions field.
+   */
+  async renderClaudeCodeReviewPrompt(input: ClaudeCodeReviewInput): Promise<ClaudePromptParts> {
+    const template = await this.store.loadTemplate(CLAUDE_CODE_REVIEW_TEMPLATE);
+
+    let result = template;
+    result = this.replacePlaceholder(result, 'round', input.round.toString());
+    result = this.replacePlaceholder(
+      result,
+      'codex_findings_with_ids',
+      this.renderCodeReviewFindings(input.codexFindingsWithIds, input.hasNewFindings),
+    );
+    result = this.replacePlaceholder(result, 'ledger_summary', input.ledgerSummary);
+    result = this.replacePlaceholder(result, 'diff', input.diff);
+    result = this.replacePlaceholder(
+      result,
+      'changed_files',
+      this.renderChangedFiles(input.changed_files),
+    );
+
+    // Load system prompt template
+    const system = await this.store.loadTemplate(CLAUDE_CODE_REVIEW_SYSTEM_TEMPLATE);
 
     return { system, user: result };
   }
@@ -277,6 +371,73 @@ export class PromptAssembler {
         const header = `${index + 1}. [${item.issueId}]${newMarker} (${item.finding.severity}) ${item.finding.issue}`;
         const evidence = `   Evidence: ${item.finding.evidence}`;
         const suggestion = `   Suggestion: ${item.finding.suggestion}`;
+        return `${header}\n${evidence}\n${suggestion}`;
+      })
+      .join('\n');
+  }
+
+  // ── Private: Code Review formatters ─────────────────────────────
+
+  /**
+   * Render changed files as Markdown sections with fenced code blocks.
+   *
+   * Each file shows its change type, language, and content.
+   */
+  private renderChangedFiles(files: ChangedFile[]): string {
+    if (files.length === 0) return 'No changed files.';
+
+    return files
+      .map((file) => {
+        const header = `### \`${file.path}\` (${file.change_type}, +${file.stats.additions}/-${file.stats.deletions})`;
+        const content = `\`\`\`${file.language}\n${file.content}\n\`\`\``;
+        return `${header}\n${content}`;
+      })
+      .join('\n\n');
+  }
+
+  /**
+   * Render a ReviewScope as a human-readable string.
+   */
+  private renderReviewScope(scope: import('./types.js').ReviewScope): string {
+    switch (scope.type) {
+      case 'staged':
+        return 'Staged changes (git diff --cached)';
+      case 'unstaged':
+        return 'Unstaged working tree changes (git diff)';
+      case 'commit':
+        return `Single commit: ${scope.base_ref ?? 'HEAD'}`;
+      case 'commit_range':
+        return `Commit range: ${scope.base_ref}..${scope.head_ref}`;
+      case 'branch':
+        return `Branch diff: ${scope.base_ref}...${scope.head_ref}`;
+      default:
+        return scope.type;
+    }
+  }
+
+  /**
+   * Render code-review findings with file/line/category information.
+   *
+   * Richer format than spec-review findings — includes file location and category.
+   */
+  private renderCodeReviewFindings(
+    findings: ClaudeCodeReviewInput['codexFindingsWithIds'],
+    hasNewFindings: boolean,
+  ): string {
+    if (!hasNewFindings) {
+      return 'No new findings from Codex in this round.';
+    }
+
+    return findings
+      .map((item, index) => {
+        const f = item.finding;
+        const newMarker = item.isNew ? ' (NEW)' : '';
+        const lineInfo = f.line_range
+          ? ` L${f.line_range.start}-${f.line_range.end}`
+          : '';
+        const header = `${index + 1}. [${item.issueId}]${newMarker} (${f.severity}, ${f.category}) \`${f.file}${lineInfo}\`: ${f.issue}`;
+        const evidence = `   Evidence: ${f.evidence}`;
+        const suggestion = `   Suggestion: ${f.suggestion}`;
         return `${header}\n${evidence}\n${suggestion}`;
       })
       .join('\n');

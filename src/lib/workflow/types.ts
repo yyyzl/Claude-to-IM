@@ -2,7 +2,7 @@
  * Workflow Engine — Core Type Definitions
  *
  * All interfaces and types for the dual-model collaboration workflow engine.
- * Covers P0 protocol + P1a Spec-Review MVP.
+ * Covers P0 protocol + P1a Spec-Review MVP + P1b Code-Review extension.
  *
  * @module workflow/types
  */
@@ -193,6 +193,24 @@ export interface Issue {
   repeat_count: number;
   /** Round in which IssueMatcher last processed this issue (idempotency guard). */
   last_processed_round?: number;
+
+  // === Code-review optional fields (P1b-CR-0) ===
+  // These are undefined/omitted for spec-review workflows (backward-compatible).
+
+  /** Source file path (written by IssueMatcher from CodeFinding.file). */
+  source_file?: string;
+  /** Source line range (written by IssueMatcher from CodeFinding.line_range). */
+  source_line_range?: { start: number; end: number };
+  /** Issue category (written by IssueMatcher from CodeFinding.category). */
+  category?: CodeReviewCategory;
+  /**
+   * Fix instruction (written by Claude decision, only when action=accept in code-review).
+   *
+   * Stored separately from {@link decision_reason}:
+   * - decision_reason: "why accepted" (rationale)
+   * - fix_instruction: "how to fix" (actionable instruction)
+   */
+  fix_instruction?: string;
 }
 
 // === Codex Output Types ===
@@ -561,3 +579,360 @@ export class ModelInvocationError extends Error {
     this.name = 'ModelInvocationError';
   }
 }
+
+// ═══════════════════════════════════════════════════════════════
+// P1b-CR-0: Code Review Types
+// ═══════════════════════════════════════════════════════════════
+
+// === Code Review Enums ===
+
+/** File change type (corresponds to git diff --name-status). */
+export type ChangeType = 'added' | 'modified' | 'deleted' | 'renamed' | 'copied';
+
+/** Code review issue category. */
+export type CodeReviewCategory =
+  | 'bug'
+  | 'security'
+  | 'performance'
+  | 'error_handling'
+  | 'type_safety'
+  | 'concurrency'
+  | 'style'
+  | 'architecture'
+  | 'test_coverage'
+  | 'documentation';
+
+// === Code Review Pack Types ===
+
+/**
+ * The "review pack" sent to Codex for code review (blind review).
+ *
+ * Unlike {@link SpecReviewPack}, the review target is code diff + files
+ * rather than spec + plan documents.
+ */
+export interface CodeReviewPack {
+  /** Full git diff text. */
+  diff: string;
+  /** Changed files with full content (for context understanding). */
+  changed_files: ChangedFile[];
+  /** Review scope description. */
+  review_scope: ReviewScope;
+  /** Additional context files (configs, type definitions, etc.). */
+  context_files: ContextFile[];
+  /** Unresolved issues from previous rounds. */
+  unresolved_issues: Issue[];
+  /** Rejected issues (summary only, no rejection reason — avoids bias). */
+  rejected_issues: RejectedIssueSummary[];
+  /**
+   * Accepted issues (for dedup — code-review doesn't modify code,
+   * so accepted issues still exist in the codebase).
+   */
+  accepted_issues: AcceptedIssueSummary[];
+  /** Previous round summary. */
+  round_summary: string;
+  /** Current round number (1-based). */
+  round: number;
+}
+
+/** Details of a changed file in the review. */
+export interface ChangedFile {
+  /** File path (relative to project root). */
+  path: string;
+  /** Old path for rename/copy operations. */
+  old_path?: string;
+  /** File content (current version; deleted files use git show for original). */
+  content: string;
+  /** Diff hunks for this file. */
+  diff_hunks: string;
+  /** File language (inferred from extension). */
+  language: string;
+  /** Change statistics. */
+  stats: { additions: number; deletions: number };
+  /** Change type (corresponds to git diff --name-status). */
+  change_type: ChangeType;
+}
+
+/** Review scope description. */
+export interface ReviewScope {
+  /** Scope type. */
+  type: 'staged' | 'unstaged' | 'commit' | 'commit_range' | 'branch';
+  /** Base ref for diff (e.g. main, HEAD~3). */
+  base_ref?: string;
+  /** Head ref for diff (e.g. HEAD, feature-branch). */
+  head_ref?: string;
+  /** File filter patterns (glob). */
+  file_patterns?: string[];
+  /** Exclude file patterns. */
+  exclude_patterns?: string[];
+  /** Whether to include sensitive files (default false). */
+  include_sensitive?: boolean;
+}
+
+// === Code Finding Types ===
+
+/**
+ * A single finding produced by Codex during code review.
+ *
+ * Extends the base {@link Finding} with file location and category.
+ */
+export interface CodeFinding extends Finding {
+  /** File path where the issue was found. */
+  file: string;
+  /** Line range for precise location (optional). */
+  line_range?: { start: number; end: number };
+  /** Issue category. */
+  category: CodeReviewCategory;
+}
+
+/** Codex code review structured output. */
+export interface CodexCodeReviewOutput {
+  /** Review findings. */
+  findings: CodeFinding[];
+  /** Overall assessment. */
+  overall_assessment: OverallAssessment;
+  /** Review summary. */
+  summary: string;
+  /** Per-file assessments (optional, for report generation). */
+  file_assessments?: FileAssessment[];
+}
+
+/** Single file assessment from Codex. */
+export interface FileAssessment {
+  /** File path. */
+  path: string;
+  /** Risk level for this file. */
+  risk_level: 'high' | 'medium' | 'low' | 'clean';
+  /** Short assessment note. */
+  note: string;
+}
+
+// === Claude Code Review Decision Types ===
+
+/** Claude code review decision structured output. */
+export interface ClaudeCodeReviewDecision {
+  /** Per-issue decisions. */
+  decisions: CodeReviewDecisionItem[];
+  /** Decision summary. */
+  summary: string;
+}
+
+/** A single code review decision item. */
+export interface CodeReviewDecisionItem {
+  /** Issue ID (assigned by IssueMatcher in Step B1). */
+  issue_id: string;
+  /** Decision action (no accept_and_resolve — code-review doesn't auto-fix). */
+  action: 'accept' | 'reject' | 'defer';
+  /** Decision rationale. */
+  reason: string;
+  /** Fix instruction (required when action=accept). */
+  fix_instruction?: string;
+}
+
+/**
+ * Input payload for Claude code review decision prompt.
+ *
+ * Unlike {@link ClaudeDecisionInput}:
+ * - No currentSpec/currentPlan (reviewing code, not documents)
+ * - No previousDecisions (fresh context to avoid confirmation bias)
+ * - Includes diff and changed_files instead
+ */
+export interface ClaudeCodeReviewInput {
+  /** Current round number (1-based). */
+  round: number;
+  /** Codex findings enriched with issue IDs. */
+  codexFindingsWithIds: Array<{
+    issueId: string;
+    finding: CodeFinding;
+    isNew: boolean;
+  }>;
+  /** Ledger summary (status only, no decision reasons — fresh review). */
+  ledgerSummary: string;
+  /** Full git diff. */
+  diff: string;
+  /** Changed files with full content. */
+  changed_files: ChangedFile[];
+  /** Whether any findings are new. */
+  hasNewFindings: boolean;
+}
+
+// === Review Snapshot Types ===
+
+/**
+ * Code review snapshot — frozen at start, all subsequent rounds read from snapshot.
+ *
+ * Solves:
+ * 1. Staged mode: prevents reading unstaged changes via fs.readFile
+ * 2. Resume mode: prevents reading user modifications after pause
+ */
+export interface ReviewSnapshot {
+  /** Snapshot creation timestamp (ISO 8601). */
+  created_at: string;
+  /** Head commit SHA at snapshot time. */
+  head_commit: string;
+  /** Base ref used for diff (e.g. "HEAD", "main"). */
+  base_ref: string;
+  /** Review scope. */
+  scope: ReviewScope;
+  /** Snapshotted files with blob SHAs. */
+  files: SnapshotFile[];
+  /** Files excluded from review (with reasons). */
+  excluded_files: Array<{ path: string; reason: string }>;
+}
+
+/** A single file captured in the review snapshot. */
+export interface SnapshotFile {
+  /** File path (relative to repo root). */
+  path: string;
+  /** Old path (for rename/copy). */
+  old_path?: string;
+  /** Git blob SHA for content retrieval via `git show <blob_sha>`. */
+  blob_sha: string;
+  /** Base blob SHA (for deleted files, content from base). */
+  base_blob_sha?: string;
+  /** Change type. */
+  change_type: ChangeType;
+  /** File language (inferred from extension). */
+  language: string;
+}
+
+// === Code Review Report Types ===
+
+/** Code review final report. */
+export interface CodeReviewReport {
+  /** Workflow run_id. */
+  run_id: string;
+  /** Review scope. */
+  scope: ReviewScope;
+  /** Total rounds executed. */
+  total_rounds: number;
+  /** Statistics. */
+  stats: {
+    total_findings: number;
+    accepted: number;
+    rejected: number;
+    deferred: number;
+    by_severity: Record<Severity, number>;
+    by_category: Partial<Record<CodeReviewCategory, number>>;
+  };
+  /** Per-file review results. */
+  file_results: FileReviewResult[];
+  /** Overall conclusion. */
+  conclusion: 'clean' | 'minor_issues_only' | 'issues_found' | 'critical_issues';
+  /** Report generation timestamp (ISO 8601). */
+  generated_at: string;
+  /** Files excluded from review. */
+  excluded_files: Array<{ path: string; reason: string }>;
+}
+
+/** Single file review result in the report. */
+export interface FileReviewResult {
+  /** File path. */
+  path: string;
+  /** Issues found in this file (with decisions). */
+  issues: Array<{
+    id: string;
+    severity: Severity;
+    category: CodeReviewCategory;
+    description: string;
+    line_range?: { start: number; end: number };
+    action: 'accept' | 'reject' | 'defer';
+    reason: string;
+    fix_instruction?: string;
+  }>;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// WorkflowProfile — Engine generalization for multiple workflow types
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Workflow profile — parameterized configuration for a workflow type.
+ *
+ * The engine uses the profile to drive its loop instead of hardcoding
+ * step logic. Each workflow type (spec-review, code-review, dev) has
+ * its own profile with distinct behavior flags.
+ */
+export interface WorkflowProfile {
+  /** Workflow type identifier. */
+  type: WorkflowType;
+
+  /** Step sequence (engine executes in this order). */
+  steps: WorkflowStep[];
+
+  /** Config overrides (layered on top of DEFAULT_CONFIG). */
+  configOverrides: Partial<WorkflowConfig>;
+
+  /** Template name mapping. */
+  templates: {
+    /** Codex review prompt template filename. */
+    review: string;
+    /** Claude decision prompt template filename. */
+    decision: string;
+    /** Claude system role template filename. */
+    decisionSystem: string;
+  };
+
+  /** Step behavior flags. */
+  behavior: {
+    /** Whether Claude receives previous_decisions (true=cumulative, false=fresh). */
+    claudeIncludesPreviousDecisions: boolean;
+    /** Whether to execute PatchApplier (spec-review needs it, code-review does not). */
+    applyPatches: boolean;
+    /** Whether to track resolves_issues (spec-review needs it, code-review does not). */
+    trackResolvesIssues: boolean;
+    /** Whether accept action requires fix_instruction field. */
+    requireFixInstruction: boolean;
+    /**
+     * Whether 'accepted' status is a terminal state (does not block termination).
+     *
+     * - spec-review: false — accepted is intermediate, waiting for patch to resolve
+     * - code-review: true  — accepted is terminal ("issue confirmed + fix suggested")
+     *
+     * Affects TerminationJudge: when true, 'accepted' is excluded from
+     * "unresolved" calculation. LGTM terminates if no open/deferred remain.
+     */
+    acceptedIsTerminal: boolean;
+  };
+}
+
+// === Predefined Profiles ===
+
+/** Spec-Review profile — preserves all existing behavior. */
+export const SPEC_REVIEW_PROFILE: WorkflowProfile = {
+  type: 'spec-review',
+  steps: ['codex_review', 'issue_matching', 'pre_termination', 'claude_decision', 'post_decision'],
+  configOverrides: {},
+  templates: {
+    review: 'spec-review-pack.md',
+    decision: 'claude-decision.md',
+    decisionSystem: 'claude-decision-system.md',
+  },
+  behavior: {
+    claudeIncludesPreviousDecisions: true,
+    applyPatches: true,
+    trackResolvesIssues: true,
+    requireFixInstruction: false,
+    acceptedIsTerminal: false,   // accepted = intermediate, waiting for resolve
+  },
+};
+
+/** Code-Review profile — review-only MVP (P1b-CR-0). */
+export const CODE_REVIEW_PROFILE: WorkflowProfile = {
+  type: 'code-review',
+  steps: ['codex_review', 'issue_matching', 'pre_termination', 'claude_decision', 'post_decision'],
+  configOverrides: {
+    max_rounds: 3,              // Code review typically converges in 2-3 rounds
+  },
+  templates: {
+    review: 'code-review-pack.md',
+    decision: 'code-review-decision.md',
+    decisionSystem: 'code-review-decision-system.md',
+  },
+  behavior: {
+    claudeIncludesPreviousDecisions: false,  // Fresh context — avoid confirmation bias
+    applyPatches: false,                     // Review-only, no code modification
+    trackResolvesIssues: false,              // No patches, no resolves_issues
+    requireFixInstruction: true,             // accept requires fix suggestion
+    acceptedIsTerminal: true,                // accepted = terminal (review conclusion)
+  },
+};

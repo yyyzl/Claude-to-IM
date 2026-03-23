@@ -7,12 +7,16 @@
  * signal that the workflow should proceed to the next Claude decision step.
  *
  * Priority order (first match wins):
- * 1. LGTM with no open/accepted issues → terminate
- * 2. LGTM with open/accepted issues   → continue (null)
+ * 1. LGTM with no unresolved issues → terminate
+ * 2. LGTM with unresolved issues    → continue (null)
  * 3. Deadlock (rejected issues with repeat_count >= 2) → pause_for_human
  * 4. No new high/critical for 2 consecutive rounds → terminate
  * 5. Only low-severity issues remaining → terminate
  * 6. Max rounds reached → terminate
+ *
+ * The definition of "unresolved" varies by workflow type:
+ * - spec-review (acceptedIsTerminal=false): open + accepted + deferred
+ * - code-review (acceptedIsTerminal=true):  open + deferred (accepted = terminal)
  *
  * @module workflow/termination-judge
  */
@@ -42,6 +46,9 @@ export class TerminationJudge {
    *   introduced new high/critical issues (used for consecutive-round detection).
    * @param ctx.isSkippedRound - If true, this round was skipped (e.g. Codex
    *   returned no findings). Resets the consecutive no-new-high counter.
+   * @param ctx.acceptedIsTerminal - When true, 'accepted' status is excluded
+   *   from "unresolved" calculation (code-review: accepted = terminal state).
+   *   Defaults to false for backward compatibility (spec-review behavior).
    * @returns A termination result, or `null` to continue.
    */
   judge(ctx: {
@@ -52,30 +59,37 @@ export class TerminationJudge {
     previousRoundHadNewHighCritical: boolean;
     isSkippedRound?: boolean;
     isPreTermination?: boolean;
+    acceptedIsTerminal?: boolean;
   }): TerminationResult | null {
     const { round, config, ledger, latestOutput, previousRoundHadNewHighCritical, isSkippedRound } = ctx;
+    const acceptedIsTerminal = ctx.acceptedIsTerminal ?? false;
 
     // ── Check 1: LGTM assessment ──────────────────────────────
     // If Codex says "lgtm", check whether there are still unresolved issues.
+    // Definition of "unresolved" depends on acceptedIsTerminal:
+    //   - false (spec-review): open + accepted + deferred
+    //   - true  (code-review): open + deferred (accepted is terminal — does not block)
     if (latestOutput.overall_assessment === 'lgtm') {
+      const unresolvedStatuses: string[] = acceptedIsTerminal
+        ? ['open', 'deferred']
+        : ['open', 'accepted', 'deferred'];
+
       const hasUnresolved = ledger.issues.some(
-        (issue) =>
-          issue.status === 'open' ||
-          issue.status === 'accepted' ||
-          issue.status === 'deferred',
+        (issue) => unresolvedStatuses.includes(issue.status),
       );
 
       if (!hasUnresolved) {
+        const statusList = unresolvedStatuses.join('/');
         return {
           reason: 'lgtm',
           action: 'terminate',
           details:
-            `Codex assessed LGTM with no unresolved issues remaining (open/accepted/deferred). ` +
+            `Codex assessed LGTM with no unresolved issues remaining (${statusList}). ` +
             `Workflow completed successfully after ${round} round(s).`,
         };
       }
 
-      // Unresolved issues exist (including deferred) — continue so Claude can address them.
+      // Unresolved issues exist — continue so Claude can address them.
       return null;
     }
 
@@ -118,14 +132,15 @@ export class TerminationJudge {
     }
 
     // ── Check 4: Only low-severity issues remaining ───────────
-    // Consider ALL unresolved statuses (open + accepted + deferred) to avoid
-    // prematurely terminating when high/critical issues have been acknowledged
-    // but not yet resolved (ISS-003).
+    // Consider unresolved statuses based on acceptedIsTerminal:
+    //   - false (spec-review): open + accepted + deferred (ISS-003)
+    //   - true  (code-review): open + deferred (accepted = terminal)
+    const unresolvedStatusesForCheck4: string[] = acceptedIsTerminal
+      ? ['open', 'deferred']
+      : ['open', 'accepted', 'deferred'];
+
     const unresolvedIssues = ledger.issues.filter(
-      (issue) =>
-        issue.status === 'open' ||
-        issue.status === 'accepted' ||
-        issue.status === 'deferred',
+      (issue) => unresolvedStatusesForCheck4.includes(issue.status),
     );
 
     // Guard: never terminate if there are unresolved high/critical issues

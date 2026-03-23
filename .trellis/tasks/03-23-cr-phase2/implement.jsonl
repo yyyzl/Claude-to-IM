@@ -1,0 +1,6 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".claude/plan/code-review-workflow-spec.md", "reason": "Spec sections 5+9"}
+{"file": "src/lib/workflow/types.ts", "reason": "Type definitions"}
+{"file": "src/lib/workflow/pack-builder.ts", "reason": "PackBuilder to extend"}
+{"file": "src/lib/workflow/prompt-assembler.ts", "reason": "PromptAssembler to extend"}
