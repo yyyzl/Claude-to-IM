@@ -21,6 +21,30 @@ $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $repoRoot
 
+# ── PID 工具函数（与 bridge.ps1 的 Get-BridgePid / Get-BridgeProcess 对齐） ──
+
+function Read-PidFile([string]$path) {
+  if (-not (Test-Path -LiteralPath $path)) { return $null }
+  try {
+    $raw = (Get-Content -LiteralPath $path -Encoding UTF8 -Raw).Trim()
+    $parsed = 0
+    if ([int]::TryParse($raw, [ref]$parsed) -and $parsed -gt 0) { return $parsed }
+    return $null
+  } catch { return $null }
+}
+
+function Get-RunningProcess([int]$processId) {
+  try { return (Get-Process -Id $processId -ErrorAction Stop) } catch { return $null }
+}
+
+function Stop-ProcessTree([int]$processId, [string]$label = "") {
+  $proc = Get-RunningProcess $processId
+  if (-not $proc) { return $false }
+  if ($label) { Write-Host "[bridges] ${label}: 强制结束 (pid=$processId) ..." -ForegroundColor Yellow }
+  & taskkill.exe /PID $processId /T /F 2>$null | Out-Null
+  return $true
+}
+
 # ── 桥接实例定义 ──
 $bridges = @(
   @{
@@ -39,100 +63,77 @@ $bridges = @(
 # Stop：优雅停止 → 超时强杀
 # ════════════════════════════════════════
 function Stop-AllBridges {
-  $anyRunning = $false
-
+  # 第 1 步：收集每个桥接的 PID 信息（一次性读取，后续复用）
+  $bridgeInfo = @()
   foreach ($b in $bridges) {
     $controlDir = Join-Path $repoRoot $b.ControlDir
-    $pidFile = Join-Path $controlDir "pid"
-    $stopFile = Join-Path $controlDir "stop"
+    $info = @{
+      Name       = $b.Name
+      ControlDir = $controlDir
+      PidFile    = Join-Path $controlDir "pid"
+      StopFile   = Join-Path $controlDir "stop"
+      CmdPidFile = Join-Path $controlDir "cmd-pid"
+      BridgePid  = Read-PidFile (Join-Path $controlDir "pid")
+      CmdPid     = Read-PidFile (Join-Path $controlDir "cmd-pid")
+    }
+    $bridgeInfo += $info
+  }
 
-    if (-not (Test-Path -LiteralPath $pidFile)) { continue }
-    $raw = (Get-Content -LiteralPath $pidFile -Encoding UTF8 -Raw).Trim()
-    $bridgePid = 0
-    if (-not ([int]::TryParse($raw, [ref]$bridgePid)) -or $bridgePid -le 0) { continue }
+  # 第 2 步：向存活进程发送停止信号
+  $anyRunning = $false
+  foreach ($info in $bridgeInfo) {
+    if (-not $info.BridgePid) { continue }
 
-    $proc = $null
-    try { $proc = Get-Process -Id $bridgePid -ErrorAction Stop } catch {}
+    $proc = Get-RunningProcess $info.BridgePid
     if (-not $proc) {
-      Write-Host "[bridges] $($b.Name): 进程不存在 (pid=$bridgePid)，清理残留文件。"
-      Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
-      Remove-Item -LiteralPath $stopFile -Force -ErrorAction SilentlyContinue
+      Write-Host "[bridges] $($info.Name): 进程不存在 (pid=$($info.BridgePid))，清理残留文件。"
+      Remove-Item -LiteralPath $info.PidFile -Force -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath $info.StopFile -Force -ErrorAction SilentlyContinue
       continue
     }
 
     $anyRunning = $true
-    Write-Host "[bridges] $($b.Name): 发送停止信号 (pid=$bridgePid) ..."
-    New-Item -ItemType Directory -Force -Path $controlDir | Out-Null
-    Set-Content -LiteralPath $stopFile -Encoding UTF8 -Value (Get-Date).ToString("o")
+    Write-Host "[bridges] $($info.Name): 发送停止信号 (pid=$($info.BridgePid)) ..."
+    New-Item -ItemType Directory -Force -Path $info.ControlDir | Out-Null
+    Set-Content -LiteralPath $info.StopFile -Encoding UTF8 -Value (Get-Date).ToString("o")
   }
 
-  if (-not $anyRunning) {
-    Write-Host "[bridges] 没有正在运行的桥接进程。"
-    # 仍需关闭可能残留的 cmd 窗口（node 退了但 /k 让 cmd 窗口留着的情况）
-  }
-
+  # 第 3 步：等待进程退出 + 超时强杀（仅当有存活进程时）
   if ($anyRunning) {
-    # 等待所有进程退出
     $deadline = (Get-Date).AddSeconds($StopTimeoutSec)
     while ((Get-Date) -lt $deadline) {
       $stillAlive = $false
-      foreach ($b in $bridges) {
-        $controlDir = Join-Path $repoRoot $b.ControlDir
-        $pidFile = Join-Path $controlDir "pid"
-        if (-not (Test-Path -LiteralPath $pidFile)) { continue }
-        $raw = (Get-Content -LiteralPath $pidFile -Encoding UTF8 -Raw).Trim()
-        $pid2 = 0
-        if (-not ([int]::TryParse($raw, [ref]$pid2)) -or $pid2 -le 0) { continue }
-        try { $null = Get-Process -Id $pid2 -ErrorAction Stop; $stillAlive = $true } catch {}
+      foreach ($info in $bridgeInfo) {
+        if ($info.BridgePid -and (Get-RunningProcess $info.BridgePid)) { $stillAlive = $true }
       }
       if (-not $stillAlive) { break }
       Start-Sleep -Milliseconds 500
     }
 
     # 超时：强杀残留进程
-    foreach ($b in $bridges) {
-      $controlDir = Join-Path $repoRoot $b.ControlDir
-      $pidFile = Join-Path $controlDir "pid"
-
-      if (-not (Test-Path -LiteralPath $pidFile)) { continue }
-      $raw = (Get-Content -LiteralPath $pidFile -Encoding UTF8 -Raw).Trim()
-      $pid3 = 0
-      if (-not ([int]::TryParse($raw, [ref]$pid3)) -or $pid3 -le 0) { continue }
-
-      $proc = $null
-      try { $proc = Get-Process -Id $pid3 -ErrorAction Stop } catch {}
-      if ($proc) {
-        Write-Host "[bridges] $($b.Name): 超时未退出，强制结束 (pid=$pid3) ..." -ForegroundColor Yellow
-        & taskkill.exe /PID $pid3 /T /F 2>$null | Out-Null
+    foreach ($info in $bridgeInfo) {
+      if (-not $info.BridgePid) { continue }
+      if (Stop-ProcessTree $info.BridgePid "$($info.Name): 超时未退出") {
         Start-Sleep -Milliseconds 500
       }
     }
+  } else {
+    Write-Host "[bridges] 没有正在运行的桥接进程。"
   }
 
-  # 关闭残留 cmd 窗口 + 清理控制文件（无论正常退出还是超时，都执行）
-  foreach ($b in $bridges) {
-    $controlDir = Join-Path $repoRoot $b.ControlDir
-    $pidFile = Join-Path $controlDir "pid"
-    $stopFile = Join-Path $controlDir "stop"
-    $cmdPidFile = Join-Path $controlDir "cmd-pid"
-
-    # 通过保存的 cmd.exe PID 关闭窗口（WINDOWTITLE 过滤器对 Start-Process 创建的窗口无效）
-    if (Test-Path -LiteralPath $cmdPidFile) {
-      $cmdRaw = (Get-Content -LiteralPath $cmdPidFile -Encoding UTF8 -Raw).Trim()
-      $cmdPid = 0
-      if ([int]::TryParse($cmdRaw, [ref]$cmdPid) -and $cmdPid -gt 0) {
-        $cmdProc = $null
-        try { $cmdProc = Get-Process -Id $cmdPid -ErrorAction Stop } catch {}
-        if ($cmdProc) {
-          Write-Host "[bridges] $($b.Name): 关闭 cmd 窗口 (cmd-pid=$cmdPid) ..."
-          & taskkill.exe /PID $cmdPid /T /F 2>$null | Out-Null
-        }
+  # 第 4 步：关闭残留 cmd 窗口 + 清理控制文件（无论正常退出还是超时，都执行）
+  foreach ($info in $bridgeInfo) {
+    if ($info.CmdPid) {
+      $cmdProc = Get-RunningProcess $info.CmdPid
+      if ($cmdProc) {
+        Write-Host "[bridges] $($info.Name): 关闭 cmd 窗口 (cmd-pid=$($info.CmdPid)) ..."
+        & taskkill.exe /PID $info.CmdPid /T /F 2>$null | Out-Null
       }
-      Remove-Item -LiteralPath $cmdPidFile -Force -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath $info.CmdPidFile -Force -ErrorAction SilentlyContinue
     }
 
-    Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $stopFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $info.PidFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $info.StopFile -Force -ErrorAction SilentlyContinue
   }
 
   Write-Host "[bridges] 全部已停止。" -ForegroundColor Green
@@ -192,17 +193,9 @@ function Start-AllBridges {
     New-Item -ItemType Directory -Force -Path $controlDir | Out-Null
 
     # 清理可能残留的旧 cmd 窗口（通过保存的 PID）
-    if (Test-Path -LiteralPath $cmdPidFile) {
-      $oldRaw = (Get-Content -LiteralPath $cmdPidFile -Encoding UTF8 -Raw).Trim()
-      $oldCmdPid = 0
-      if ([int]::TryParse($oldRaw, [ref]$oldCmdPid) -and $oldCmdPid -gt 0) {
-        $oldProc = $null
-        try { $oldProc = Get-Process -Id $oldCmdPid -ErrorAction Stop } catch {}
-        if ($oldProc) {
-          Write-Host "[bridges] $($b.Name): 清理残留旧窗口 (cmd-pid=$oldCmdPid) ..."
-          & taskkill.exe /PID $oldCmdPid /T /F 2>$null | Out-Null
-        }
-      }
+    $oldCmdPid = Read-PidFile $cmdPidFile
+    if ($oldCmdPid) {
+      Stop-ProcessTree $oldCmdPid "$($b.Name): 清理残留旧窗口"
     }
 
     $title = "Bridge: $($b.Name)"
