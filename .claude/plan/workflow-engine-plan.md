@@ -1,6 +1,7 @@
 # Workflow Engine: Design Decisions & Reference
 
-> P0 + P1a 已全部实现（14 个模块，~5500 行 TypeScript）。
+> P0 + P1a + P2a 已全部实现（14 个引擎模块 + 1 个 IM 集成模块，~6200 行 TypeScript）。
+> P2a 新增 `workflow-command.ts`（738 行）：`/workflow` 命令 + 事件推送。
 > 本文档已精简为设计决策参考，完整实施步骤已归档。
 > 完整 Spec 见 `workflow-engine-spec.md`，质量档案见 `.claude-workflows/reports/workflow-engine-deep-audit.md`。
 
@@ -58,8 +59,12 @@
 
 ---
 
+## Completed Extension Points
+
+- **P2a** ✅: `/workflow` command integrated into `bridge-manager.ts`. `workflow-command.ts` (738 lines) handles 5 subcommands (help/start/stop/status/resume). `bindProgressEvents()` subscribes to 14 engine event types and pushes formatted text to IM. Per-chat concurrency guard, path traversal protection, background async execution.
+
 ## Future Extension Points
 
 - **P1b**: Add workflow type registry. PackBuilder and PromptAssembler get type-specific methods. WorkflowEngine loop becomes configurable step chain.
-- **P2**: WorkflowEngine.on() already provides event hooks. Bridge registers listeners for IM push. /workflow command delegates to engine.
+- **P2b**: Upgrade `bindProgressEvents()` output from text to Feishu interactive cards with inline buttons. Add milestone aggregation to reduce push noise. Code comment marks the exact extension point.
 - **P3**: WorkflowStore interface can be backed by SO API instead of filesystem. Event format already ndjson-compatible.

@@ -2,9 +2,11 @@
 
 > Based on the final plan v2 (multi-robot-collaboration)
 >
-> Scope: P0 (protocol definition) + P1a (Spec-Review single workflow MVP)
+> Scope: P0 (protocol definition) + P1a (Spec-Review single workflow MVP) + P2a (IM command integration)
 >
-> Future phases (P1b / P2 / P3) outlined at the end, not in current scope.
+> Completed: P0 ✅ · P1a ✅ · P2a ✅
+>
+> Future phases (P1b / P2b / P3) outlined at the end, not in current scope.
 
 ---
 
@@ -40,7 +42,9 @@ Build a Workflow Engine module that automates the full Spec/Plan review loop:
 
 - Dev workflow (Manager-Worker) -- P1b
 - Code review workflow (Adversarial Verification) -- P1b
-- IM integration (/workflow command, Feishu cards) -- P2
+- ~~IM integration (/workflow command)~~ -- ✅ P2a completed (text-based push via `workflow-command.ts`)
+- Feishu interactive cards + inline approve/reject buttons -- P2b
+- Intelligent milestone aggregation (reduce push noise) -- P2b
 - Session Orchestrator integration -- P3
 - Parallel Codex instances -- P1b
 - Publishable npm package (P1a is a repo-internal tool; `.claude-workflows/` templates/schemas are NOT included in `files` for npm publish)
@@ -57,11 +61,15 @@ Build a Workflow Engine module that automates the full Spec/Plan review loop:
 
 **US-3**: As a developer, I want the system to auto-terminate when appropriate (LGTM / no new issues / deadlock detected), not run a fixed N rounds.
 
-### 2.2 Future (P1b / P2)
+### 2.2 Completed (P2a) ✅
+
+**US-5a** (P2a): Start/stop/resume/status a Spec-Review workflow from any IM channel via `/workflow` command. Engine events are pushed as real-time text messages. *(Implemented in `workflow-command.ts`, 738 lines.)*
+
+### 2.3 Future (P1b / P2b)
 
 **US-4** (P1b): Use the same engine for dev workflow and code review workflow.
 
-**US-5** (P2): Start review from Feishu with `/workflow spec-review`, see real-time progress, approve/reject via inline buttons.
+**US-5b** (P2b): Upgrade IM push from text to Feishu interactive cards with inline approve/reject buttons. Aggregate milestone events to reduce noise.
 
 ---
 
@@ -123,7 +131,7 @@ src/lib/workflow/                    <-- Independent module, NOT inside bridge c
 **Key constraints**:
 
 - Workflow Engine does NOT depend on `src/lib/bridge/`
-- Bridge does NOT depend on Workflow Engine (P2 bridges via DI or events)
+- Bridge depends on Workflow Engine only through `workflow-command.ts` (P2a — direct import of `createSpecReviewEngine`)
 - Workflow Engine calls LLM through `ModelInvoker` interface, never directly
 - **ModelInvoker is an independent abstraction layer** — it does NOT reuse bridge's `LLMProvider` interface. Bridge's `LLMProvider.streamChat()` returns `ReadableStream<string>` (streaming SSE), while `ModelInvoker` returns `Promise<string>` (full completion). They are fundamentally different abstractions serving different use cases.
 
@@ -131,7 +139,7 @@ src/lib/workflow/                    <-- Independent module, NOT inside bridge c
 
 | Module | Dependency | Notes |
 |--------|-----------|-------|
-| `bridge-manager.ts` | None | P2 adds `/workflow` command |
+| `bridge-manager.ts` | `workflow-command.ts` | ✅ P2a: `/workflow` command registered (line ~2052) |
 | `conversation-engine.ts` | None | ModelInvoker is independent stateless abstraction; does NOT reuse LLMProvider |
 | `codex-passthrough.ts` | Reference only | Pack->Prompt similar to role wrapping |
 | `host.ts` (BridgeStore) | None | WorkflowStore uses independent filesystem storage |
@@ -1227,9 +1235,23 @@ const SPEC_REVIEW_OVERRIDES = {
 
 ---
 
-## 11. Future Phases
+## 11. Completed & Future Phases
 
-### P1b: Dev + Code Review Workflows
+### P2a: IM Command Integration ✅ (completed 2026-03-22)
+
+> Implemented in `src/lib/bridge/internal/workflow-command.ts` (738 lines) + unit tests.
+
+- ✅ `/workflow` command registered in `bridge-manager.ts` switch statement
+- ✅ 5 subcommands: `help` / `start` / `stop` / `status` / `resume`
+- ✅ `start` supports `--context`, `--model`, `--codex-backend` options
+- ✅ `WorkflowEngine.on()` events → IM text message push (14 event types covered)
+- ✅ Per-chat single-workflow guard with synchronous slot reservation (race-condition safe)
+- ✅ Path traversal protection (`resolveSafePath`)
+- ✅ Background async execution (fire-and-forget with completion/error cleanup)
+- ✅ Status query reads from `WorkflowStore` meta
+- ✅ Graceful stop via `engine.pause()` (resumable)
+
+### P1b: Dev + Code Review Workflows (future)
 
 **Dev (Manager-Worker)**:
 
@@ -1245,14 +1267,16 @@ const SPEC_REVIEW_OVERRIDES = {
 - New `ReviewPack` with `code_snapshot` / `diff`
 - `workflow_type: 'code-review'`
 
-### P2: IM Integration
+### P2b: Feishu Interactive Cards (future)
 
-- `/workflow` command in `bridge-manager.ts` switch statement
-- `WorkflowEngine.on()` events drive IM message push
-- Feishu cards + inline buttons (reuse existing card action mechanism)
-- Push only key milestones, aggregate intelligently
+> Prerequisite: P2a ✅. Code comment marks the extension point: "P2B 卡片化只需替换 `bindProgressEvents()` 的输出格式".
 
-### P3: Session Orchestrator Integration
+- Upgrade text push to Feishu interactive card templates
+- Inline approve/reject buttons (reuse existing card action mechanism)
+- Push only key milestones, aggregate intelligently (reduce noise)
+- Card update (patch existing card) instead of new message per event
+
+### P3: Session Orchestrator Integration (future)
 
 - Pack JSON -> SO `RunPack` `observation_pack` extension
 - Issue Ledger -> SO `work_items` structured upgrade
@@ -1324,3 +1348,23 @@ const SPEC_REVIEW_OVERRIDES = {
 - [ ] `package.json`: `@anthropic-ai/sdk` added as dependency
 - [ ] `package.json`: test script pattern includes `workflow-*.test.ts`
 - [ ] `package.json`: exports use correct format: `"./workflow/*"` (not `"./src/lib/workflow/*"`)
+
+### P2a ✅
+
+- [x] `/workflow` command registered in `bridge-manager.ts` switch statement
+- [x] `handleWorkflowCommand()` dispatches to typed subcommand handlers
+- [x] `parseWorkflowArgs()` parses 5 subcommands: help / start / status / resume / stop
+- [x] `/workflow start <spec> <plan>` reads files, creates engine, launches in background
+- [x] `/workflow start` supports `--context file1,file2`, `--model <id>`, `--codex-backend <backend>` options
+- [x] `/workflow status [run-id]` reads `WorkflowMeta` from `WorkflowStore` and formats for IM
+- [x] `/workflow resume <run-id>` creates engine, calls `engine.resume()` in background
+- [x] `/workflow stop [run-id]` calls `engine.pause()` (graceful, resumable)
+- [x] Per-chat single-workflow guard (`activeWorkflows` Map, keyed by `channelType:chatId`)
+- [x] Synchronous slot reservation before any `await` (race-condition safe)
+- [x] Path traversal protection via `resolveSafePath()` (resolved path must stay within cwd)
+- [x] `bindProgressEvents()` subscribes to 14 engine event types and pushes formatted IM text
+- [x] Events covered: `workflow_started`, `round_started`, `codex_review_started/completed`, `issue_matching_completed`, `claude_decision_started/completed`, `termination_triggered`, `workflow_completed`, `workflow_failed`, `human_review_requested`, `workflow_resumed`, `codex_review_timeout`, `claude_decision_timeout`, `codex_parse_error`, `claude_parse_error`
+- [x] Audit log entry for every `/workflow` command
+- [x] `workflow_started` event updates provisional `runId` in activeWorkflows
+- [x] Background engine completion/failure auto-cleans activeWorkflows slot
+- [x] Unit tests cover `parseWorkflowArgs` and `resolveSafePath`
