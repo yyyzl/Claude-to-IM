@@ -1069,3 +1069,64 @@ P1+TP1 批次实施 + 跨 AI 审核修复。包含 5 个代码安全网补全 + 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 22: 补充工作流卡片渲染函数单元测试
+
+**Date**: 2026-03-23
+**Task**: 补充工作流卡片渲染函数单元测试
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+## 任务背景
+
+评估两个后续迭代项的价值后，优先补充 `renderProgressMarkdown()` 和 `renderCompletionMarkdown()` 的单元测试。
+
+## 完成内容
+
+| 项目 | 详情 |
+|------|------|
+| 新增测试文件 | `src/__tests__/unit/workflow-render.test.ts` (55 个测试用例) |
+| 源码导出 | `_renderProgressMarkdown`, `_renderCompletionMarkdown`, 类型 `_RoundProgress`, `_WorkflowProgressState` |
+| Bugfix | 修复全零决策时输出空行问题（fallback 为"已完成"） |
+
+## 测试覆盖
+
+**renderProgressMarkdown** (37 tests):
+- Codex 状态: pending/running/done、findings 计数、lgtm/major_issues 评估
+- Issue 匹配: 新增 issues、Critical/High、0/undefined 边界
+- Claude 状态: pending/running/done、决策计数、零值省略、全零 fallback
+- Spec/Plan 更新: 单独/同时/无更新
+- 轮次图标: 活跃 vs 已完成、终止/人工审查切换
+- 多轮排序、警告、终止判定、人工审查
+
+**renderCompletionMarkdown** (17 tests):
+- 结构顺序、数据字段、严重度、状态分布
+
+## 决策记录
+
+- **Inline 按钮**: 建议延后，已有命令替代，暂停引入状态机复杂度
+- **测试优先**: 纯函数成本低、回归保护价值高
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a821824` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
