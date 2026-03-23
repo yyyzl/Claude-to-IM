@@ -1388,3 +1388,35 @@ Fix Phase 4 gaps (WorkflowStore snapshot, engine profile routing, IM code-review
 ### Next Steps
 
 - None - task complete
+
+
+## Session 28: 拆分 workflow 审查命令
+
+**Date**: 2026-03-24
+**Task**: 拆分 workflow 审查命令
+
+### Summary
+
+将 /workflow 显式拆分为 spec-review 与 code-review 子命令，同步更新桥接帮助、命令解析单测和 workflow 总结文档。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `18978ba` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
