@@ -125,3 +125,108 @@
 - `src/lib/bridge/conversation-engine.ts`：LLM 流处理独立成模块
 - `src/lib/bridge/delivery-layer.ts`：投递策略独立成模块
 - `src/lib/bridge/host.ts`：契约层与实现层分离
+
+---
+
+## 适配器注册边界补充
+
+新增平台时，核心边界不应该被“平台分支”反向侵蚀。桥接核心只依赖抽象适配器注册表，不直接依赖某个平台类。
+
+推荐模式：
+
+- `channel-adapter.ts` 维护唯一的注册表边界：`registerAdapterFactory()`、`createAdapter()`、`getRegisteredTypes()`
+- 每个适配器文件在模块末尾自注册
+- `adapters/index.ts` 只保留 side-effect import，作为“适配器目录清单”
+- `bridge-manager.ts` 只导入 `./adapters/index.js` 触发注册，不为新平台添加 `switch` 或 `new XxxAdapter()`
+
+反模式：
+
+- 在 `bridge-manager.ts` 里手动 `if (type === 'telegram') new TelegramAdapter()`
+- 新增平台时顺手改多个核心模块，而不是只补注册入口
+- 适配器实现已经存在，但忘了在 `adapters/index.ts` side-effect import
+
+真实示例：
+
+```typescript
+const adapterFactories = new Map<string, () => BaseChannelAdapter>();
+
+export function registerAdapterFactory(
+  channelType: string,
+  factory: () => BaseChannelAdapter,
+): void {
+  adapterFactories.set(channelType, factory);
+}
+
+export function createAdapter(channelType: string): BaseChannelAdapter | null {
+  const factory = adapterFactories.get(channelType);
+  return factory ? factory() : null;
+}
+```
+
+```typescript
+import './telegram-adapter.js';
+import './feishu-adapter.js';
+import './discord-adapter.js';
+import './qq-adapter.js';
+```
+
+```typescript
+// Self-register so bridge-manager can create TelegramAdapter via the registry.
+registerAdapterFactory('telegram', () => new TelegramAdapter());
+```
+
+来源：
+
+- `src/lib/bridge/channel-adapter.ts`
+- `src/lib/bridge/adapters/index.ts`
+- `src/lib/bridge/adapters/telegram-adapter.ts`
+
+## 新增适配器的落地步骤补充
+
+新增平台适配器时，推荐按下面顺序落地，避免职责泄漏和漏注册：
+
+1. 在 `src/lib/bridge/adapters/` 下创建平台文件；现有真实命名模式是 `telegram-adapter.ts`、`discord-adapter.ts`、`qq-adapter.ts`
+2. 在该文件实现 `start()`、`stop()`、`isRunning()`、`consumeOne()`、`send()`、`validateConfig()`、`isAuthorized()`
+3. 文件末尾按现有模式自注册，例如 `registerAdapterFactory('discord', () => new DiscordAdapter())`
+4. 在 `src/lib/bridge/adapters/index.ts` 追加对应的 side-effect import，例如 `import './discord-adapter.js';`
+5. 如果需要新的配置 key、类型或校验器，再分别落到 `host.ts`、`types.ts`、`security/validators.ts` 对应边界，不要直接塞进 `bridge-manager.ts`
+
+反模式：
+
+- 先在 `bridge-manager.ts` 写平台逻辑，再回头补适配器
+- 让适配器自己读取并解析所有宿主配置，但不通过 `getBridgeContext()`
+- 新增平台时复制已有平台的大段实现，却不复用 `delivery-layer.ts`、`markdown/`、`security/` 能力
+
+## 授权边界补充
+
+适配器注册完成后，平台特有的授权判断仍然留在适配器内部，桥接核心只依赖抽象方法。
+
+推荐模式：
+
+- `BaseChannelAdapter` 把 `isAuthorized(userId, chatId)` 定义为必实现契约
+- 平台实现可以读取自己的 allowlist、chatId 或群权限配置
+- 无授权配置时默认拒绝，而不是交给上层猜测
+
+真实示例：
+
+```typescript
+abstract isAuthorized(userId: string, chatId: string): boolean;
+```
+
+```typescript
+isAuthorized(userId: string, chatId: string): boolean {
+  const allowedUsers = getBridgeContext().store.getSetting('telegram_bridge_allowed_users') || '';
+  if (allowedUsers) {
+    const allowed = allowedUsers.split(',').map(s => s.trim()).filter(Boolean);
+    if (allowed.length > 0) {
+      return allowed.includes(userId) || allowed.includes(chatId);
+    }
+  }
+  return false;
+}
+```
+
+来源：
+
+- `src/lib/bridge/channel-adapter.ts`
+- `src/lib/bridge/adapters/telegram-adapter.ts`

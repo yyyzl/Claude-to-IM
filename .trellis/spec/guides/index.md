@@ -23,6 +23,7 @@
 |------|------|----------|
 | [代码复用思考指南](./code-reuse-thinking-guide.md) | 识别已有模式，减少重复实现 | 准备新建 helper、命令、配置解析或类似逻辑时 |
 | [跨层思考指南](./cross-layer-thinking-guide.md) | 梳理数据和契约在多层之间的流动 | 改共享类型、宿主接口、平台链路或跨模块行为时 |
+| [设计模式指南](./design-patterns-guide.md) | 理解 bridge / workflow 的稳定架构骨架与扩展点 | 需要理解或扩展某个架构模式时 |
 
 ---
 
@@ -46,6 +47,15 @@
 
 → 读 [代码复用思考指南](./code-reuse-thinking-guide.md)
 
+### 何时优先读设计模式指南
+
+- [ ] 你要扩平台适配器、bridge manager 或 workflow engine
+- [ ] 你不确定新能力应该挂在 context、adapter、delivery 还是 workflow profile
+- [ ] 你看到 `globalThis`、注册表、profile、checkpoint 这类结构，但不确定它们是不是稳定约定
+- [ ] 你需要理解或扩展某个架构模式，而不是单点修复一段逻辑
+
+→ 读 [设计模式指南](./design-patterns-guide.md)
+
 ---
 
 ## 修改前铁律
@@ -63,7 +73,7 @@ rg "value_to_change" .
 ## 如何使用本目录
 
 1. 编码前先读与你任务最相关的一份指南
-2. 编码中如果发现跨层或复用问题，再回头补读另一份
+2. 编码中如果发现跨层、复用或架构骨架问题，再回头补读另一份
 3. 遇到新坑后，把结论补回对应指南，沉淀成以后能复用的约束
 
 ---

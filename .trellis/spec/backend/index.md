@@ -31,6 +31,7 @@
 
 按任务补充阅读：
 
+- 改 `src/lib/workflow/`：读 [工作流引擎规范](./workflow-engine.md)
 - 改脚本、配置或宿主接入：读 [集成规范](./integration-guidelines.md)
 - 改测试或补回归：读 [测试规范](./testing-guidelines.md)
 - 做收尾检查或补规范：读 [质量规范](./quality-guidelines.md)
@@ -74,5 +75,6 @@
 
 - [ ] 这次改动主要落在 `src/lib/bridge/` 还是 `scripts/`
 - [ ] 是否会影响 `host.ts`、`types.ts` 或配置 key
+- [ ] 是否已先确认影响范围、直接调用方和需要联动的执行流
 - [ ] 是否需要补单元测试或思考指南
 - [ ] 是否先复用了已有 helper、渲染器、验证器和命令解析逻辑

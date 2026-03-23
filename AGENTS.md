@@ -1,3 +1,11 @@
+## 核心规范
+
+- **先分析影响，再动手修改**
+  修改任何函数、类、方法或关键流程前，必须先确认影响范围、直接调用方、相关执行流和风险等级。若影响分析为 HIGH 或 CRITICAL，必须先告知用户，再继续修改。
+
+- **修改必须收敛，不留脏兼容，不扩散影响面**
+  变更必须围绕当前目标收敛，只修改必要范围。功能调整后应移除无用兼容代码、过时代码和临时兜底逻辑，避免顺手扩大改动面，防止系统复杂度持续累积。
+
 <!-- TRELLIS:START -->
 # Trellis Instructions
 
@@ -20,7 +28,7 @@ Keep this managed block so 'trellis update' can refresh the instructions.
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **Claude-to-IM** (1287 symbols, 3626 relationships, 109 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **Claude-to-IM** (1292 symbols, 3636 relationships, 109 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
