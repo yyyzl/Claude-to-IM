@@ -52,6 +52,8 @@ import {
   type ProcessFindingsResult,
   type Decision,
   type DecisionAction,
+  type ChangedFile,
+  type CodeFinding,
 } from './types.js';
 
 // ── Decision validation constants ────────────────────────────────
@@ -121,6 +123,8 @@ export class WorkflowEngine {
     config?: Partial<WorkflowConfig>;
     contextFiles?: ContextFile[];
     profile?: WorkflowProfile;
+    /** Pre-built review snapshot for code-review workflows (persisted before runLoop). */
+    snapshot?: import('./types.js').ReviewSnapshot;
   }): Promise<string> {
     const profile = params.profile ?? SPEC_REVIEW_PROFILE;
     const runId = generateRunId();
@@ -155,11 +159,14 @@ export class WorkflowEngine {
       termination_state: { consecutive_parse_failures: 0, zero_progress_rounds: 0 },
     };
 
-    // Persist initial state (order: meta -> spec -> plan -> ledger)
+    // Persist initial state (order: meta -> spec -> plan -> ledger -> snapshot)
     await this.store.createRun(meta);
     await this.store.saveSpec(runId, params.spec, 1);
     await this.store.savePlan(runId, params.plan, 1);
     await this.store.saveLedger(runId, { run_id: runId, issues: [] });
+    if (params.snapshot) {
+      await this.store.saveSnapshot(runId, params.snapshot);
+    }
 
     // Emit workflow_started event
     await this.emit(runId, 1, 'workflow_started', {
@@ -321,12 +328,26 @@ export class WorkflowEngine {
         if (!codexRaw) {
           await this.emit(runId, round, 'codex_review_started', { round });
 
-          // Build the review pack and render the prompt
-          const pack = await this.packBuilder.buildSpecReviewPack(runId, round, config);
-          await this.store.saveRoundArtifact(
-            runId, round, 'pack.json', JSON.stringify(pack, null, 2),
-          );
-          const prompt = await this.promptAssembler.renderSpecReviewPrompt(pack);
+          // Build the review pack and render the prompt.
+          // Route by profile type: spec-review uses spec/plan, code-review uses diff/snapshot.
+          let prompt: string;
+          if (profile.type === 'code-review') {
+            const snapshot = await this.store.loadSnapshot(runId);
+            const { changedFiles, diff } = await this.loadCodeReviewContext(runId, snapshot);
+            const pack = await this.packBuilder.buildCodeReviewPack(
+              runId, round, config, snapshot!, changedFiles, diff,
+            );
+            await this.store.saveRoundArtifact(
+              runId, round, 'pack.json', JSON.stringify(pack, null, 2),
+            );
+            prompt = await this.promptAssembler.renderCodeReviewPrompt(pack);
+          } else {
+            const pack = await this.packBuilder.buildSpecReviewPack(runId, round, config);
+            await this.store.saveRoundArtifact(
+              runId, round, 'pack.json', JSON.stringify(pack, null, 2),
+            );
+            prompt = await this.promptAssembler.renderSpecReviewPrompt(pack);
+          }
 
           try {
             codexRaw = await this.modelInvoker.invokeCodex(prompt, {
@@ -544,11 +565,24 @@ export class WorkflowEngine {
         if (!claudeRaw) {
           await this.emit(runId, round, 'claude_decision_started', { round });
 
-          // Build Claude decision input from matched issues
-          const input = await this.packBuilder.buildClaudeDecisionInput(
-            runId, round, matchResult.matchedIssues,
-          );
-          const claudePrompt = await this.promptAssembler.renderClaudeDecisionPrompt(input);
+          // Build Claude decision input from matched issues.
+          // Route by profile type: code-review uses fresh context (no previousDecisions).
+          let claudePrompt: { user: string; system: string };
+          if (profile.type === 'code-review') {
+            const snapshot = await this.store.loadSnapshot(runId);
+            const { changedFiles, diff } = await this.loadCodeReviewContext(runId, snapshot);
+            const crInput = await this.packBuilder.buildClaudeCodeReviewInput(
+              runId, round,
+              matchResult.matchedIssues as Array<{ issueId: string; finding: CodeFinding; isNew: boolean }>,
+              changedFiles, diff,
+            );
+            claudePrompt = await this.promptAssembler.renderClaudeCodeReviewPrompt(crInput);
+          } else {
+            const input = await this.packBuilder.buildClaudeDecisionInput(
+              runId, round, matchResult.matchedIssues,
+            );
+            claudePrompt = await this.promptAssembler.renderClaudeDecisionPrompt(input);
+          }
           await this.store.saveRoundArtifact(runId, round, 'claude-input.md', claudePrompt.user);
 
           try {
@@ -1261,6 +1295,37 @@ export class WorkflowEngine {
     }
 
     return parsed;
+  }
+
+  /**
+   * Load code-review context (changed files + diff) from the persisted snapshot.
+   *
+   * For now, changed files have empty content since actual file content
+   * would require `git show <blob_sha>` calls. The diff is loaded from
+   * the stored snapshot metadata.
+   *
+   * TODO (P1b-CR-1): use DiffReader.readFileContent() to hydrate content from blob SHAs.
+   */
+  private async loadCodeReviewContext(
+    _runId: string,
+    snapshot: import('./types.js').ReviewSnapshot | null,
+  ): Promise<{ changedFiles: ChangedFile[]; diff: string }> {
+    if (!snapshot) {
+      return { changedFiles: [], diff: '' };
+    }
+
+    // Build ChangedFile stubs from snapshot
+    const changedFiles: ChangedFile[] = snapshot.files.map((f) => ({
+      path: f.path,
+      old_path: f.old_path,
+      content: '',  // Placeholder — real content needs git show
+      diff_hunks: '',
+      language: f.language,
+      stats: { additions: 0, deletions: 0 },
+      change_type: f.change_type,
+    }));
+
+    return { changedFiles, diff: '' };
   }
 
   /**

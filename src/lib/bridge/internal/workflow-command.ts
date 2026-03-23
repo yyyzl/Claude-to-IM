@@ -18,10 +18,12 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { createSpecReviewEngine } from '../../workflow/index.js';
+import { createSpecReviewEngine, createCodeReviewEngine } from '../../workflow/index.js';
 import type { WorkflowEngine } from '../../workflow/workflow-engine.js';
 import { WorkflowStore } from '../../workflow/workflow-store.js';
-import type { WorkflowConfig, WorkflowEvent, WorkflowMeta } from '../../workflow/types.js';
+import { DiffReader } from '../../workflow/diff-reader.js';
+import { CODE_REVIEW_PROFILE } from '../../workflow/types.js';
+import type { WorkflowConfig, WorkflowEvent, WorkflowMeta, ReviewScope } from '../../workflow/types.js';
 import type { BaseChannelAdapter } from '../channel-adapter.js';
 import type { InboundMessage, ChannelBinding } from '../types.js';
 import { deliver } from '../delivery-layer.js';
@@ -33,7 +35,8 @@ import { buildWorkflowCardJson, formatElapsed } from '../markdown/feishu.js';
 /** Parsed `/workflow` subcommand. */
 export type WorkflowSubcommand =
   | { kind: 'help' }
-  | { kind: 'start'; specPath: string; planPath: string; contextPaths: string[]; claudeModel?: string; codexBackend?: string }
+  | { kind: 'start'; workflowType: 'spec-review'; specPath: string; planPath: string; contextPaths: string[]; claudeModel?: string; codexBackend?: string }
+  | { kind: 'start'; workflowType: 'code-review'; range?: string; branchDiff?: string; excludePatterns?: string[]; contextPaths: string[]; claudeModel?: string; codexBackend?: string }
   | { kind: 'status'; runId?: string }
   | { kind: 'resume'; runId: string }
   | { kind: 'stop'; runId?: string };
@@ -68,6 +71,7 @@ function chatKey(channelType: string, chatId: string): string {
  * Formats:
  *   /workflow help
  *   /workflow start <spec> <plan> [--context file1,file2]
+ *   /workflow start --type code-review [--range A..B] [--branch-diff base] [--exclude pat1,pat2]
  *   /workflow status [run-id]
  *   /workflow resume <run-id>
  *   /workflow stop [run-id]
@@ -81,13 +85,10 @@ export function parseWorkflowArgs(argsRaw: string): WorkflowSubcommand {
 
   switch (sub) {
     case 'start': {
-      // Expect: start <spec> <plan> [--context file1,file2] [--model <model>] [--codex-backend <backend>]
-      if (parts.length < 3) return { kind: 'help' };
-      const specPath = parts[1];
-      const planPath = parts[2];
-      let contextPaths: string[] = [];
+      // Extract common named options first
       let claudeModel: string | undefined;
       let codexBackend: string | undefined;
+      let contextPaths: string[] = [];
 
       const ctxIdx = parts.indexOf('--context');
       if (ctxIdx !== -1 && parts[ctxIdx + 1]) {
@@ -104,7 +105,44 @@ export function parseWorkflowArgs(argsRaw: string): WorkflowSubcommand {
         codexBackend = parts[backendIdx + 1];
       }
 
-      return { kind: 'start', specPath, planPath, contextPaths, claudeModel, codexBackend };
+      // ── Check for --type code-review ──
+      const typeIdx = parts.indexOf('--type');
+      if (typeIdx !== -1 && parts[typeIdx + 1]?.toLowerCase() === 'code-review') {
+        let range: string | undefined;
+        let branchDiff: string | undefined;
+        let excludePatterns: string[] | undefined;
+
+        const rangeIdx = parts.indexOf('--range');
+        if (rangeIdx !== -1 && parts[rangeIdx + 1]) {
+          range = parts[rangeIdx + 1];
+        }
+
+        const branchIdx = parts.indexOf('--branch-diff');
+        if (branchIdx !== -1 && parts[branchIdx + 1]) {
+          branchDiff = parts[branchIdx + 1];
+        }
+
+        const excludeIdx = parts.indexOf('--exclude');
+        if (excludeIdx !== -1 && parts[excludeIdx + 1]) {
+          excludePatterns = parts[excludeIdx + 1].split(',').filter(Boolean);
+        }
+
+        return {
+          kind: 'start', workflowType: 'code-review',
+          range, branchDiff, excludePatterns,
+          contextPaths, claudeModel, codexBackend,
+        };
+      }
+
+      // ── Default: spec-review (requires <spec> <plan>) ──
+      if (parts.length < 3 || parts[1].startsWith('--')) return { kind: 'help' };
+      const specPath = parts[1];
+      const planPath = parts[2];
+
+      return {
+        kind: 'start', workflowType: 'spec-review',
+        specPath, planPath, contextPaths, claudeModel, codexBackend,
+      };
     }
 
     case 'status':
@@ -159,7 +197,11 @@ export async function handleWorkflowCommand(
       return;
 
     case 'start':
-      await handleStart(adapter, msg, cmd, cwd, key);
+      if (cmd.workflowType === 'code-review') {
+        await handleStartCodeReview(adapter, msg, cmd, cwd, key);
+      } else {
+        await handleStartSpecReview(adapter, msg, cmd, cwd, key);
+      }
       return;
 
     case 'status':
@@ -178,10 +220,10 @@ export async function handleWorkflowCommand(
 
 // ── Subcommand Handlers ────────────────────────────────────────
 
-async function handleStart(
+async function handleStartSpecReview(
   adapter: BaseChannelAdapter,
   msg: InboundMessage,
-  cmd: Extract<WorkflowSubcommand, { kind: 'start' }>,
+  cmd: Extract<WorkflowSubcommand, { kind: 'start'; workflowType: 'spec-review' }>,
   cwd: string,
   key: string,
 ): Promise<void> {
@@ -318,6 +360,191 @@ async function handleStart(
   }
 }
 
+async function handleStartCodeReview(
+  adapter: BaseChannelAdapter,
+  msg: InboundMessage,
+  cmd: Extract<WorkflowSubcommand, { kind: 'start'; workflowType: 'code-review' }>,
+  cwd: string,
+  key: string,
+): Promise<void> {
+  // ── Guard: only one workflow per chat ──
+  if (activeWorkflows.has(key)) {
+    const running = activeWorkflows.get(key)!;
+    await deliverText(adapter, msg,
+      `已有工作流正在运行 (run: <code>${esc(running.runId)}</code>)\n` +
+      `使用 <code>/workflow stop</code> 停止后再启动新的。`,
+    );
+    return;
+  }
+
+  // Reserve the slot IMMEDIATELY
+  activeWorkflows.set(key, {
+    engine: null as unknown as WorkflowEngine,
+    runId: '(reserving)',
+    chatId: msg.address.chatId,
+    channelType: msg.address.channelType,
+    startedAt: Date.now(),
+  });
+
+  try {
+    // ── Build ReviewScope from CLI options ──
+    const scope: ReviewScope = buildReviewScope(cmd);
+
+    // ── Read context files ──
+    const contextFiles: Array<{ path: string; content: string }> = [];
+    for (const p of cmd.contextPaths) {
+      const fullPath = resolveSafePath(cwd, p);
+      if (!fullPath) {
+        await deliverText(adapter, msg, `Context 路径不在工作目录范围内: <code>${esc(p)}</code>，跳过。`);
+        continue;
+      }
+      try {
+        const content = await fs.readFile(fullPath, 'utf-8');
+        contextFiles.push({ path: p, content });
+      } catch {
+        await deliverText(adapter, msg, `Context 文件无法读取: <code>${esc(fullPath)}</code>，跳过。`);
+      }
+    }
+
+    // ── Create DiffReader and read snapshot ──
+    const diffReader = new DiffReader(cwd);
+    let snapshot;
+    try {
+      snapshot = await diffReader.createSnapshot(scope);
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      activeWorkflows.delete(key);
+      await deliverText(adapter, msg, `读取 git diff 失败: ${esc(errMsg)}`);
+      return;
+    }
+
+    if (snapshot.files.length === 0) {
+      activeWorkflows.delete(key);
+      await deliverText(adapter, msg, '没有发现代码变更，无需审查。');
+      return;
+    }
+
+    // ── Create engine and upgrade slot ──
+    const basePath = path.join(cwd, '.claude-workflows');
+    const engine = createCodeReviewEngine(basePath);
+
+    activeWorkflows.set(key, {
+      engine,
+      runId: '(pending)',
+      chatId: msg.address.chatId,
+      channelType: msg.address.channelType,
+      startedAt: Date.now(),
+    });
+
+    // Register run_id capture listener
+    engine.on('workflow_started', (e: WorkflowEvent) => {
+      const current = activeWorkflows.get(key);
+      if (current && current.engine === engine) {
+        activeWorkflows.set(key, { ...current, runId: e.run_id });
+      }
+    });
+
+    // Bind progress events
+    bindProgressEvents(engine, adapter, msg, key);
+
+    // Confirm start
+    const scopeDesc = formatScopeDescription(scope);
+    await deliverText(adapter, msg,
+      `正在启动 Code-Review 工作流...\n` +
+      `范围: <code>${esc(scopeDesc)}</code>\n` +
+      `文件: ${snapshot.files.length} 个` +
+      (snapshot.excluded_files.length > 0 ? `（已排除 ${snapshot.excluded_files.length} 个）` : '') +
+      (contextFiles.length > 0 ? `\nContext: ${contextFiles.length} 个文件` : ''),
+    );
+
+    // ── Build config overrides ──
+    const configOverrides: Partial<WorkflowConfig> = {};
+    if (cmd.claudeModel) configOverrides.claude_model = cmd.claudeModel;
+    if (cmd.codexBackend) configOverrides.codex_backend = cmd.codexBackend;
+
+    // ── Launch workflow with snapshot ──
+    // Pass spec/plan as empty strings (code-review doesn't use them;
+    // profile.behavior.applyPatches=false ensures they're not read).
+    // snapshot is persisted by engine.start() before runLoop begins.
+    void (async () => {
+      try {
+        await engine.start({
+          spec: '',
+          plan: '',
+          contextFiles,
+          config: configOverrides,
+          profile: CODE_REVIEW_PROFILE,
+          snapshot,
+        });
+
+        // Cleanup on completion
+        const current = activeWorkflows.get(key);
+        if (current && current.engine === engine) activeWorkflows.delete(key);
+      } catch (err: unknown) {
+        const current = activeWorkflows.get(key);
+        if (current && current.engine === engine) activeWorkflows.delete(key);
+        const errMsg = err instanceof Error ? err.message : String(err);
+        deliverText(adapter, msg, `工作流异常退出: ${esc(errMsg)}`).catch(() => {});
+      }
+    })();
+
+  } catch (err: unknown) {
+    activeWorkflows.delete(key);
+    throw err;
+  } finally {
+    const current = activeWorkflows.get(key);
+    if (current && current.engine === (null as unknown as WorkflowEngine)) {
+      activeWorkflows.delete(key);
+    }
+  }
+}
+
+/**
+ * Build a {@link ReviewScope} from parsed code-review CLI options.
+ */
+function buildReviewScope(
+  cmd: { range?: string; branchDiff?: string; excludePatterns?: string[] },
+): ReviewScope {
+  if (cmd.range) {
+    // --range A..B → commit_range scope
+    const parts = cmd.range.split('..');
+    return {
+      type: 'commit_range',
+      base_ref: parts[0],
+      head_ref: parts[1] || 'HEAD',
+      exclude_patterns: cmd.excludePatterns,
+    };
+  }
+  if (cmd.branchDiff) {
+    // --branch-diff base → branch scope (three-dot diff)
+    return {
+      type: 'branch',
+      base_ref: cmd.branchDiff,
+      head_ref: 'HEAD',
+      exclude_patterns: cmd.excludePatterns,
+    };
+  }
+  // Default: staged changes
+  return {
+    type: 'staged',
+    exclude_patterns: cmd.excludePatterns,
+  };
+}
+
+/**
+ * Format a human-readable scope description for the start message.
+ */
+function formatScopeDescription(scope: ReviewScope): string {
+  switch (scope.type) {
+    case 'staged': return 'staged changes';
+    case 'unstaged': return 'unstaged changes';
+    case 'commit': return `commit (${scope.head_ref ?? 'HEAD'})`;
+    case 'commit_range': return `range (${scope.base_ref}..${scope.head_ref})`;
+    case 'branch': return `branch diff (${scope.base_ref}...${scope.head_ref ?? 'HEAD'})`;
+    default: return scope.type;
+  }
+}
+
 async function handleStatus(
   adapter: BaseChannelAdapter,
   msg: InboundMessage,
@@ -357,7 +584,13 @@ async function handleResume(
   }
 
   // Use cwd-based basePath to match start's storage location.
-  const engine = createSpecReviewEngine(path.join(cwd, '.claude-workflows'));
+  // Determine engine type from persisted meta.
+  const basePath = path.join(cwd, '.claude-workflows');
+  const resumeStore = new WorkflowStore(basePath);
+  const resumeMeta = await resumeStore.getMeta(cmd.runId);
+  const engine = resumeMeta?.workflow_type === 'code-review'
+    ? createCodeReviewEngine(basePath)
+    : createSpecReviewEngine(basePath);
   bindProgressEvents(engine, adapter, msg, key);
 
   activeWorkflows.set(key, {
@@ -1027,29 +1260,36 @@ function buildHelpText(): string {
   return [
     '<b>/workflow 命令</b>',
     '',
+    '<b>Spec-Review</b>',
     '<code>/workflow start &lt;spec&gt; &lt;plan&gt;</code>',
     '  启动 Spec-Review 工作流',
     '',
     '<code>/workflow start &lt;spec&gt; &lt;plan&gt; --context f1,f2</code>',
     '  启动并附加上下文文件',
     '',
-    '<code>/workflow start &lt;spec&gt; &lt;plan&gt; --model &lt;model-id&gt;</code>',
-    '  指定 Claude 模型（默认: claude-sonnet-4-20250514）',
+    '<b>Code-Review</b>',
+    '<code>/workflow start --type code-review</code>',
+    '  审查 staged changes（默认）',
     '',
-    '<code>/workflow start &lt;spec&gt; &lt;plan&gt; --codex-backend &lt;backend&gt;</code>',
-    '  指定 Codex CLI 后端（默认: codex）',
+    '<code>/workflow start --type code-review --range A..B</code>',
+    '  审查两个 commit 之间的变更',
     '',
-    '<code>/workflow status [run-id]</code>',
-    '  查看当前/指定工作流状态',
+    '<code>/workflow start --type code-review --branch-diff main</code>',
+    '  审查相对于 base 分支的所有变更',
     '',
-    '<code>/workflow resume &lt;run-id&gt;</code>',
-    '  恢复暂停或失败的工作流',
+    '<code>/workflow start --type code-review --exclude "*.test.ts,*.md"</code>',
+    '  排除指定文件模式',
     '',
-    '<code>/workflow stop [run-id]</code>',
-    '  停止当前/指定运行中的工作流（可恢复）',
+    '<b>通用选项</b>',
+    '<code>--model &lt;model-id&gt;</code>  指定 Claude 模型',
+    '<code>--codex-backend &lt;backend&gt;</code>  指定 Codex 后端',
+    '<code>--context f1,f2</code>  附加上下文文件',
     '',
-    '<code>/workflow help</code>',
-    '  显示此帮助',
+    '<b>控制命令</b>',
+    '<code>/workflow status [run-id]</code>  查看状态',
+    '<code>/workflow resume &lt;run-id&gt;</code>  恢复工作流',
+    '<code>/workflow stop [run-id]</code>  停止工作流（可恢复）',
+    '<code>/workflow help</code>  显示此帮助',
   ].join('\n');
 }
 

@@ -48,6 +48,7 @@ describe('parseWorkflowArgs', () => {
       const result = parseWorkflowArgs('start spec.md plan.md');
       assert.deepStrictEqual(result, {
         kind: 'start',
+        workflowType: 'spec-review',
         specPath: 'spec.md',
         planPath: 'plan.md',
         contextPaths: [],
@@ -60,6 +61,7 @@ describe('parseWorkflowArgs', () => {
       const result = parseWorkflowArgs('start spec.md plan.md --context a.md,b.md');
       assert.deepStrictEqual(result, {
         kind: 'start',
+        workflowType: 'spec-review',
         specPath: 'spec.md',
         planPath: 'plan.md',
         contextPaths: ['a.md', 'b.md'],
@@ -72,6 +74,7 @@ describe('parseWorkflowArgs', () => {
       const result = parseWorkflowArgs('start spec.md plan.md --context readme.md');
       assert.deepStrictEqual(result, {
         kind: 'start',
+        workflowType: 'spec-review',
         specPath: 'spec.md',
         planPath: 'plan.md',
         contextPaths: ['readme.md'],
@@ -94,6 +97,7 @@ describe('parseWorkflowArgs', () => {
       const result = parseWorkflowArgs('start .claude/plan/spec.md .claude/plan/plan.md');
       assert.deepStrictEqual(result, {
         kind: 'start',
+        workflowType: 'spec-review',
         specPath: '.claude/plan/spec.md',
         planPath: '.claude/plan/plan.md',
         contextPaths: [],
@@ -107,6 +111,7 @@ describe('parseWorkflowArgs', () => {
       const result = parseWorkflowArgs('start docs/spec.md plans/plan.md');
       assert.deepStrictEqual(result, {
         kind: 'start',
+        workflowType: 'spec-review',
         specPath: 'docs/spec.md',
         planPath: 'plans/plan.md',
         contextPaths: [],
@@ -119,6 +124,7 @@ describe('parseWorkflowArgs', () => {
       const result = parseWorkflowArgs('start spec.md plan.md --context');
       assert.deepStrictEqual(result, {
         kind: 'start',
+        workflowType: 'spec-review',
         specPath: 'spec.md',
         planPath: 'plan.md',
         contextPaths: [],
@@ -131,6 +137,7 @@ describe('parseWorkflowArgs', () => {
       const result = parseWorkflowArgs('start spec.md plan.md --model claude-opus-4-20250514');
       assert.deepStrictEqual(result, {
         kind: 'start',
+        workflowType: 'spec-review',
         specPath: 'spec.md',
         planPath: 'plan.md',
         contextPaths: [],
@@ -143,6 +150,7 @@ describe('parseWorkflowArgs', () => {
       const result = parseWorkflowArgs('start spec.md plan.md --codex-backend gemini');
       assert.deepStrictEqual(result, {
         kind: 'start',
+        workflowType: 'spec-review',
         specPath: 'spec.md',
         planPath: 'plan.md',
         contextPaths: [],
@@ -155,6 +163,7 @@ describe('parseWorkflowArgs', () => {
       const result = parseWorkflowArgs('start spec.md plan.md --context a.md --model claude-opus-4-20250514 --codex-backend gemini');
       assert.deepStrictEqual(result, {
         kind: 'start',
+        workflowType: 'spec-review',
         specPath: 'spec.md',
         planPath: 'plan.md',
         contextPaths: ['a.md'],
@@ -221,6 +230,7 @@ describe('parseWorkflowArgs', () => {
       const result = parseWorkflowArgs('START spec.md plan.md');
       assert.deepStrictEqual(result, {
         kind: 'start',
+        workflowType: 'spec-review',
         specPath: 'spec.md',
         planPath: 'plan.md',
         contextPaths: [],

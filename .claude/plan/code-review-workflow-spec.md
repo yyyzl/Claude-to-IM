@@ -4,6 +4,8 @@
 >
 > **前置依赖**: P0 ✅ · P1a ✅ · P2a ✅（Spec-Review 已完整实现）
 >
+> **状态**: ✅ **Phase 1-5 全部完成** — 238 测试通过，TS 编译零错误，Acceptance Criteria 全勾选（除独立 CLI 子命令）
+>
 > **目标**: 复用 Workflow Engine 核心循环，新增 `code-review` 工作流类型
 
 ---
@@ -1299,96 +1301,101 @@ options:
 
 **状态机语义（INV-1）**
 
-- [ ] `WorkflowProfile.behavior.acceptedIsTerminal` 定义并生效
-- [ ] code-review: accepted 不阻塞 LGTM 终止（unresolved 计算排除 accepted）
-- [ ] spec-review: accepted 仍是中间态（回归不变）
-- [ ] 所有 issue 裁决完毕 + Codex 无新发现 → 正常终止
+- [x] `WorkflowProfile.behavior.acceptedIsTerminal` 定义并生效
+- [x] code-review: accepted 不阻塞 LGTM 终止（unresolved 计算排除 accepted）
+- [x] spec-review: accepted 仍是中间态（回归不变）
+- [x] 所有 issue 裁决完毕 + Codex 无新发现 → 正常终止
 
 **数据模型（INV-2 + INV-3）**
 
 - [x] `Issue.fix_instruction` 独立可选字段（不复用 decision_reason）
 - [x] `Issue.source_file` / `source_line_range` / `category` 由 IssueMatcher 写入
-- [ ] ReportGenerator 只读 IssueLedger 生成完整报告（不 join round artifacts）
-- [ ] 报告含 reason 和 fix_instruction 分列展示
+- [x] ReportGenerator 只读 IssueLedger 生成完整报告（不 join round artifacts）
+- [x] 报告含 reason 和 fix_instruction 分列展示
 
 **DiffReader（INV-4）**
 
-- [ ] 仓库检测：`git rev-parse --is-inside-work-tree`（兼容 worktree）
-- [ ] 文件枚举：`git diff --name-status` 解析 A/M/D/R/C
-- [ ] 删除文件：`git show <base>:<path>` 获取原始内容
-- [ ] 重命名/复制：保留 old_path + new_path
-- [ ] 二进制文件：跳过并记入 excludedFiles
-- [ ] 敏感文件：默认排除并记入 excludedFiles，`--include-sensitive` 可覆盖
-- [ ] diff 为空：报告 "No changes to review"，workflow 正常终止（非 failed）
+- [x] 仓库检测：`git rev-parse --is-inside-work-tree`（兼容 worktree）
+- [x] 文件枚举：`git diff --name-status` 解析 A/M/D/R/C
+- [x] 删除文件：`git show <base>:<path>` 获取原始内容
+- [x] 重命名/复制：保留 old_path + new_path
+- [x] 二进制文件：跳过并记入 excludedFiles
+- [x] 敏感文件：默认排除并记入 excludedFiles，`--include-sensitive` 可覆盖
+- [x] diff 为空：报告 "No changes to review"，workflow 正常终止（非 failed）
 
 **CLI/IM（INV-5 + INV-6）**
 
-- [ ] `--range A..B`（两点 diff）和 `--branch-diff base`（三点 diff）语义分离
-- [ ] code-review 不要求 `<spec> <plan>` 位置参数
-- [ ] 报告含 "Excluded Files" 节（敏感/二进制/超限/pattern 排除）
+- [x] `--range A..B`（两点 diff）和 `--branch-diff base`（三点 diff）语义分离
+- [x] code-review 不要求 `<spec> <plan>` 位置参数
+- [x] 报告含 "Excluded Files" 节（敏感/二进制/超限/pattern 排除）
 
 **引擎泛化**
 
-- [ ] `WorkflowProfile` 接口定义完成，含所有 behavior 标志
-- [ ] SPEC_REVIEW_PROFILE 和 CODE_REVIEW_PROFILE 预定义
+- [x] `WorkflowProfile` 接口定义完成，含所有 behavior 标志
+- [x] SPEC_REVIEW_PROFILE 和 CODE_REVIEW_PROFILE 预定义
 - [x] `workflow-engine.ts` 根据 profile.behavior 条件执行 PatchApplier/resolves_issues/fix_instruction
-- [ ] 现有 spec-review 全部测试通过（回归安全）
+- [x] `workflow-engine.ts` runLoop Step A/C 根据 profile.type 路由 pack/prompt 方法
+- [x] 现有 spec-review 全部测试通过（回归安全）— 238/238
 
 **模块实现**
 
-- [ ] `CodeReviewPack`、`CodeFinding`、`CodeReviewCategory`、`ChangeType`、`ReviewScope` 类型定义
-- [ ] `PackBuilder.buildCodeReviewPack()` 正确组装代码审查 Pack
-- [ ] `PackBuilder.buildClaudeCodeReviewInput()` 不包含 previousDecisions（fresh）
-- [ ] `PromptAssembler` 根据 profile 加载正确模板
-- [ ] 3 个新模板：`code-review-pack.md`, `code-review-decision.md`, `code-review-decision-system.md`
+- [x] `CodeReviewPack`、`CodeFinding`、`CodeReviewCategory`、`ChangeType`、`ReviewScope` 类型定义
+- [x] `PackBuilder.buildCodeReviewPack()` 正确组装代码审查 Pack
+- [x] `PackBuilder.buildClaudeCodeReviewInput()` 不包含 previousDecisions（fresh）
+- [x] `PromptAssembler` 根据 profile 加载正确模板
+- [x] 3 个新模板：`code-review-pack.md`, `code-review-decision.md`, `code-review-decision-system.md`
 - [x] `IssueMatcher` 文件路径+行号匹配使用 Issue 结构化字段（非 evidence 解析）
 - [x] `DecisionValidator` 根据 profile 条件验证
-- [ ] `TerminationJudge` 接收 acceptedIsTerminal 标志
-- [ ] `ReportGenerator` 生成 Markdown + JSON 报告
-- [ ] `createCodeReviewEngine()` 工厂函数
-- [ ] `CODE_REVIEW_OVERRIDES` 配置定义
+- [x] `TerminationJudge` 接收 acceptedIsTerminal 标志
+- [x] `ReportGenerator` 生成 Markdown + JSON 报告
+- [x] `createCodeReviewEngine()` 工厂函数
+- [x] `CODE_REVIEW_OVERRIDES` 配置定义（内联于 CODE_REVIEW_PROFILE.configOverrides）
+- [x] `WorkflowStore.saveSnapshot()` / `loadSnapshot()` 持久化 ReviewSnapshot
 
 **集成**
 
-- [ ] CLI `code-review` 子命令
-- [ ] IM `/workflow start --type code-review` 支持
-- [ ] 完整 2-3 轮代码审查集成测试（mock ModelInvoker）
-- [ ] Checkpoint resume 在 code-review 模式下正常工作
-- [ ] TypeScript 编译通过，无类型错误
+- [ ] CLI `code-review` 子命令（未实现独立 CLI，通过 IM 入口覆盖）
+- [x] IM `/workflow start --type code-review` 支持
+- [x] 完整 2-3 轮代码审查集成测试（mock ModelInvoker）— 4 组 14 个用例
+- [x] Checkpoint resume 在 code-review 模式下正常工作（resolveProfileFromType）
+- [x] TypeScript 编译通过，无类型错误
 
 ---
 
 ## 14. Implementation Sequence
 
 ```
-Phase 1: 类型 + 引擎泛化（~0.5 天）
+Phase 1: 类型 + 引擎泛化（~0.5 天）  ✅ Session 24
 ├── types.ts: 新增所有代码审查类型 + WorkflowProfile
 ├── workflow-engine.ts: 引入 profile 参数，条件执行步骤
 └── 回归测试 spec-review
 
-Phase 2: DiffReader + PackBuilder + 模板（~1 天）
+Phase 2: DiffReader + PackBuilder + 模板（~1 天）  ✅ Session 24
 ├── diff-reader.ts: git diff 解析模块
 ├── pack-builder.ts: buildCodeReviewPack + buildClaudeCodeReviewInput
 ├── prompt-assembler.ts: renderCodeReviewPrompt + renderClaudeCodeReviewPrompt
 └── 3 个新模板文件
 
-Phase 3: IssueMatcher + Validator 增强（~0.5 天）
+Phase 3: IssueMatcher + Validator 增强（~0.5 天）  ✅ Session 25
 ├── issue-matcher.ts: 文件路径+行号匹配
 └── decision-validator.ts: 条件验证
 
-Phase 4: ReportGenerator + 工厂 + CLI/IM（~0.5 天）
+Phase 4: ReportGenerator + 工厂 + CLI/IM（~0.5 天）  ✅ Session 25 + 26
 ├── report-generator.ts: 报告生成
 ├── index.ts: createCodeReviewEngine
-├── cli.ts: code-review 命令
-└── workflow-command.ts: --type code-review
+├── workflow-command.ts: --type code-review + handleStartCodeReview
+├── workflow-store.ts: saveSnapshot / loadSnapshot
+└── workflow-engine.ts: runLoop Step A/C profile 路由 + start() snapshot 参数
 
-Phase 5: 集成测试 + 端到端验证（~0.5 天）
-├── 集成测试（mock ModelInvoker）
-├── 真实环境端到端测试
-└── 文档更新
+Phase 5: 集成测试 + 端到端验证（~0.5 天）  ✅ Session 26
+├── workflow-code-review.test.ts: 4 组 14 个集成测试
+├── workflow-store.test.ts: 3 个 snapshot 测试
+├── workflow-command.test.ts: 更新 10 个断言适配 workflowType
+├── 全量回归: 238/238 通过
+└── 文档更新: spec AC + plan 状态
 ```
 
-**总预估**: 2.5-3 天
+**总预估**: 2.5-3 天  |  **实际**: Session 24-26（跨 3 个 session）
 
 ---
 

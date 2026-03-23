@@ -23,6 +23,7 @@ import type {
   WorkflowMeta,
   WorkflowEvent,
   IssueLedger,
+  ReviewSnapshot,
 } from './types.js';
 
 export class WorkflowStore {
@@ -169,6 +170,34 @@ export class WorkflowStore {
     try {
       const raw = await fs.readFile(filePath, 'utf-8');
       return JSON.parse(raw) as IssueLedger;
+    } catch (err: unknown) {
+      if (isNotFoundError(err)) return null;
+      throw err;
+    }
+  }
+
+  // ── Review Snapshot ─────────────────────────────────────────
+
+  /**
+   * Save a {@link ReviewSnapshot} for the given run.
+   *
+   * The snapshot is frozen at workflow start (by DiffReader) and read
+   * by all subsequent rounds to guarantee consistent file contents.
+   */
+  async saveSnapshot(runId: string, snapshot: ReviewSnapshot): Promise<void> {
+    const filePath = path.join(this.runDir(runId), 'snapshot.json');
+    await fs.writeFile(filePath, JSON.stringify(snapshot, null, 2), 'utf-8');
+  }
+
+  /**
+   * Load the {@link ReviewSnapshot} for the given run.
+   * Returns null if no snapshot exists (e.g. spec-review workflows).
+   */
+  async loadSnapshot(runId: string): Promise<ReviewSnapshot | null> {
+    const filePath = path.join(this.runDir(runId), 'snapshot.json');
+    try {
+      const raw = await fs.readFile(filePath, 'utf-8');
+      return JSON.parse(raw) as ReviewSnapshot;
     } catch (err: unknown) {
       if (isNotFoundError(err)) return null;
       throw err;

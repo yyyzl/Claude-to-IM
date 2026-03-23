@@ -23,6 +23,7 @@ import type {
   WorkflowEvent,
   IssueLedger,
   WorkflowConfig,
+  ReviewSnapshot,
 } from '../../lib/workflow/types.js';
 import { DEFAULT_CONFIG } from '../../lib/workflow/types.js';
 
@@ -386,6 +387,58 @@ describe('WorkflowStore', () => {
           return true;
         },
       );
+    });
+  });
+
+  // ── 19 & 20. saveSnapshot / loadSnapshot ────────────────────
+
+  describe('saveSnapshot / loadSnapshot', () => {
+    it('saves and loads a review snapshot', async () => {
+      const meta = createDefaultMeta({ workflow_type: 'code-review' });
+      await store.createRun(meta);
+
+      const snapshot: ReviewSnapshot = {
+        created_at: new Date().toISOString(),
+        head_commit: 'abc1234567890',
+        base_ref: 'HEAD',
+        scope: { type: 'staged' },
+        files: [
+          {
+            path: 'src/index.ts',
+            blob_sha: 'deadbeef1234',
+            change_type: 'modified',
+            language: 'typescript',
+          },
+          {
+            path: 'src/utils.ts',
+            old_path: 'src/helpers.ts',
+            blob_sha: 'cafebabe5678',
+            base_blob_sha: 'oldcafe0000',
+            change_type: 'renamed',
+            language: 'typescript',
+          },
+        ],
+        excluded_files: [
+          { path: '.env', reason: 'sensitive' },
+          { path: 'dist/bundle.js', reason: 'binary' },
+        ],
+      };
+
+      await store.saveSnapshot(meta.run_id, snapshot);
+      const loaded = await store.loadSnapshot(meta.run_id);
+      assert.deepStrictEqual(loaded, snapshot);
+    });
+
+    it('returns null when snapshot does not exist', async () => {
+      const meta = createDefaultMeta();
+      await store.createRun(meta);
+      const result = await store.loadSnapshot(meta.run_id);
+      assert.equal(result, null);
+    });
+
+    it('returns null for non-existent run', async () => {
+      const result = await store.loadSnapshot('non-existent-run-id');
+      assert.equal(result, null);
     });
   });
 });

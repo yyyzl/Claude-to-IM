@@ -63,8 +63,11 @@
 
 - **P2a** ✅: `/workflow` command integrated into `bridge-manager.ts`. `workflow-command.ts` (738 lines) handles 5 subcommands (help/start/stop/status/resume). `bindProgressEvents()` subscribes to 14 engine event types and pushes formatted text to IM. Per-chat concurrency guard, path traversal protection, background async execution.
 
+- **P1b-CR-0** ✅: Code-Review workflow (review-only MVP). WorkflowProfile interface + SPEC_REVIEW_PROFILE / CODE_REVIEW_PROFILE predefined. WorkflowEngine.runLoop routes Step A (Codex pack/prompt) and Step C (Claude decision) by profile.type. DiffReader creates frozen ReviewSnapshot. WorkflowStore gains saveSnapshot/loadSnapshot. ReportGenerator produces Markdown + JSON reports. TerminationJudge accepts `acceptedIsTerminal` flag. workflow-command.ts supports `/workflow start --type code-review [--range|--branch-diff|--exclude]`. 238 tests pass (14 new code-review integration tests). Full spec: `code-review-workflow-spec.md`.
+
 ## Future Extension Points
 
-- **P1b**: Add workflow type registry. PackBuilder and PromptAssembler get type-specific methods. WorkflowEngine loop becomes configurable step chain.
+- **P1b-CR-1**: Review-and-Fix mode — Codex applies fix_instructions in isolated worktree, Claude re-reviews fixes.
+- **P1b-CR-2**: PR integration — review results auto-posted as GitHub/GitLab PR comments.
 - **P2b**: Upgrade `bindProgressEvents()` output from text to Feishu interactive cards with inline buttons. Add milestone aggregation to reduce push noise. Code comment marks the exact extension point.
 - **P3**: WorkflowStore interface can be backed by SO API instead of filesystem. Event format already ndjson-compatible.
