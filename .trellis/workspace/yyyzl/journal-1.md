@@ -1273,3 +1273,67 @@ Phase 1: WorkflowProfile 接口 + 15 个 Code Review 类型 + Issue 扩展 + eng
 ### Next Steps
 
 - None - task complete
+
+
+## Session 26: P1b-CR-0 Phase 4 fix + Phase 5: complete code-review MVP
+
+**Date**: 2026-03-24
+**Task**: P1b-CR-0 Phase 4 fix + Phase 5: complete code-review MVP
+
+### Summary
+
+Fix Phase 4 gaps (WorkflowStore snapshot, engine profile routing, IM code-review entry) + Phase 5 integration tests (14 new) + docs sync. 238/238 tests pass.
+
+### Main Changes
+
+### Phase 4 修复（遗漏问题）
+
+| 文件 | 修复内容 |
+|------|----------|
+| `workflow-store.ts` | 新增 `saveSnapshot()` / `loadSnapshot()` 方法，持久化 ReviewSnapshot 为 `snapshot.json` |
+| `workflow-engine.ts` | runLoop Step A/C 按 `profile.type` 路由 pack/prompt 方法（之前硬编码 spec-review） |
+| `workflow-engine.ts` | `start()` 新增可选 `snapshot` 参数，在 runLoop 前持久化 |
+| `workflow-engine.ts` | 新增 `loadCodeReviewContext()` 从 snapshot 构建 ChangedFile[] |
+| `workflow-command.ts` | 新增 `handleStartCodeReview()` 支持 `--type code-review`、`--range`、`--branch-diff`、`--exclude` |
+| `workflow-command.ts` | `resume` 根据 `meta.workflow_type` 动态选择引擎类型 |
+| `workflow-command.ts` | 更新帮助文本，新增 code-review 用法说明 |
+
+### Phase 5 集成测试
+
+| 测试文件 | 内容 |
+|----------|------|
+| `workflow-code-review.test.ts`（新建） | 4 组 14 个集成测试：正常 2 轮流程、acceptedIsTerminal 语义、ReportGenerator 输出、Profile 行为标志 |
+| `workflow-store.test.ts` | 新增 3 个 snapshot 方法测试 |
+| `workflow-command.test.ts` | 更新 10 个断言适配新 `workflowType` 字段 |
+
+### 文档同步
+
+| 文档 | 更新 |
+|------|------|
+| `code-review-workflow-spec.md` | 顶部标记完成；Acceptance Criteria 36 项勾选；Implementation Sequence 标注各 Phase session |
+| `workflow-engine-plan.md` | P1b-CR-0 标记完成；Future Points 更新为 P1b-CR-1/CR-2/P2b/P3 |
+
+### 最终验证
+
+- TypeScript 编译：零错误
+- 全量测试：**238/238 通过**（含 17 个新增测试）
+- 回归安全：spec-review 所有原有测试不受影响
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `948603e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
