@@ -386,6 +386,7 @@ type WorkflowEventType =
   | 'issue_created'       | 'issue_status_changed'
   | 'issue_matching_completed'                             // Step B1 finished (checkpoint marker)
   | 'claude_decisions_validated'                           // Step C2 finished (sub-checkpoint marker)
+  | 'claude_side_effects_applied'                          // Step C3 finished (ledger + patches applied; sub-checkpoint marker)
   | 'decision_validation_failed'                           // DecisionValidator found errors
   | 'spec_updated'        | 'plan_updated'
   | 'patch_apply_failed'                                   // PatchApplier heading match failed
@@ -703,20 +704,33 @@ class WorkflowStore {
 }
 
 /**
- * Atomic Write Protocol (for crash-safe persistence):
+ * Cross-Platform Atomic Write Protocol (for crash-safe persistence):
  *
  * All critical file writes (meta.json, issue-ledger.json, spec-v{N}.md, plan-v{N}.md)
- * MUST use the following atomic write sequence:
+ * MUST use the following cross-platform atomic write sequence:
  *   1. Write to a temporary file (e.g., `meta.json.tmp`) in the same directory
- *   2. Call fsync on the file descriptor to ensure data is flushed to disk
- *   3. Rename (atomic on POSIX) the temporary file to the target path
+ *   2. Call fsync/FlushFileBuffers on the file descriptor to ensure data is flushed to disk
+ *   3. Close the file handle
+ *   4. Perform atomic replacement:
+ *      - POSIX: rename() (atomic operation)
+ *      - Windows: Use MoveFileEx with MOVEFILE_REPLACE_EXISTING flag, or
+ *                 fs.renameSync() which handles Windows replacement internally in Node.js
+ *   5. If Windows replacement fails due to file locks/permissions:
+ *      - Retry up to 3 times with 100ms delays (handles transient locks)
+ *      - On persistent failure: save to versioned backup file + emit write_failure_windows event
+ *      - Do NOT delete existing file (preserve crash recovery capability)
  *
- * This prevents truncated/corrupt files from partial writes on crash.
- * Events (ndjson append) are append-only and tolerate partial last lines —
- * on load, the reader MUST skip malformed trailing lines gracefully.
+ * Directory flush (recommended but optional):
+ *   - After successful replacement, flush parent directory to ensure directory entry is durable
+ *   - POSIX: fsync on directory file descriptor
+ *   - Windows: not required (NTFS automatically flushes directory metadata)
  *
  * Implementation: use a shared `atomicWriteFile(path, content)` helper
- * that encapsulates steps 1-3. WorkflowStore uses this for all critical writes.
+ * that encapsulates platform detection and the 5-step sequence above.
+ * WorkflowStore uses this for all critical writes.
+ *
+ * Events (ndjson append) are append-only and tolerate partial last lines —
+ * on load, the reader MUST skip malformed trailing lines gracefully.
  */
 ```
 
@@ -780,7 +794,12 @@ class IssueMatcher {
    * Strategy (in order):
    * 1. Exact match: normalized description equality (lowercase, trim, collapse whitespace)
    * 2. Evidence match: same evidence reference + similar severity (within 1 level)
-   * 3. No match: return null (caller creates new Issue)
+   * 3. Identifier overlap: extract identifiers (backtick-quoted, bare PascalCase/snake_case,
+   *    section refs §X.Y, issue IDs) from description+evidence. Match requires:
+   *    Jaccard >= 0.4, similar severity, ≥2 total identifiers on both sides,
+   *    AND ≥2 code identifiers (non-§, non-ISS-) in intersection.
+   *    Pure section-ref overlap is NOT sufficient (different problems can cite same sections).
+   * 4. No match: return null (caller creates new Issue)
    *
    * Returns matched Issue or null (new issue).
    */
@@ -826,7 +845,7 @@ class PatchApplier {
    * 1. Parse both current document and patch into sections by ANY heading level (# through ####)
    * 2. For each section in patch, find matching heading in current document
    * 3. Replace the matched section's content (up to the NEXT heading of same or higher level)
-   * 4. If no heading match found, append patch section at end + emit 'patch_apply_failed' event
+   * 4. If no heading match found, do NOT modify document; emit 'patch_apply_failed' event for failed section
    *
    * Multi-level heading support:
    * - Headings are matched at their exact level: `### Foo` only matches `### Foo`, not `## Foo`
@@ -838,24 +857,20 @@ class PatchApplier {
    * - Exact heading match: same level + same text (case-sensitive, trimmed)
    * - Heading rename is NOT supported in P1a (YAGNI — Claude should use the existing heading text)
    *
+   * Safe failure handling:
+   * - Unmatched sections are NOT appended to the document (prevents state pollution)
+   * - Failed sections trigger patch_apply_failed events
+   * - If ALL sections fail, the workflow should transition to human_review
+   *
    * Returns the merged document and a list of applied/failed sections.
    */
   apply(currentDoc: string, patch: string): {
     merged: string;
     appliedSections: string[];     // Headings successfully replaced
-    failedSections: string[];      // Headings not found in current doc
+    failedSections: string[];      // Headings not found in current doc (NOT appended)
   };
 }
 ```
-
-> **Patch-Resolve Consistency Rule**:
->
-> When `PatchApplier.apply()` returns `failedSections.length > 0`:
-> - Issues listed in `resolves_issues` that correspond to the failed patch sections
->   MUST NOT be transitioned to `resolved`. They remain `accepted`.
-> - The engine emits a `patch_apply_failed` event for each failed section.
-> - Only issues whose patches were **fully and successfully applied** may be resolved.
-> - If ALL patch sections failed, the workflow transitions to `human_review`.
 
 ### 6.11 DecisionValidator
 
@@ -937,9 +952,9 @@ start(spec, plan, config)
 |  |-- meta.current_step = 'pre_termination'               |
 |  |-- terminationJudge.judge({...})                       |
 |  |-- if LGTM AND ledger has no open/accepted -> terminate|
-|  |-- if LGTM BUT open/accepted exist -> proceed to C    |
+|  |-- if LGTM BUT open/accepted exist -> proceed to C     |
 |  |-- if action='pause_for_human' -> pause, break         |
-|  |-- if no_new_high for 2 consecutive -> terminate       |
+|  |-- if deadlock detected -> pause, break                |
 |                                                          |
 |  Step C: Claude decision (with sub-checkpoints for idempotent resume) |
 |  |-- meta.current_step = 'claude_decision'               |
@@ -962,7 +977,7 @@ start(spec, plan, config)
 |  |     |     → prohibit all side effects                 |
 |  |     |     → transition to human_review                |
 |  |     |     → break (do NOT proceed to C3/C4)           |
-|  |-- decisionValidator.validate(decisions, resolves_issues, ledger, findings) |
+|  |-- decisionValidator.validate(decisions, resolves_issues, ledger, expectedIssueIds) |
 |  |     |-- on validation failure:                        |
 |  |     |   → emit decision_validation_failed event       |
 |  |     |   → transition to human_review with error details |
@@ -982,12 +997,13 @@ start(spec, plan, config)
 |  |-- if plan_updated:                                    |
 |  |     |-- patchApplier.apply(currentPlan, planPatch)    |
 |  |     |-- store.savePlan(v{N+1})                        |
-|  |-- resolve issues (with patch-resolve consistency):    |
+|  |-- resolve issues (with simplified patch-resolve consistency): |
 |  |     |-- collect failedSections from spec+plan patches |
-|  |     |-- if resolves_issues present:                   |
-|  |     |     → for each issue_id in resolves_issues:     |
-|  |     |       if related patch sections ALL succeeded → mark resolved |
-|  |     |       if related patch sections had failures → keep accepted, emit warning |
+|  |     |-- if resolves_issues present AND no patch failures: |
+|  |     |     → mark listed issues as resolved            |
+|  |     |-- if resolves_issues present BUT patch failures exist: |
+|  |     |     → keep ALL accepted issues as accepted, emit warning |
+|  |     |     → emit 'partial_patch_failure' warning      |
 |  |     |-- if resolves_issues ABSENT → emit 'resolves_issues_missing' warning, |
 |  |     |     accepted issues stay accepted (NOT auto-resolved) |
 |  |-- store.saveLedger                                    |  <-- Sub-checkpoint: ledger_updated
@@ -999,10 +1015,11 @@ start(spec, plan, config)
 |                                                          |
 |  Step D: Post-termination check                          |
 |  |  PURPOSE: Detect termination AFTER Claude decisions   |
-|  |  (catches deadlock from Claude rejections, max rounds)|
+|  |  (catches deadlock, max rounds, no new high issues)   |
 |  |-- meta.current_step = 'post_decision'                 |
 |  |-- terminationJudge.judge({...})                       |
-|  |-- if action='terminate' -> break                      |
+|  |-- if max_rounds_reached -> terminate                  |
+|  |-- if no_new_high_severity for 2 consecutive -> terminate |
 |  |-- if action='pause_for_human' -> status=human_review  |
 |  |                                                       |
 |  round++                                                 |
@@ -1057,11 +1074,18 @@ When `status = paused/failed/human_review`, calling `resume(runId)`:
        - If not → re-invoke Claude (sub-step C1)
      - Check if `claude_decisions_validated` event exists for this round:
        - If not → reuse raw output, re-parse and re-validate (sub-step C2; idempotent)
-     - Check if ledger has been updated for this round (via `last_processed_round` on decisions):
-       - If not → reuse validated decisions, apply to ledger + patches (sub-step C3)
+     - Check if `claude_side_effects_applied` event exists for this round:
+       - If not → reuse validated decisions, apply to ledger + patches (sub-step C3; idempotent)
      - If all above exist → skip to C4 (commit)
    - `post_decision`: Claude done, skip to D check
 3. Reload `issue-ledger.json` and latest spec/plan version
+
+> **Sub-checkpoint events for Step C**:
+> - `claude_decisions_validated`: Marks completion of C2 (parse + validate)
+> - `claude_side_effects_applied`: Marks completion of C3 (ledger updates + patches applied)
+> 
+> These events enable precise resume within the Claude decision step, preventing 
+> duplicate side effects on crash recovery.
 
 > **Idempotency guarantee for IssueMatcher**:
 > `processFindings()` must be **idempotent** — re-running it with the same raw findings and current
@@ -1075,14 +1099,12 @@ When `status = paused/failed/human_review`, calling `resume(runId)`:
 > 1. Save raw LLM output (round artifact) — always first, never lose data
 > 2. Update issue-ledger.json
 > 3. Save spec/plan new version (if updated)
-> 4. Append checkpoint event (e.g., `issue_matching_completed`, `claude_decisions_validated`)
+> 4. Append sub-checkpoint event (`claude_decisions_validated`, `claude_side_effects_applied`)
 > 5. Update meta.json (`current_step`) — always last, serves as commit marker
 >
 > **Atomic write protocol**: All critical writes (meta.json, issue-ledger.json, spec/plan versions)
 > use the atomic write helper: write-tmp → fsync → rename. See §6.7 for details.
 > Events (ndjson) are append-only; malformed trailing lines are skipped on load.
-
----
 
 ## 8. Prompt Templates
 
@@ -1223,15 +1245,31 @@ const SPEC_REVIEW_OVERRIDES = {
 |----------|---------|------------|
 | Codex CLI timeout | Retry once -> still timeout: log event, skip round via TIMEOUT GUARD (`isSkippedRound=true`) | `codex_review_timeout` |
 | Claude timeout | Retry once -> still timeout: log event, skip round via TIMEOUT GUARD (`isSkippedRound=true`) | `claude_decision_timeout` |
-| Codex invalid JSON output | `JsonParser.parse()` best-effort; fallback: save raw + log event | `codex_parse_error` |
+| Codex invalid JSON output | `JsonParser.parse()` returns null → save raw output + log event. **Codex Parse Failure Protocol**: Generate conservative fallback output (`findings=[]`, `overall_assessment='major_issues'`, attach parse failure flag) OR transition workflow to `human_review` with reason 'codex_parse_failure'. Downstream components (IssueMatcher, TerminationJudge) receive well-formed objects, not incomplete data. | `codex_parse_error` |
 | Claude invalid JSON output | `JsonParser.parse()` returns null → save raw + log event. **If `decisions[]` unrecoverable: prohibit patch/ledger changes, transition to `human_review`**. If `decisions[]` partially recovered: validate via `DecisionValidator` then proceed. | `claude_parse_error` |
-| Patch apply heading mismatch | `PatchApplier` appends unmatched section, logs failed headings | `patch_apply_failed` |
+| Patch apply heading mismatch | `PatchApplier` does NOT append unmatched sections (prevents document pollution). Emits `patch_apply_failed` event for each failed section. If ALL patch sections fail, workflow transitions to `human_review`. | `patch_apply_failed` |
 | Claude omits `resolves_issues` | Emit warning, accepted issues stay accepted (NOT auto-resolved) | `resolves_issues_missing` |
 | Filesystem write failure | Throw, `status=failed`, resumable | `workflow_failed` |
 | Missing files on resume | Check `current_step` + partially-saved artifacts, reuse if valid; else restart from current step | `workflow_resumed` |
 | Crash between B1 and B2 | Resume detects `current_step='issue_matching'`, checks `issue_matching_completed` event; re-runs processFindings (idempotent) if needed | `workflow_resumed` |
 | SIGINT / pause during LLM call | AbortController.abort() -> ModelInvoker throws AbortError -> engine saves checkpoint | (no event; meta updated) |
 | Skip-round exceeds max_rounds | TIMEOUT GUARD checks `round > max_rounds`, terminates directly | `termination_triggered` |
+
+> **Codex Parse Failure Protocol** (added for consistency with Claude):
+>
+> When `jsonParser.parse()` returns null for Codex output:
+> 1. Save raw output to `R{N}-codex-raw.md` (preserve data)
+> 2. Emit `codex_parse_error` event
+> 3. **Generate standardized fallback**: Create a conservative `CodexReviewOutput` with:
+>    - `findings: []` (empty, assumes no valid findings extracted)
+>    - `overall_assessment: 'major_issues'` (conservative assumption)
+>    - `summary: 'Parse failure - raw output saved'`
+>    - Attach parse failure metadata flag
+> 4. **Alternative**: Transition workflow to `human_review` with reason 'codex_parse_failure'
+> 5. Downstream components (IssueMatcher, TerminationJudge) receive well-formed objects
+>
+> This ensures consistent error handling symmetry with Claude's protocol and prevents
+> downstream components from receiving incomplete or null objects.
 
 ---
 
@@ -1293,7 +1331,7 @@ const SPEC_REVIEW_OVERRIDES = {
 - [ ] Schemas exist: `issue-ledger.schema.json`, `meta.schema.json`, `event.schema.json` in `.claude-workflows/schemas/`
 - [ ] Template placeholders cover all SpecReviewPack fields (`spec`, `plan`, `unresolved_issues`, `rejected_issues`, `round_summary`, `round`, `context_files`)
 - [ ] Claude decision template includes `{{previous_decisions}}` placeholder and empty-findings guidance
-- [ ] Event schema includes `codex_parse_error`, `claude_parse_error`, `patch_apply_failed`, `resolves_issues_missing`, `issue_matching_completed`, `claude_decisions_validated`, `decision_validation_failed` event types
+- [ ] Event schema includes `codex_parse_error`, `claude_parse_error`, `patch_apply_failed`, `resolves_issues_missing`, `issue_matching_completed`, `claude_decisions_validated`, `claude_side_effects_applied`, `decision_validation_failed` event types
 - [ ] Meta schema includes all 5 `WorkflowStep` values for `current_step`
 - [ ] Meta schema includes `termination_state` object with `consecutive_no_new_high_rounds` and `last_round_was_skipped`
 - [ ] `.gitignore` updated: `.claude-workflows/runs/` ignored, `templates/` and `schemas/` tracked
@@ -1332,15 +1370,15 @@ const SPEC_REVIEW_OVERRIDES = {
 - [ ] `DecisionValidator` validates all decisions before any side effects
 - [ ] `DecisionValidator` rejects unknown/duplicate issue_ids, missing coverage, invalid resolves_issues targets
 - [ ] Claude parse failure with unrecoverable `decisions[]` → `human_review`, no side effects
-- [ ] Patch-resolve consistency: `failedSections` prevents affected issues from being resolved
-- [ ] Step C sub-checkpoints enable precise resume at C1/C2/C3/C4 boundaries
+- [ ] Patch-resolve consistency: if ANY patch section fails, ALL accepted issues in that round stay `accepted` (conservative rule — no partial resolution)
+- [ ] Step C sub-checkpoints (`claude_decisions_validated`, `claude_side_effects_applied`) enable precise resume at C1/C2/C3/C4 boundaries
 - [ ] Write ordering for crash safety: raw output → ledger → spec/plan → checkpoint event → meta (last)
 - [ ] Critical files use atomic write protocol (write-tmp → fsync → rename)
 - [ ] Events ndjson reader skips malformed trailing lines gracefully
 - [ ] File versioning uses consistent naming: spec-v1.md, spec-v2.md, spec-v3.md
 - [ ] WorkflowStore returns `null` for missing files (not throw)
 - [ ] Unit tests cover all `TerminationJudge` branches (including high/critical filtering from ledger, isSkippedRound)
-- [ ] Unit tests cover `IssueMatcher` exact/evidence/no-match/deferred-re-raise/idempotency paths
+- [ ] Unit tests cover `IssueMatcher` exact/evidence/identifier-overlap/no-match/deferred-re-raise/idempotency paths
 - [ ] Unit tests cover `JsonParser` all 4 strategies + `extractPatches`
 - [ ] Unit tests cover `PatchApplier` multi-level heading matching + heading mismatch + patch-resolve consistency
 - [ ] Unit tests cover `DecisionValidator` all 5 validation checks + error cases

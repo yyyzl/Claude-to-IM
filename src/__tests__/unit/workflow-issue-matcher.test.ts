@@ -12,7 +12,11 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { IssueMatcher } from '../../lib/workflow/issue-matcher.js';
+import {
+  IssueMatcher,
+  extractIdentifiers,
+  jaccardSimilarity,
+} from '../../lib/workflow/issue-matcher.js';
 import type {
   Finding,
   Issue,
@@ -395,5 +399,253 @@ describe('IssueMatcher', () => {
       // Ledger should now have 5 issues total (3 existing + 2 new)
       assert.equal(ledger.issues.length, 5);
     });
+  });
+
+  // ── Identifier overlap (fuzzy matching) ───────────────────
+
+  describe('match() — identifier overlap (Strategy 3)', () => {
+    // ── 12. Real-world ISS-001 vs ISS-007 case ──
+
+    it('matches LLM re-phrased issue with overlapping code identifiers', () => {
+      // ISS-001 from R1 (deferred)
+      const existing = createIssue({
+        id: 'ISS-001',
+        description:
+          '`resolves_issues` 只有 issue ID 列表，没有 issue 到具体 patch section 的结构化映射，但规范又要求在部分 patch 失败时只阻止"相关 issue"进入 `resolved`。',
+        evidence: '§4.4 ClaudeDecisionOutput `resolves_issues?: string[]`; §6.10 Patch-Resolve Consistency Rule; §7.1 Step C3',
+        severity: 'high',
+        status: 'deferred',
+      });
+
+      // ISS-007 from R2 — same issue, different phrasing
+      const finding = createFinding({
+        issue:
+          'resolves_issues 只有 issue ID 列表，但 C3 又要求在部分 patch 失败时只阻止"相关 issue"进入 resolved；按当前数据结构，执行层无法可靠判断某个 issue 依赖了哪些 spec/plan section',
+        evidence: 'Spec §4.4 ClaudeDecisionOutput 中 resolves_issues?: string[]；§7.1 Step C3 要求"if related patch sections ALL succeeded"；§6.10 PatchApplier',
+        severity: 'high',
+      });
+
+      const result = matcher.match(finding, [existing]);
+      assert.notEqual(result, null, 'Should match via identifier overlap');
+      assert.equal(result!.id, 'ISS-001');
+    });
+
+    // ── 13. Real-world ISS-004 vs ISS-008 case ──
+
+    it('matches re-phrased config issue with overlapping identifiers', () => {
+      // ISS-004 from R1
+      const existing = createIssue({
+        id: 'ISS-004',
+        description:
+          '`WorkflowConfig` 里声明了 `auto_terminate` 和 `human_review_on_deadlock` 两个行为开关，但终止判定和流程描述没有消费它们。',
+        evidence: '§4.5 WorkflowConfig 定义 `auto_terminate`、`human_review_on_deadlock`; §5.5 Reason -> Action mapping 与 §7.2 Termination Priority',
+        severity: 'medium',
+        status: 'deferred',
+      });
+
+      // ISS-008 from R2 — same issue
+      const finding = createFinding({
+        issue:
+          'WorkflowConfig 定义了 auto_terminate 和 human_review_on_deadlock 两个开关，但终止判定与主流程没有消费它们',
+        evidence: 'Spec §4.5 WorkflowConfig 定义 auto_terminate、human_review_on_deadlock；§5.5 Reason->Action mapping 与 §7.1/§7.2',
+        severity: 'medium',
+      });
+
+      const result = matcher.match(finding, [existing]);
+      assert.notEqual(result, null, 'Should match via identifier overlap');
+      assert.equal(result!.id, 'ISS-004');
+    });
+
+    // ── 14. Different issues should NOT match ──
+
+    it('does not match genuinely different issues despite shared section refs', () => {
+      const existing = createIssue({
+        id: 'ISS-001',
+        description: '`PatchApplier` fails on heading mismatch by appending to document end',
+        evidence: '§6.10 PatchApplier algorithm step 4',
+        severity: 'high',
+      });
+
+      // Different issue with different code identifiers, only §6.10 overlap
+      const finding = createFinding({
+        issue: '`TerminationJudge` does not handle the `only_style_issues` edge case correctly',
+        evidence: '§6.5 TerminationJudge; §7.2 Termination Priority',
+        severity: 'high',
+      });
+
+      const result = matcher.match(finding, [existing]);
+      assert.equal(result, null, 'Should NOT match — different code identifiers');
+    });
+
+    // ── 15. Too few identifiers → skip fuzzy strategy ──
+
+    it('does not match when identifier count is below threshold', () => {
+      const existing = createIssue({
+        id: 'ISS-001',
+        description: 'The system has a potential race condition',
+        evidence: 'Observed during testing',
+        severity: 'high',
+      });
+
+      // Only 0 backtick/section/issue identifiers — should skip fuzzy
+      const finding = createFinding({
+        issue: 'A potential race condition exists in the system',
+        evidence: 'Manual observation during testing',
+        severity: 'high',
+      });
+
+      const result = matcher.match(finding, [existing]);
+      assert.equal(result, null, 'Should NOT match — too few identifiers for fuzzy');
+    });
+
+    // ── 16. Severity too far apart → skip even with identifier overlap ──
+
+    it('does not match when severity differs by more than 1 rank', () => {
+      const existing = createIssue({
+        id: 'ISS-001',
+        description: '`resolves_issues` lacks structured mapping to `PatchApplier` sections',
+        evidence: '§4.4 `ClaudeDecisionOutput`; §6.10 PatchApplier; §7.1 Step C3',
+        severity: 'critical',
+      });
+
+      // Same identifiers but severity too far apart (critical vs low = 3 rank diff)
+      const finding = createFinding({
+        issue: '`resolves_issues` has no mapping to `PatchApplier` output sections',
+        evidence: '§4.4 `ClaudeDecisionOutput`; §6.10 PatchApplier; §7.1',
+        severity: 'low',
+      });
+
+      const result = matcher.match(finding, [existing]);
+      assert.equal(result, null, 'Should NOT match — severity too far apart');
+    });
+
+    // ── 17. Reviewer false-positive case: same section refs, different problem ──
+
+    it('does not match issues that share only section refs but different code identifiers', () => {
+      // ISS-004: "config switches unused"
+      const existing = createIssue({
+        id: 'ISS-004',
+        description:
+          '`WorkflowConfig` 里声明了 `auto_terminate` 和 `human_review_on_deadlock` 两个行为开关，但终止判定和流程描述没有消费它们。',
+        evidence: '§4.5 WorkflowConfig 定义 `auto_terminate`、`human_review_on_deadlock`; §5.5 Reason -> Action mapping 与 §7.2 Termination Priority',
+        severity: 'medium',
+        status: 'deferred',
+      });
+
+      // Different problem: "CLI docs don't list defaults" — shares §4.5/§5.5/§7.2 but
+      // only one code identifier overlap (WorkflowConfig) — below MIN_CODE_ID_OVERLAP=2
+      const finding = createFinding({
+        issue:
+          'CLI 文档没有为 WorkflowConfig 的各字段列出默认值，用户无法了解缺省行为',
+        evidence: '§4.5 WorkflowConfig; §5.5 Configuration Defaults; §7.2 Termination Priority',
+        severity: 'medium',
+      });
+
+      const result = matcher.match(finding, [existing]);
+      assert.equal(result, null,
+        'Should NOT match — only 1 code identifier overlap (WorkflowConfig), below threshold of 2');
+    });
+
+    // ── 18. Code identifiers via bare PascalCase/snake_case (no backticks) ──
+
+    it('matches via bare PascalCase and snake_case identifiers (no backticks needed)', () => {
+      const existing = createIssue({
+        id: 'ISS-001',
+        description:
+          'DecisionValidator 的覆盖校验只要求覆盖 currentRoundFindings，允许 Claude 对遗留 issue 返回空 decisions',
+        evidence: '§6.11 DecisionValidator; §6.2 ClaudeDecisionInput hasNewFindings=false',
+        severity: 'high',
+      });
+
+      // Re-phrased without backticks — PascalCase should still extract
+      const finding = createFinding({
+        issue:
+          'DecisionValidator coverage check only covers currentRoundFindings, ignores legacy issues when hasNewFindings is false',
+        evidence: '§6.11 DecisionValidator check #3; §6.2 ClaudeDecisionInput',
+        severity: 'high',
+      });
+
+      const result = matcher.match(finding, [existing]);
+      assert.notEqual(result, null, 'Should match — bare PascalCase overlap: DecisionValidator, ClaudeDecisionInput');
+      assert.equal(result!.id, 'ISS-001');
+    });
+  });
+});
+
+// ── extractIdentifiers / jaccardSimilarity unit tests ────────
+
+describe('extractIdentifiers()', () => {
+  it('extracts backtick-quoted identifiers', () => {
+    const ids = extractIdentifiers('The `resolves_issues` field in `ClaudeDecisionOutput` is incomplete');
+    assert.ok(ids.has('resolves_issues'));
+    assert.ok(ids.has('claudedecisionoutput'));
+  });
+
+  it('extracts section references (§X.Y)', () => {
+    const ids = extractIdentifiers('See §4.4 and §6.10.1 for details');
+    assert.ok(ids.has('§4.4'));
+    assert.ok(ids.has('§6.10.1'));
+  });
+
+  it('extracts issue ID references', () => {
+    const ids = extractIdentifiers('This duplicates ISS-001 and ISS-012');
+    assert.ok(ids.has('ISS-001'));
+    assert.ok(ids.has('ISS-012'));
+  });
+
+  it('returns empty set for plain text without identifiers', () => {
+    const ids = extractIdentifiers('This is a plain text description with no special tokens.');
+    assert.equal(ids.size, 0);
+  });
+
+  it('combines all types from mixed text', () => {
+    const ids = extractIdentifiers('`PatchApplier` in §6.10 fails for ISS-003');
+    assert.ok(ids.has('patchapplier'));
+    assert.ok(ids.has('§6.10'));
+    assert.ok(ids.has('ISS-003'));
+  });
+
+  it('extracts bare PascalCase identifiers (no backticks)', () => {
+    const ids = extractIdentifiers('ClaudeDecisionOutput has issues, DecisionValidator fails');
+    assert.ok(ids.has('claudedecisionoutput'));
+    assert.ok(ids.has('decisionvalidator'));
+  });
+
+  it('extracts bare snake_case identifiers (no backticks)', () => {
+    const ids = extractIdentifiers('resolves_issues and auto_terminate are not consumed');
+    assert.ok(ids.has('resolves_issues'));
+    assert.ok(ids.has('auto_terminate'));
+  });
+
+  it('does not extract single-segment words as snake_case', () => {
+    const ids = extractIdentifiers('the issue is about configuration and testing');
+    // None of these are multi-segment snake_case
+    assert.ok(!ids.has('issue'));
+    assert.ok(!ids.has('configuration'));
+    assert.ok(!ids.has('testing'));
+  });
+});
+
+describe('jaccardSimilarity()', () => {
+  it('returns 1.0 for identical sets', () => {
+    const a = new Set(['foo', 'bar']);
+    assert.equal(jaccardSimilarity(a, a), 1.0);
+  });
+
+  it('returns 0 for disjoint sets', () => {
+    const a = new Set(['foo']);
+    const b = new Set(['bar']);
+    assert.equal(jaccardSimilarity(a, b), 0);
+  });
+
+  it('returns correct value for partial overlap', () => {
+    const a = new Set(['a', 'b', 'c']);
+    const b = new Set(['b', 'c', 'd']);
+    // intersection = 2, union = 4
+    assert.equal(jaccardSimilarity(a, b), 0.5);
+  });
+
+  it('returns 0 for two empty sets', () => {
+    assert.equal(jaccardSimilarity(new Set(), new Set()), 0);
   });
 });

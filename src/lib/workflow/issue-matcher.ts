@@ -55,6 +55,98 @@ function formatIssueId(seq: number): string {
   return `ISS-${String(seq).padStart(3, '0')}`;
 }
 
+// ── Identifier extraction for fuzzy matching ─────────────────
+
+/** Minimum identifier count to enable fuzzy matching (avoids false positives on sparse text). */
+const MIN_IDENTIFIERS_FOR_FUZZY = 2;
+
+/** Jaccard similarity threshold — above this, two identifier sets are "the same topic". */
+const JACCARD_THRESHOLD = 0.4;
+
+/**
+ * Minimum number of code identifiers (non-section-ref, non-issue-ref) that must
+ * overlap in the intersection for a fuzzy match to be accepted.
+ *
+ * This prevents false positives where two issues share section references (§4.5, §7.2)
+ * but describe completely different problems.
+ */
+const MIN_CODE_ID_OVERLAP = 2;
+
+/**
+ * Extract key identifiers from a text string for fuzzy dedup.
+ *
+ * Extracted tokens (all lowercased):
+ * 1. Backtick-quoted identifiers: `resolves_issues`, `PatchApplier`
+ * 2. Bare PascalCase identifiers (≥2 uppercase transitions): ClaudeDecisionOutput, PatchApplier
+ * 3. Bare snake_case identifiers (≥2 segments): resolves_issues, auto_terminate
+ * 4. Section references: §4.4, §6.10, §7.1
+ * 5. Issue ID references: ISS-001, ISS-012
+ *
+ * Returns a Set of unique lowercased identifiers.
+ */
+export function extractIdentifiers(text: string): Set<string> {
+  const ids = new Set<string>();
+
+  // 1. Backtick-quoted code identifiers
+  const backtickRe = /`([^`]+)`/g;
+  let m: RegExpExecArray | null;
+  while ((m = backtickRe.exec(text)) !== null) {
+    ids.add(m[1].toLowerCase().trim());
+  }
+
+  // 2. Bare PascalCase identifiers (e.g. ClaudeDecisionOutput, PatchApplier)
+  // Requires ≥2 uppercase-led segments to avoid matching ordinary capitalized words.
+  const pascalRe = /\b([A-Z][a-z]+(?:[A-Z][a-z0-9]*)+)\b/g;
+  while ((m = pascalRe.exec(text)) !== null) {
+    ids.add(m[1].toLowerCase());
+  }
+
+  // 3. Bare snake_case identifiers (e.g. resolves_issues, auto_terminate)
+  // Requires ≥2 underscore-separated segments to avoid short false positives.
+  const snakeRe = /\b([a-z][a-z0-9]*(?:_[a-z][a-z0-9]*)+)\b/g;
+  while ((m = snakeRe.exec(text)) !== null) {
+    ids.add(m[1].toLowerCase());
+  }
+
+  // 4. Section references: §4.4, §6.10.1, etc.
+  const sectionRe = /§(\d+(?:\.\d+)*)/g;
+  while ((m = sectionRe.exec(text)) !== null) {
+    ids.add(`§${m[1]}`);
+  }
+
+  // 5. Issue ID references: ISS-001, ISS-012
+  const issueRe = /ISS-\d{3}/gi;
+  while ((m = issueRe.exec(text)) !== null) {
+    ids.add(m[0].toUpperCase());
+  }
+
+  return ids;
+}
+
+/**
+ * Check whether an identifier is a "code identifier" (not a section ref or issue ref).
+ * Code identifiers are the primary signal for semantic dedup; section/issue refs are contextual.
+ */
+function isCodeIdentifier(id: string): boolean {
+  return !id.startsWith('§') && !id.startsWith('ISS-');
+}
+
+/**
+ * Compute Jaccard similarity between two sets: |A ∩ B| / |A ∪ B|.
+ * Returns 0 if both sets are empty.
+ */
+export function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 0;
+
+  let intersection = 0;
+  for (const item of a) {
+    if (b.has(item)) intersection++;
+  }
+
+  const union = a.size + b.size - intersection;
+  return union === 0 ? 0 : intersection / union;
+}
+
 // ── IssueMatcher ────────────────────────────────────────────────
 
 export class IssueMatcher {
@@ -65,7 +157,17 @@ export class IssueMatcher {
    * 1. **Exact match**: normalized `finding.issue` equals normalized `issue.description`.
    * 2. **Evidence match**: normalized `finding.evidence` equals normalized `issue.evidence`
    *    AND the severity levels are similar (within 1 rank step).
-   * 3. **No match**: returns `null` — caller should create a new Issue.
+   * 3. **Identifier overlap**: extract identifiers (backtick-quoted, bare PascalCase/snake_case,
+   *    section refs §X.Y, issue IDs) from both description+evidence texts.
+   *    Match requires ALL of:
+   *    - Jaccard similarity >= 0.4
+   *    - Severity within 1 rank step
+   *    - Both sides have >= 2 total identifiers
+   *    - Intersection contains >= 2 code identifiers (non-§, non-ISS-) to prevent
+   *      false matches where only section references overlap
+   *    This catches LLM re-phrasings of the same issue while rejecting "same chapter,
+   *    different problem" false positives.
+   * 4. **No match**: returns `null` — caller should create a new Issue.
    *
    * @param finding - The Codex finding to match.
    * @param existingIssues - All issues currently in the ledger.
@@ -92,7 +194,38 @@ export class IssueMatcher {
       }
     }
 
-    // Strategy 3: No match
+    // Strategy 3: Identifier overlap (fuzzy matching for LLM re-phrasings)
+    const findingIds = extractIdentifiers(`${finding.issue} ${finding.evidence}`);
+    if (findingIds.size >= MIN_IDENTIFIERS_FOR_FUZZY) {
+      let bestMatch: Issue | null = null;
+      let bestScore = 0;
+
+      for (const issue of existingIssues) {
+        const issueIds = extractIdentifiers(`${issue.description} ${issue.evidence}`);
+        if (issueIds.size < MIN_IDENTIFIERS_FOR_FUZZY) continue;
+
+        if (!isSimilarSeverity(finding.severity, issue.severity)) continue;
+
+        const score = jaccardSimilarity(findingIds, issueIds);
+        if (score < JACCARD_THRESHOLD || score <= bestScore) continue;
+
+        // Guard: require ≥ MIN_CODE_ID_OVERLAP code identifiers in the intersection.
+        // Pure section-ref overlap (§4.5, §7.2) is NOT sufficient — different problems
+        // can reference the same spec sections.
+        let codeIdOverlap = 0;
+        for (const id of findingIds) {
+          if (issueIds.has(id) && isCodeIdentifier(id)) codeIdOverlap++;
+        }
+        if (codeIdOverlap < MIN_CODE_ID_OVERLAP) continue;
+
+        bestScore = score;
+        bestMatch = issue;
+      }
+
+      if (bestMatch !== null) return bestMatch;
+    }
+
+    // Strategy 4: No match
     return null;
   }
 
