@@ -1289,21 +1289,20 @@ const SPEC_REVIEW_OVERRIDES = {
 - ✅ Status query reads from `WorkflowStore` meta
 - ✅ Graceful stop via `engine.pause()` (resumable)
 
-### P1b: Dev + Code Review Workflows (future)
+### P1b: Dev + Code Review Workflows
 
-**Dev (Manager-Worker)**:
+**Code Review (Adversarial) — P1b-CR-0: Review-Only MVP** 🔜 设计完成
 
-- New `TaskPack` / `DeliveryPack` types
-- `workspace_strategy` isolation (branch / worktree / file ownership)
-- `PackBuilder.buildTaskPack()` / `buildDeliveryInput()`
-- `workflow_type: 'dev'`
+> 完整 Spec：`.claude/plan/code-review-workflow-spec.md`
+> 任务 PRD：`.trellis/tasks/archive/2026-03/03-23-workflow-code-review/prd.md`
 
-**Code Review (Adversarial)**:
+核心不变量（详见子 Spec）：
+- `accepted` 在 code-review 中是终态（不阻塞终止）
+- `Issue.fix_instruction` 独立字段（不复用 decision_reason）
+- IssueLedger 是 ReportGenerator 唯一真相源
+- DiffReader 支持 A/M/D/R/C + worktree
 
-- 5-step loop: Codex review -> Claude decide -> Codex fix -> Codex re-review -> terminate
-- All steps `fresh_with_pack` (including Claude)
-- New `ReviewPack` with `code_snapshot` / `diff`
-- `workflow_type: 'code-review'`
+**P1b-CR-1: Review-and-Fix** · **Dev (Manager-Worker)** — 均为 future，见子 Spec
 
 ### P2b: Feishu Interactive Cards (future)
 
