@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 20
+- **Total Sessions**: 21
 - **Last Active**: 2026-03-23
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1014 | Active |
+| `journal-1.md` | ~1071 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits |
 |---|------|-------|---------|
+| 21 | 2026-03-23 | feat: workflow 进度推送飞书卡片化 | `e6f7af8` |
 | 20 | 2026-03-23 | Remove /restart command, replace with start/stop management | `7718949` |
 | 19 | 2026-03-22 | Review /git、/usage、卡片通知 + 重构重复代码 | `47d45a8` |
 | 18 | 2026-03-22 | PatchApplier 测试对齐 + P2 决策 | `edc92f1` |

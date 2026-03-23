@@ -1012,3 +1012,60 @@ P1+TP1 批次实施 + 跨 AI 审核修复。包含 5 个代码安全网补全 + 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 21: feat: workflow 进度推送飞书卡片化
+
+**Date**: 2026-03-23
+**Task**: feat: workflow 进度推送飞书卡片化
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+## 改动概要
+
+将 `/workflow` 命令的进度推送从多条纯文本消息改为**单张可更新的飞书卡片**，解决工作流运行期间刷屏问题（每轮 7-8 条消息 → 1 张实时更新卡片）。
+
+## 改动文件
+
+| 文件 | 改动 |
+|------|------|
+| `src/lib/bridge/channel-adapter.ts` | +3 个可选方法: createWorkflowCard / updateWorkflowCard / finalizeWorkflowCard |
+| `src/lib/bridge/markdown/feishu.ts` | +`buildWorkflowCardJson()` 带 header/footer 的卡片构建函数 |
+| `src/lib/bridge/adapters/feishu-adapter.ts` | 实现工作流卡片 3 方法，独立 workflowCards Map，stop() 清理 |
+| `src/lib/bridge/internal/workflow-command.ts` | 重写 `bindProgressEvents()`：状态聚合 + 卡片/文本双模式 + debounce |
+
+## 设计决策
+
+1. 非 streaming_mode: 用 card.update() 更新整张卡片
+2. 独立 workflowCards Map: 与 Claude 流式卡片互不干扰
+3. 500ms debounce: 快速连续事件合并为一次 API 调用
+4. 自动降级: 卡片创建失败时 fallback 到纯文本
+5. sequence 仅在成功时递增: 防频控跳号
+
+## 验证
+
+- TypeScript 编译零错误，270/270 测试通过
+- 代码审查 88/100，关键问题已修复
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e6f7af8` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
