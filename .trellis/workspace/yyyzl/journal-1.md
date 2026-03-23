@@ -1337,3 +1337,54 @@ Fix Phase 4 gaps (WorkflowStore snapshot, engine profile routing, IM code-review
 ### Next Steps
 
 - None - task complete
+
+
+## Session 27: Close Out Code-Review IM MVP
+
+**Date**: 2026-03-24
+**Task**: Close Out Code-Review IM MVP
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+| ?? | ?? |
+|------|------|
+| MVP ?? | ?? code-review IM ???????????? diff / ? changed_files ?? |
+| ???? | workflow ????? `code-review-report.md` ? `code-review-report.json`???????????? |
+| ?? | ???????????????? `npm run typecheck` ? `npm run test:unit`?367/367? |
+| ???? | ?? code-review spec?workflow ??????? PRD????? CLI `code-review` ??? |
+
+**????**?
+- `src/lib/workflow/workflow-engine.ts`
+- `src/lib/workflow/diff-reader.ts`
+- `src/lib/workflow/workflow-store.ts`
+- `src/lib/bridge/internal/workflow-command.ts`
+- `src/__tests__/unit/workflow-code-review.test.ts`
+- `docs/workflow-conclusions-summary.md`
+
+**??**?
+- `npm run typecheck`
+- `npm run test:unit`
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5148d8d` | (see git log) |
+| `a2e74a8` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
