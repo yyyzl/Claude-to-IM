@@ -50,6 +50,7 @@ import {
   type TerminationResult,
   type TerminationReason,
   type ProcessFindingsResult,
+  type Decision,
   type DecisionAction,
 } from './types.js';
 
@@ -688,6 +689,7 @@ export class WorkflowEngine {
             claudeOutput.decisions,
             claudeOutput.resolves_issues,
             ledger,
+            profile,
           );
           if (!validationResult.valid) {
             console.warn(
@@ -745,6 +747,16 @@ export class WorkflowEngine {
             }
             issue.decided_by = 'claude';
             issue.decision_reason = decision.reason;
+
+            // Code-review §6.2: store fix_instruction separately from decision_reason
+            // when accept action has a fix_instruction field (requireFixInstruction profile).
+            if (
+              profile.behavior.requireFixInstruction &&
+              decision.action === 'accept'
+            ) {
+              issue.fix_instruction =
+                (decision as Decision & { fix_instruction?: string }).fix_instruction;
+            }
 
             await this.emit(runId, round, 'issue_status_changed', {
               issue_id: issue.id,

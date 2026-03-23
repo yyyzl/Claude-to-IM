@@ -1306,8 +1306,8 @@ options:
 
 **数据模型（INV-2 + INV-3）**
 
-- [ ] `Issue.fix_instruction` 独立可选字段（不复用 decision_reason）
-- [ ] `Issue.source_file` / `source_line_range` / `category` 由 IssueMatcher 写入
+- [x] `Issue.fix_instruction` 独立可选字段（不复用 decision_reason）
+- [x] `Issue.source_file` / `source_line_range` / `category` 由 IssueMatcher 写入
 - [ ] ReportGenerator 只读 IssueLedger 生成完整报告（不 join round artifacts）
 - [ ] 报告含 reason 和 fix_instruction 分列展示
 
@@ -1331,7 +1331,7 @@ options:
 
 - [ ] `WorkflowProfile` 接口定义完成，含所有 behavior 标志
 - [ ] SPEC_REVIEW_PROFILE 和 CODE_REVIEW_PROFILE 预定义
-- [ ] `workflow-engine.ts` 根据 profile.behavior 条件执行 PatchApplier/resolves_issues/fix_instruction
+- [x] `workflow-engine.ts` 根据 profile.behavior 条件执行 PatchApplier/resolves_issues/fix_instruction
 - [ ] 现有 spec-review 全部测试通过（回归安全）
 
 **模块实现**
@@ -1341,8 +1341,8 @@ options:
 - [ ] `PackBuilder.buildClaudeCodeReviewInput()` 不包含 previousDecisions（fresh）
 - [ ] `PromptAssembler` 根据 profile 加载正确模板
 - [ ] 3 个新模板：`code-review-pack.md`, `code-review-decision.md`, `code-review-decision-system.md`
-- [ ] `IssueMatcher` 文件路径+行号匹配使用 Issue 结构化字段（非 evidence 解析）
-- [ ] `DecisionValidator` 根据 profile 条件验证
+- [x] `IssueMatcher` 文件路径+行号匹配使用 Issue 结构化字段（非 evidence 解析）
+- [x] `DecisionValidator` 根据 profile 条件验证
 - [ ] `TerminationJudge` 接收 acceptedIsTerminal 标志
 - [ ] `ReportGenerator` 生成 Markdown + JSON 报告
 - [ ] `createCodeReviewEngine()` 工厂函数

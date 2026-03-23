@@ -92,8 +92,8 @@ code-review 不需要 `<spec> <plan>` 位置参数。
 
 ### Phase 3: Matcher + Validator 增强
 
-10. **IssueMatcher 增强** — 新增文件路径+行号+category 匹配（使用 Issue 结构化字段，非 evidence 解析）
-11. **DecisionValidator 适配** — 根据 profile 条件验证 fix_instruction / resolves_issues
+10. **IssueMatcher 增强** — 新增文件路径+行号+category 匹配（使用 Issue 结构化字段，非 evidence 解析，已完成）
+11. **DecisionValidator 适配** — 根据 profile 条件验证 fix_instruction / resolves_issues（已完成）
 
 ### Phase 4: Report + Factory + CLI/IM
 
@@ -118,8 +118,8 @@ code-review 不需要 `<spec> <plan>` 位置参数。
 
 ### 数据完整性
 
-- [ ] Issue.fix_instruction 和 Issue.decision_reason 分别存储
-- [ ] Issue.source_file / source_line_range / category 由 IssueMatcher 从 CodeFinding 写入
+- [x] Issue.fix_instruction 和 Issue.decision_reason 分别存储
+- [x] Issue.source_file / source_line_range / category 由 IssueMatcher 从 CodeFinding 写入
 - [ ] ReportGenerator 从 IssueLedger（issue 决策）+ ReviewSnapshot（scope/excludedFiles）+ WorkflowMeta 组装报告
 - [ ] 报告含 reason 和 fix_instruction 分列展示
 - [ ] 报告含 Excluded Files 节
@@ -145,6 +145,7 @@ code-review 不需要 `<spec> <plan>` 位置参数。
 ### Pack/Prompt/Validator 闭环
 
 - [ ] accepted_issues 正式字段（非可选），进入 Codex prompt 的 "Previously Accepted" 节
+- [x] DecisionValidator 根据 WorkflowProfile 条件验证 fix_instruction / resolves_issues
 - [ ] DecisionValidator 使用 expectedDecisionIds 概念（有 findings → finding IDs；无 findings → unresolved issue IDs）
 - [ ] 无新 findings 但有 unresolved issues 时，Claude 被要求处理剩余 issue
 
@@ -157,9 +158,9 @@ code-review 不需要 `<spec> <plan>` 位置参数。
 ### 通用
 
 - [ ] WorkflowProfile 接口定义完成，含 acceptedIsTerminal
-- [ ] workflow-engine.ts 根据 profile.behavior 条件执行步骤
+- [x] workflow-engine.ts 根据 profile.behavior 条件执行步骤
 - [ ] 现有 spec-review 全部测试通过（回归安全）
-- [ ] IssueMatcher 文件路径匹配使用 Issue 结构化字段（非 evidence 解析）
+- [x] IssueMatcher 文件路径匹配使用 Issue 结构化字段（非 evidence 解析）
 - [ ] TypeScript 编译通过，无类型错误
 - [ ] 集成测试覆盖完整审查循环
 

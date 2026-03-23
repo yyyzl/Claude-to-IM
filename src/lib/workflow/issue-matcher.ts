@@ -8,6 +8,8 @@
  */
 
 import type {
+  CodeFinding,
+  CodeReviewCategory,
   Finding,
   Issue,
   IssueLedger,
@@ -53,6 +55,28 @@ function isSimilarSeverity(a: Severity, b: Severity): boolean {
  */
 function formatIssueId(seq: number): string {
   return `ISS-${String(seq).padStart(3, '0')}`;
+}
+
+// ── CodeFinding type guard & file-location matching ──────────
+
+/**
+ * Type guard: check if a Finding is actually a CodeFinding (has file + category).
+ * CodeFinding extends Finding with `file`, `category`, and optional `line_range`.
+ */
+function isCodeFinding(finding: Finding): finding is CodeFinding {
+  return 'file' in finding && 'category' in finding;
+}
+
+/**
+ * Check whether two line ranges overlap (any line in one range falls within the other).
+ * Returns false if either range is undefined.
+ */
+function rangesOverlap(
+  a: { start: number; end: number } | undefined,
+  b: { start: number; end: number } | undefined,
+): boolean {
+  if (!a || !b) return false;
+  return a.start <= b.end && b.start <= a.end;
 }
 
 // ── Identifier extraction for fuzzy matching ─────────────────
@@ -194,6 +218,27 @@ export class IssueMatcher {
       }
     }
 
+    // Strategy 2.5: File-location match (code-review only — §7.1)
+    // Only fires when the finding has structured file/category fields (CodeFinding).
+    // Conditions: same file + overlapping line range + same category + similar severity.
+    if (isCodeFinding(finding)) {
+      let bestLocationMatch: Issue | null = null;
+      for (const issue of existingIssues) {
+        if (
+          issue.source_file &&
+          issue.source_line_range &&
+          finding.file === issue.source_file &&
+          rangesOverlap(finding.line_range, issue.source_line_range) &&
+          finding.category === issue.category &&
+          isSimilarSeverity(finding.severity, issue.severity)
+        ) {
+          bestLocationMatch = issue;
+          break; // First match wins — same file+range+category is highly specific
+        }
+      }
+      if (bestLocationMatch !== null) return bestLocationMatch;
+    }
+
     // Strategy 3: Identifier overlap (fuzzy matching for LLM re-phrasings)
     const findingIds = extractIdentifiers(`${finding.issue} ${finding.evidence}`);
     if (findingIds.size >= MIN_IDENTIFIERS_FOR_FUZZY) {
@@ -318,6 +363,13 @@ export class IssueMatcher {
           status: 'open',
           repeat_count: 0,
           last_processed_round: round,
+          // Code-review structured fields (§7.1): copy from CodeFinding if available.
+          // These remain undefined for spec-review findings (backward-compatible).
+          ...(isCodeFinding(finding) && {
+            source_file: finding.file,
+            source_line_range: finding.line_range,
+            category: finding.category,
+          }),
         };
 
         nextSeq++;
