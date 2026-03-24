@@ -173,13 +173,17 @@ export class ModelInvoker {
           );
         }
 
-        // Last attempt — throw TimeoutError
+        // Last attempt — throw TimeoutError with the real error preserved
         if (attempt >= maxRetries) {
           console.error(
             `[ModelInvoker] ${model} FAILED — exhausted all ${totalAttempts} attempts. ` +
             `Last error: ${errMsg}`,
           );
-          throw new TimeoutError(model, maxRetries);
+          throw new TimeoutError(
+            model,
+            maxRetries,
+            `${model} failed after ${totalAttempts} attempts. Last error: ${errMsg}`,
+          );
         }
 
         // Otherwise, log and retry (next iteration)
@@ -569,6 +573,8 @@ const NON_RETRYABLE_PATTERNS = [
   /ENOENT/,
   /permission denied/i,
   /invalid.*model/i,
+  /exceeds.*maximum.*length/i,  // Codex CLI: "Input exceeds the maximum length of 1048576 characters"
+  /input.*too.*large/i,         // Generic input-size rejection
 ] as const;
 
 /**

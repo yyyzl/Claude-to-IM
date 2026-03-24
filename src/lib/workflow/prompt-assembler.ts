@@ -27,6 +27,14 @@ import type {
   Finding,
 } from './types.js';
 
+/**
+ * Prompt character budget for Codex CLI calls.
+ *
+ * Codex has a hard input limit of 1,048,576 characters.  We use 900K to leave
+ * headroom for the wrapper's own system prompt and metadata.
+ */
+const CODEX_PROMPT_BUDGET = 900_000;
+
 /** Template file name for the Codex spec-review prompt. */
 const SPEC_REVIEW_TEMPLATE = 'spec-review-pack.md';
 
@@ -77,42 +85,17 @@ export class PromptAssembler {
   async renderSpecReviewPrompt(pack: SpecReviewPack): Promise<string> {
     const template = await this.store.loadTemplate(SPEC_REVIEW_TEMPLATE);
 
-    let result = template;
-    result = this.replacePlaceholder(result, 'spec', pack.spec);
-    result = this.replacePlaceholder(result, 'plan', pack.plan);
-    result = this.replacePlaceholder(
-      result,
-      'unresolved_issues',
-      this.renderUnresolvedIssues(pack.unresolved_issues),
-    );
-    result = this.replacePlaceholder(
-      result,
-      'rejected_issues',
-      this.renderRejectedIssues(pack.rejected_issues),
-    );
-    result = this.replacePlaceholder(
-      result,
-      'resolved_issues',
-      this.renderResolvedIssues(pack.resolved_issues ?? []),
-    );
-    result = this.replacePlaceholder(
-      result,
-      'accepted_issues',
-      this.renderAcceptedIssues(pack.accepted_issues ?? []),
-    );
-    result = this.replacePlaceholder(
-      result,
-      'round_summary',
-      pack.round_summary || 'First round',
-    );
-    result = this.replacePlaceholder(result, 'round', pack.round.toString());
-    result = this.replacePlaceholder(
-      result,
-      'context_files',
-      this.renderContextFiles(pack.context_files),
-    );
-
-    return result;
+    return this.replaceAllPlaceholders(template, {
+      spec: pack.spec,
+      plan: pack.plan,
+      unresolved_issues: this.renderUnresolvedIssues(pack.unresolved_issues),
+      rejected_issues: this.renderRejectedIssues(pack.rejected_issues),
+      resolved_issues: this.renderResolvedIssues(pack.resolved_issues ?? []),
+      accepted_issues: this.renderAcceptedIssues(pack.accepted_issues ?? []),
+      round_summary: pack.round_summary || 'First round',
+      round: pack.round.toString(),
+      context_files: this.renderContextFiles(pack.context_files),
+    });
   }
 
   /**
@@ -129,26 +112,19 @@ export class PromptAssembler {
   async renderClaudeDecisionPrompt(input: ClaudeDecisionInput): Promise<ClaudePromptParts> {
     const template = await this.store.loadTemplate(CLAUDE_DECISION_TEMPLATE);
 
-    let result = template;
-    result = this.replacePlaceholder(result, 'round', input.round.toString());
-    result = this.replacePlaceholder(
-      result,
-      'codex_findings_with_ids',
-      this.renderCodexFindings(input.codexFindingsWithIds, input.hasNewFindings),
-    );
-    result = this.replacePlaceholder(
-      result,
-      'previous_decisions',
-      input.previousDecisions || 'First round - no previous decisions.',
-    );
-    result = this.replacePlaceholder(result, 'ledger_summary', input.ledgerSummary);
-    result = this.replacePlaceholder(result, 'current_spec', input.currentSpec);
-    result = this.replacePlaceholder(result, 'current_plan', input.currentPlan);
+    const user = this.replaceAllPlaceholders(template, {
+      round: input.round.toString(),
+      codex_findings_with_ids: this.renderCodexFindings(input.codexFindingsWithIds, input.hasNewFindings),
+      previous_decisions: input.previousDecisions || 'First round - no previous decisions.',
+      ledger_summary: input.ledgerSummary,
+      current_spec: input.currentSpec,
+      current_plan: input.currentPlan,
+    });
 
     // Load system prompt template
     const system = await this.store.loadTemplate(CLAUDE_DECISION_SYSTEM_TEMPLATE);
 
-    return { system, user: result };
+    return { system, user };
   }
 
   // ── Code Review Prompts (P1b-CR-0) ──────────────────────────────
@@ -157,50 +133,73 @@ export class PromptAssembler {
    * Render a {@link CodeReviewPack} into the final Codex code-review prompt.
    *
    * Loads the `code-review-pack.md` template and replaces placeholders.
+   *
+   * Implements a **context budget** to stay within the Codex CLI input limit
+   * (1,048,576 chars). When the full-content render exceeds the budget:
+   *   1. Changed files are downgraded to diff-hunk context (much smaller).
+   *   2. If still over, the diff itself is truncated with a notice.
    */
   async renderCodeReviewPrompt(pack: CodeReviewPack): Promise<string> {
     const template = await this.store.loadTemplate(CODE_REVIEW_TEMPLATE);
 
-    let result = template;
-    result = this.replacePlaceholder(result, 'diff', pack.diff);
-    result = this.replacePlaceholder(
-      result,
-      'changed_files',
-      this.renderChangedFiles(pack.changed_files),
-    );
-    result = this.replacePlaceholder(
-      result,
-      'unresolved_issues',
-      this.renderUnresolvedIssues(pack.unresolved_issues),
-    );
-    result = this.replacePlaceholder(
-      result,
-      'accepted_issues',
-      this.renderAcceptedIssues(pack.accepted_issues),
-    );
-    result = this.replacePlaceholder(
-      result,
-      'rejected_issues',
-      this.renderRejectedIssues(pack.rejected_issues),
-    );
-    result = this.replacePlaceholder(
-      result,
-      'round_summary',
-      pack.round_summary || 'First round',
-    );
-    result = this.replacePlaceholder(result, 'round', pack.round.toString());
-    result = this.replacePlaceholder(
-      result,
-      'context_files',
-      this.renderContextFiles(pack.context_files),
-    );
-    result = this.replacePlaceholder(
-      result,
-      'review_scope',
-      this.renderReviewScope(pack.review_scope),
-    );
+    // First pass: render with full file content
+    let result = this.renderCodeReviewFromTemplate(template, pack, 'full');
+
+    // Check against budget — Codex CLI hard limit is 1,048,576 chars.
+    // Use 900K as the budget to leave headroom for Codex's own system prompt.
+    if (result.length > CODEX_PROMPT_BUDGET) {
+      console.warn(
+        `[PromptAssembler] Code-review prompt exceeds budget ` +
+        `(${result.length} > ${CODEX_PROMPT_BUDGET} chars). ` +
+        `Downgrading changed_files from full content to diff-hunk context.`,
+      );
+      result = this.renderCodeReviewFromTemplate(template, pack, 'hunks');
+    }
+
+    // Safety valve: if still over budget after hunk downgrade, truncate the diff
+    if (result.length > CODEX_PROMPT_BUDGET) {
+      console.warn(
+        `[PromptAssembler] Code-review prompt STILL exceeds budget after hunk downgrade ` +
+        `(${result.length} > ${CODEX_PROMPT_BUDGET} chars). Truncating diff.`,
+      );
+      const overshoot = result.length - CODEX_PROMPT_BUDGET;
+      const truncatedDiff = pack.diff.substring(0, Math.max(0, pack.diff.length - overshoot - 200))
+        + `\n\n... [diff truncated — ${overshoot + 200} chars removed to fit Codex input limit] ...`;
+      result = this.renderCodeReviewFromTemplate(template, pack, 'hunks', truncatedDiff);
+    }
 
     return result;
+  }
+
+  /**
+   * Internal helper: render code-review template with configurable file detail level.
+   *
+   * Uses single-pass placeholder replacement to prevent cascade expansion
+   * (the diff often contains `{{placeholder}}` strings when reviewing
+   * template or assembler source code).
+   *
+   * @param mode - `'full'`: render full file content; `'hunks'`: render diff hunks only.
+   * @param diffOverride - Optional pre-truncated diff string.
+   */
+  private renderCodeReviewFromTemplate(
+    template: string,
+    pack: CodeReviewPack,
+    mode: 'full' | 'hunks',
+    diffOverride?: string,
+  ): string {
+    return this.replaceAllPlaceholders(template, {
+      diff: diffOverride ?? pack.diff,
+      changed_files: mode === 'full'
+        ? this.renderChangedFiles(pack.changed_files)
+        : this.renderChangedFilesHunksOnly(pack.changed_files),
+      unresolved_issues: this.renderUnresolvedIssues(pack.unresolved_issues),
+      accepted_issues: this.renderAcceptedIssues(pack.accepted_issues),
+      rejected_issues: this.renderRejectedIssues(pack.rejected_issues),
+      round_summary: pack.round_summary || 'First round',
+      round: pack.round.toString(),
+      context_files: this.renderContextFiles(pack.context_files),
+      review_scope: this.renderReviewScope(pack.review_scope),
+    });
   }
 
   /**
@@ -211,25 +210,18 @@ export class PromptAssembler {
   async renderClaudeCodeReviewPrompt(input: ClaudeCodeReviewInput): Promise<ClaudePromptParts> {
     const template = await this.store.loadTemplate(CLAUDE_CODE_REVIEW_TEMPLATE);
 
-    let result = template;
-    result = this.replacePlaceholder(result, 'round', input.round.toString());
-    result = this.replacePlaceholder(
-      result,
-      'codex_findings_with_ids',
-      this.renderCodeReviewFindings(input.codexFindingsWithIds, input.hasNewFindings),
-    );
-    result = this.replacePlaceholder(result, 'ledger_summary', input.ledgerSummary);
-    result = this.replacePlaceholder(result, 'diff', input.diff);
-    result = this.replacePlaceholder(
-      result,
-      'changed_files',
-      this.renderChangedFiles(input.changed_files),
-    );
+    const user = this.replaceAllPlaceholders(template, {
+      round: input.round.toString(),
+      codex_findings_with_ids: this.renderCodeReviewFindings(input.codexFindingsWithIds, input.hasNewFindings),
+      ledger_summary: input.ledgerSummary,
+      diff: input.diff,
+      changed_files: this.renderChangedFiles(input.changed_files),
+    });
 
     // Load system prompt template
     const system = await this.store.loadTemplate(CLAUDE_CODE_REVIEW_SYSTEM_TEMPLATE);
 
-    return { system, user: result };
+    return { system, user };
   }
 
   // ── Private: placeholder replacement ───────────────────────────
@@ -242,7 +234,31 @@ export class PromptAssembler {
    */
   private replacePlaceholder(template: string, name: string, value: string): string {
     const pattern = new RegExp(`\\{\\{${name}\\}\\}`, 'g');
-    return template.replace(pattern, value);
+    // Use a function replacer to avoid $-backreference expansion.
+    // String.prototype.replace interprets $', $`, $&, $1 etc. in the
+    // replacement string, which inflates prompts containing source code
+    // (e.g. template literals, regex, jQuery selectors).
+    return template.replace(pattern, () => value);
+  }
+
+  /**
+   * Replace **all** `{{key}}` placeholders in a single pass.
+   *
+   * Unlike calling {@link replacePlaceholder} sequentially (which can cascade
+   * — if the value for `{{diff}}` itself contains `{{changed_files}}`, the next
+   * replacement will expand it), this method scans the original template once
+   * and substitutes every known key from the map.  Values inserted by one
+   * placeholder are never re-scanned.
+   *
+   * @param template - The template string with `{{key}}` placeholders.
+   * @param values   - Map of placeholder name → replacement value.
+   * @returns Fully rendered string.
+   */
+  private replaceAllPlaceholders(template: string, values: Record<string, string>): string {
+    // Match any {{word}} — only replace if the key exists in the map.
+    return template.replace(/\{\{(\w+)\}\}/g, (_match, key: string) =>
+      Object.prototype.hasOwnProperty.call(values, key) ? values[key] : `{{${key}}}`,
+    );
   }
 
   // ── Private: data formatters ───────────────────────────────────
@@ -391,6 +407,27 @@ export class PromptAssembler {
         const header = `### \`${file.path}\` (${file.change_type}, +${file.stats.additions}/-${file.stats.deletions})`;
         const content = `\`\`\`${file.language}\n${file.content}\n\`\`\``;
         return `${header}\n${content}`;
+      })
+      .join('\n\n');
+  }
+
+  /**
+   * Render changed files using **diff hunks only** (no full file content).
+   *
+   * Used as a fallback when the full-content render exceeds the Codex prompt
+   * budget.  Each file shows its header + diff hunks instead of the entire
+   * source, dramatically reducing prompt size for large reviews.
+   */
+  private renderChangedFilesHunksOnly(files: ChangedFile[]): string {
+    if (files.length === 0) return 'No changed files.';
+
+    return files
+      .map((file) => {
+        const header = `### \`${file.path}\` (${file.change_type}, +${file.stats.additions}/-${file.stats.deletions})`;
+        const body = file.diff_hunks
+          ? `\`\`\`diff\n${file.diff_hunks}\n\`\`\``
+          : `\`\`\`${file.language}\n${file.content}\n\`\`\``; // fallback if no hunks
+        return `${header}\n${body}`;
       })
       .join('\n\n');
   }

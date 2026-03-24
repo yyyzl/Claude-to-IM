@@ -469,16 +469,48 @@ return {
 ```ts
 // src/lib/workflow/prompt-assembler.ts
 const template = await this.store.loadTemplate(SPEC_REVIEW_TEMPLATE);
-result = this.replacePlaceholder(result, 'spec', pack.spec);
-result = this.replacePlaceholder(result, 'plan', pack.plan);
-result = this.replacePlaceholder(result, 'unresolved_issues', this.renderUnresolvedIssues(pack.unresolved_issues));
+
+// 单次替换 — 不允许级联展开
+return this.replaceAllPlaceholders(template, {
+  spec: pack.spec,
+  plan: pack.plan,
+  unresolved_issues: this.renderUnresolvedIssues(pack.unresolved_issues),
+  // ...
+});
 ```
 
 要求：
 
 - `PackBuilder` 负责结构化数据，`PromptAssembler` 只负责模板替换。
 - 不要在 engine 里直接拼长 prompt 字符串。
-- `accepted_issues`、`resolved_issues`、`rejected_issues` 是不同语义，不能合并成一个“issues”数组后让 prompt 自己猜。
+- `accepted_issues`、`resolved_issues`、`rejected_issues` 是不同语义，不能合并成一个”issues”数组后让 prompt 自己猜。
+
+#### 模板渲染安全约束（从 Bug 分析中沉淀）
+
+> 背景：code-review 工作流中，diff 和源码内容会作为 value 注入模板。这些”用户内容”可能包含：
+>
+> - `$'` `$\`` `$&` `$1` 等 JS `String.replace` 特殊模式 → 导致 prompt 膨胀数倍
+> - `{{changed_files}}` 等占位符字符串（当 diff 包含对模板文件本身的修改时）→ 导致级联展开
+>
+> 以上两个问题叠加，曾导致 725KB 的 prompt 膨胀到 4.5MB，超出 Codex 的 1M 字符限制。
+
+**铁律：**
+
+1. **必须使用 `replaceAllPlaceholders()` 单次替换**。不允许 sequential 调用 `replacePlaceholder()`。单次扫描保证已插入的 value 不会被后续替换再次处理。
+2. **替换函数必须用 `() => value` 形式**。禁止将 value 作为 `String.replace` 的第二个字符串参数，因为 `$'` `$\`` 等会被解释为反向引用。
+3. **code-review prompt 必须在渲染后检查字符数**。`CODEX_PROMPT_BUDGET = 900_000`（Codex CLI 硬限制 1,048,576 字符，留 148K 余量给 wrapper 自身的 system prompt）。超限时自动降级：full content → diff hunks → 截断 diff。
+
+#### 外部系统硬限制
+
+| 系统 | 限制 | 值 | 来源 |
+|------|------|------|------|
+| Codex CLI `turn/start` | 输入最大字符数 | **1,048,576 chars** (1M) | `Error: Input exceeds the maximum length of 1048576 characters` |
+| Codex `config.toml` | 上下文窗口 | `model_context_window = 1000000` (token) | `~/.codex/config.toml` |
+| Codex `config.toml` | 自动压缩阈值 | `model_auto_compact_token_limit = 900000` (token) | `~/.codex/config.toml` |
+| codeagent-wrapper stdin | 管道缓冲区 | OS 依赖（Windows 4-64KB） | 已通过 32KB 分块写入处理 |
+| Claude Agent SDK | 输出 token | 200,000 | `maxOutputTokens` 参数 |
+
+> **字符 vs Token**：Codex 有两层限制。`turn/start` 的 1M 限制是**字符数**硬限制（由 CLI 本身检查，在 API 调用前拦截）。`model_context_window` 的 1M 限制是 **token 数**（由模型上下文窗口决定）。一般 1 token ≈ 3-4 chars，所以字符限制会先触发。`CODEX_PROMPT_BUDGET = 900_000` chars 就是基于这个字符硬限制设定的安全阈值。
 
 ### 4.4 上下文压缩
 
@@ -622,8 +654,20 @@ if (isNonRetryableError(errMsg)) {
   throw new ModelInvocationError(model, undefined, err, `${model} non-retryable error: ${errMsg}`);
 }
 if (attempt >= maxRetries) {
-  throw new TimeoutError(model, maxRetries);
+  // 保留真实错误信息，不要丢弃
+  throw new TimeoutError(model, maxRetries,
+    `${model} failed after ${totalAttempts} attempts. Last error: ${errMsg}`);
 }
+```
+
+不可重试错误模式（`NON_RETRYABLE_PATTERNS`）：
+
+```ts
+/authenticat/i,           // 认证失败
+/api[_\s-]?key/i,        // API 密钥问题
+/ENOENT/,                 // 可执行文件缺失
+/exceeds.*maximum.*length/i,  // 输入超限（Codex 1M 限制）
+/input.*too.*large/i,         // 通用输入过大
 ```
 
 要求：
@@ -631,6 +675,8 @@ if (attempt >= maxRetries) {
 - 所有模型调用都必须走 `ModelInvoker`。
 - 不要在 engine 里自己 `spawn` 子进程或自己 import Claude SDK。
 - 非重试错误必须尽早归类成 `ModelInvocationError`，不要浪费轮次。
+- `TimeoutError.message` 必须保留最后一次真实错误信息，不能只说 "timed out after N retries"。
+- 新增外部服务错误模式时，先判断是否不可重试，加入 `NON_RETRYABLE_PATTERNS`。
 
 ---
 

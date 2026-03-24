@@ -94,13 +94,15 @@ InboundMessage
 
 ## 何时必须触发跨层检查
 
-只要出现以下任一情况，就不要把它当成“局部小改”：
+只要出现以下任一情况，就不要把它当成”局部小改”：
 
 - 你改了 `host.ts`
 - 你给 `ChannelBinding`、`InboundMessage` 或其他共享类型增删字段
 - 你改了 `BridgeStore.getSetting()` 相关配置 key
 - 你新增平台适配器或新的命令回调格式
 - 你改了权限回调 payload、Markdown 渲染或 delivery 重试策略
+- **你把用户生成的内容（diff、源码、配置文本）注入到模板、命令或查询中** — 必须确认不会触发字符串特殊语义（`$` 反向引用、占位符级联、shell 注入等）
+- **你的组件输出会作为下游外部系统的输入** — 必须确认下游的大小/格式限制（如 Codex CLI 的 1M 字符限制）
 
 ---
 
@@ -136,7 +138,23 @@ InboundMessage
 
 - 把可复用逻辑抽回 `src/lib/bridge/`
 
-### 错误 4：忘记平台扇出
+### 错误 4：内容注入导致跨层膨胀
+
+坏例子：
+
+- 模板引擎用 `String.replace` 做占位符替换，替换值（用户内容）包含 `$'` 或其他占位符字符串
+- PackBuilder 不知道下游 Codex CLI 的 1M 字符限制，给 PromptAssembler 传了 2.4MB 的 pack
+- ModelInvoker 的 `withRetry` 把进程崩溃（输入超限 exit 1）误报为 "超时"
+
+好例子：
+
+- 单次扫描替换（`replaceAllPlaceholders`），已插入的 value 不会被再次处理
+- 渲染后检查字符数，自动降级（full content → diff hunks → truncate diff）
+- `NON_RETRYABLE_PATTERNS` 识别 "exceeds maximum length"，不浪费重试
+
+**教训**：当用户生成的内容（diff、源码、配置）被注入到模板/命令/查询中时，必须把它当作"不可信输入"处理。这不只是安全问题，也是正确性问题。
+
+### 错误 5：忘记平台扇出
 
 坏例子：
 
@@ -161,6 +179,8 @@ InboundMessage
 - [ ] 空值、无效值、极端输入是否覆盖
 - [ ] 每一层的错误处理是否一致
 - [ ] 测试、脚本、文档是否跟着契约一起更新
+- [ ] 用户内容注入是否安全（`String.replace` 的 `$` 反向引用、模板占位符级联、SQL/shell 注入）
+- [ ] 输出是否在下游系统的大小/格式限制内（Codex 1M chars、HTTP body limit 等）
 
 ---
 
