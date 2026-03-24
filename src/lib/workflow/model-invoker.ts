@@ -575,7 +575,11 @@ const NON_RETRYABLE_PATTERNS = [
   /invalid.*model/i,
   /exceeds.*maximum.*length/i,  // Codex CLI: "Input exceeds the maximum length of 1048576 characters"
   /input.*too.*large/i,         // Generic input-size rejection
-  /exited?\s+with\s+code\s+[1-9]/i,  // P1-2: Process exit code != 0 (deterministic failure, not transient)
+  // P1-2 (revised): Only treat high exit codes (≥2) as non-retryable.
+  // Exit code 1 is ambiguous — it can be a transient CLI/backend failure
+  // (network timeout, temporary service unavailability) that should be retried.
+  // Exit codes ≥2 typically indicate deterministic errors (e.g., 2=misuse, 126/127=not found).
+  /exited?\s+with\s+code\s+(?:[2-9]|[1-9]\d+)/i,
 ] as const;
 
 /**

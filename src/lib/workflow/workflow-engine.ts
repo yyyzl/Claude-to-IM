@@ -157,7 +157,7 @@ export class WorkflowEngine {
       updated_at: now,
       config,
       last_completed: null,
-      termination_state: { consecutive_parse_failures: 0, zero_progress_rounds: 0 },
+      termination_state: { consecutive_parse_failures: 0, zero_progress_rounds: 0, claude_consecutive_failures: 0 },
     };
 
     // Persist initial state (order: meta -> spec -> plan -> ledger -> snapshot)
@@ -307,7 +307,8 @@ export class WorkflowEngine {
     // P2-1/P2-2: Track consecutive Claude failures to enable short-circuit and degradation.
     // When Claude fails N consecutive rounds with the same deterministic error, skip
     // Claude in subsequent rounds (Codex-only degradation mode).
-    let claudeConsecutiveFailures = 0;
+    // ISS-010 fix: restore from persisted state instead of always starting at 0.
+    let claudeConsecutiveFailures = meta.termination_state?.claude_consecutive_failures ?? 0;
     const CLAUDE_FAILURE_THRESHOLD = 2; // Skip Claude after 2 consecutive failures
 
     while (round <= config.max_rounds) {
@@ -564,9 +565,11 @@ export class WorkflowEngine {
             reason: `Claude skipped after ${claudeConsecutiveFailures} consecutive failures (Codex-only degradation)`,
           });
 
-          // Skip to post_decision — do NOT call saveCheckpoint() here,
-          // as that sets status='paused' which is incorrect for degradation.
+          // ISS-004 fix: persist current_step so crash-safe resume enters
+          // post_decision instead of re-entering claude_decision.
           step = 'post_decision';
+          meta.current_step = 'post_decision';
+          await this.store.updateMeta(runId, { current_step: 'post_decision' });
           // Fall through to post_decision below
         }
       }
@@ -593,6 +596,30 @@ export class WorkflowEngine {
         if (!claudeRaw) {
           await this.emit(runId, round, 'claude_decision_started', { round });
 
+          // BUG-2 fix: supplement matchedIssues with orphaned open issues from
+          // previous rounds that were never decided (e.g. due to Claude parse failure).
+          // This ensures they get re-evaluated instead of being permanently "Unreviewed".
+          const orphanedIssues = (ledger?.issues ?? []).filter(
+            (i) => i.status === 'open' && !i.decided_by && i.round < round,
+          );
+          const existingIds = new Set(matchResult.matchedIssues.map((m) => m.issueId));
+          const supplemental = orphanedIssues
+            .filter((i) => !existingIds.has(i.id))
+            .map((i) => ({
+              issueId: i.id,
+              finding: {
+                issue: i.description,
+                severity: i.severity,
+                evidence: i.evidence ?? `Raised in round ${i.round}, never evaluated by Claude.`,
+                suggestion: '',
+                ...(i.source_file ? { file: i.source_file } : { file: 'unknown' }),
+                ...(i.source_line_range ? { line_range: i.source_line_range } : {}),
+                ...(i.category ? { category: i.category } : { category: 'bug' as const }),
+              },
+              isNew: false,
+            }));
+          const allMatchedIssues = [...matchResult.matchedIssues, ...supplemental];
+
           // Build Claude decision input from matched issues.
           // Route by profile type: code-review uses fresh context (no previousDecisions).
           let claudePrompt: { user: string; system: string };
@@ -601,13 +628,13 @@ export class WorkflowEngine {
             const { changedFiles, diff } = await this.loadCodeReviewContext(runId, snapshot);
             const crInput = await this.packBuilder.buildClaudeCodeReviewInput(
               runId, round,
-              matchResult.matchedIssues as Array<{ issueId: string; finding: CodeFinding; isNew: boolean }>,
+              allMatchedIssues as Array<{ issueId: string; finding: CodeFinding; isNew: boolean }>,
               changedFiles, diff,
             );
             claudePrompt = await this.promptAssembler.renderClaudeCodeReviewPrompt(crInput);
           } else {
             const input = await this.packBuilder.buildClaudeDecisionInput(
-              runId, round, matchResult.matchedIssues,
+              runId, round, allMatchedIssues,
             );
             claudePrompt = await this.promptAssembler.renderClaudeDecisionPrompt(input);
           }
@@ -656,9 +683,15 @@ export class WorkflowEngine {
               step = 'codex_review';
               meta.current_round = round;
               meta.current_step = 'codex_review';
+              // ISS-010 fix: persist claude failure counter for crash-safe resume
+              const curMeta1 = await this.store.getMeta(runId);
               await this.store.updateMeta(runId, {
                 current_round: round,
                 current_step: 'codex_review',
+                termination_state: {
+                  ...(curMeta1?.termination_state ?? { consecutive_parse_failures: 0, zero_progress_rounds: 0 }),
+                  claude_consecutive_failures: claudeConsecutiveFailures,
+                },
               });
               continue;
             }
@@ -690,9 +723,15 @@ export class WorkflowEngine {
               step = 'codex_review';
               meta.current_round = round;
               meta.current_step = 'codex_review';
+              // ISS-010 fix: persist claude failure counter for crash-safe resume
+              const curMetaTimeout = await this.store.getMeta(runId);
               await this.store.updateMeta(runId, {
                 current_round: round,
                 current_step: 'codex_review',
+                termination_state: {
+                  ...(curMetaTimeout?.termination_state ?? { consecutive_parse_failures: 0, zero_progress_rounds: 0 }),
+                  claude_consecutive_failures: claudeConsecutiveFailures,
+                },
               });
               continue;
             }
@@ -707,8 +746,17 @@ export class WorkflowEngine {
             return;
           }
 
-          // Claude succeeded — reset consecutive failure counter
+          // Claude succeeded — reset consecutive failure counter (both local and persisted)
           claudeConsecutiveFailures = 0;
+          const curMetaSuccess = await this.store.getMeta(runId);
+          if (curMetaSuccess?.termination_state?.claude_consecutive_failures) {
+            await this.store.updateMeta(runId, {
+              termination_state: {
+                ...curMetaSuccess.termination_state,
+                claude_consecutive_failures: 0,
+              },
+            });
+          }
 
           // Persist raw output FIRST (crash-safe ordering)
           await this.store.saveRoundArtifact(runId, round, 'claude-raw.md', claudeRaw);
@@ -1220,6 +1268,23 @@ export class WorkflowEngine {
     // call site (e.g. 'pre_termination', 'claude_decision', 'post_decision').
     // For completed workflows resume won't happen, so this is purely for
     // accurate metadata / debugging.
+    // ISS-009 fix: generate the report BEFORE marking status as completed.
+    // If persistCodeReviewReport() fails, status stays 'running' and the
+    // workflow_completed event is still emitted (with empty report paths)
+    // to avoid permanent state inconsistency.
+    let reportPaths: { markdown?: string; json?: string } = {};
+    if (meta?.workflow_type === 'code-review') {
+      try {
+        reportPaths = await this.persistCodeReviewReport(runId);
+      } catch (reportErr) {
+        console.error(
+          `[WorkflowEngine] Failed to persist code-review report (run=${runId}): ` +
+          `${reportErr instanceof Error ? reportErr.message : String(reportErr)}. ` +
+          `Continuing with workflow completion.`,
+        );
+      }
+    }
+
     const actualStep = meta?.current_step ?? 'post_decision';
     await this.store.updateMeta(runId, {
       status: 'completed',
@@ -1227,11 +1292,6 @@ export class WorkflowEngine {
       current_step: actualStep,
       last_completed: { round, step: actualStep },
     });
-
-    let reportPaths: { markdown?: string; json?: string } = {};
-    if (meta?.workflow_type === 'code-review') {
-      reportPaths = await this.persistCodeReviewReport(runId);
-    }
 
     await this.emit(runId, round, 'workflow_completed', {
       reason,
@@ -1404,9 +1464,10 @@ export class WorkflowEngine {
     await this.store.saveRunArtifact(runId, markdownName, markdown);
     await this.store.saveRunArtifact(runId, jsonName, JSON.stringify(data, null, 2));
 
+    // ISS-007 fix: return the full relative path so IM messages can locate the file
     return {
-      markdown: `${runId}/${markdownName}`,
-      json: `${runId}/${jsonName}`,
+      markdown: `.claude-workflows/runs/${runId}/${markdownName}`,
+      json: `.claude-workflows/runs/${runId}/${jsonName}`,
     };
   }
 

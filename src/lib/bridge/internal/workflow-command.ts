@@ -771,6 +771,13 @@ async function handleReport(
   cwd: string,
 ): Promise<void> {
   try {
+    // ISS-008 fix: validate runId format to prevent path traversal attacks.
+    // Only allow the expected YYYYMMDD-xxxxxx format.
+    if (!/^[0-9]{8}-[a-f0-9]{6}$/.test(cmd.runId)) {
+      await deliverText(adapter, msg, `无效的工作流 ID 格式: <code>${esc(cmd.runId)}</code>`);
+      return;
+    }
+
     const basePath = path.join(cwd, '.claude-workflows');
     const store = new WorkflowStore(basePath);
     const meta = await store.getMeta(cmd.runId);
@@ -809,10 +816,19 @@ async function handleReport(
       }
     }
 
+    // ISS-003 fix: when workflow is still running, prepend a clear disclaimer
+    // so users don't mistake an interim snapshot for a final conclusion.
+    if (meta.status !== 'completed') {
+      markdown = `> ⚠️ **Interim Report** — 工作流仍在运行中 (Round ${meta.current_round}/${meta.config?.max_rounds ?? '?'})，` +
+        `以下结论可能随后续轮次变化。\n\n` + markdown;
+    }
+
     // Chunk the report for delivery (Feishu rich text limit ~4000 chars).
-    // ISS-006: Reserve headroom for esc() expansion (&→&amp; etc.) and
-    // <pre>/<i> wrapper overhead (~60 chars). 3500 leaves ~500 chars buffer.
-    const MAX_CHUNK = 3500;
+    // ISS-011 fix: use a conservative limit that accounts for worst-case
+    // esc() expansion (& → &amp; is 5x, but average expansion is ~1.3x)
+    // and <pre>/<i> wrapper overhead (~60 chars). 2800 with ~1.4x expansion
+    // yields ~3920 — safely under the 4000-char platform limit.
+    const MAX_CHUNK = 2800;
     const chunks = chunkMarkdownReport(markdown, MAX_CHUNK);
 
     for (let i = 0; i < chunks.length; i++) {
@@ -1280,7 +1296,8 @@ function bindProgressEvents(
     // ISS-004: Only show report button for code-review workflows.
     // Previously all completed workflows got hasReport:true, causing
     // spec-review to show a misleading "View Report" button.
-    const hasReport = isCompleted && state.workflowType === 'code-review';
+    // ISS-001 fix: review-fix also generates code-review reports
+    const hasReport = isCompleted && (state.workflowType === 'code-review' || state.workflowType === 'review-fix');
     const cardJson = buildWorkflowCardJson(content, {
       headerTitle,
       headerTemplate,

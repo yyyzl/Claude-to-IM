@@ -31,8 +31,15 @@ export class JsonParser {
       return null;
     }
 
+    // Sanitize: strip BOM (U+FEFF) and other zero-width characters that
+    // LLM APIs occasionally prepend/append to responses, causing JSON.parse
+    // to fail even though the content looks valid when saved to a file.
+    const sanitized = raw
+      .replace(/^\uFEFF/, '')           // BOM at start
+      .replace(/[\u200B-\u200D\uFEFF]/g, '');  // zero-width chars anywhere
+
     // Strategy 1: direct parse on trimmed input
-    const trimmed = raw.trim();
+    const trimmed = sanitized.trim();
     const direct = tryJsonParse<T>(trimmed);
     if (direct !== null) {
       return direct;

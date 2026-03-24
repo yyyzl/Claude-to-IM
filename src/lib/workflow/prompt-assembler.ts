@@ -264,6 +264,18 @@ export class PromptAssembler {
       });
     }
 
+    // ISS-006 fix: final length check after all degradation attempts.
+    // If the prompt is STILL over budget (e.g. hunks alone exceed the limit),
+    // hard-truncate the user prompt to prevent Agent SDK crash.
+    if (user.length > CLAUDE_PROMPT_BUDGET) {
+      console.error(
+        `[PromptAssembler] Claude code-review prompt STILL exceeds budget after all degradation ` +
+        `(${user.length} > ${CLAUDE_PROMPT_BUDGET} chars). Hard-truncating to budget.`,
+      );
+      user = user.substring(0, CLAUDE_PROMPT_BUDGET - 100)
+        + `\n\n... [prompt hard-truncated to fit ${CLAUDE_PROMPT_BUDGET} char budget] ...`;
+    }
+
     // Load system prompt template
     const system = await this.store.loadTemplate(CLAUDE_CODE_REVIEW_SYSTEM_TEMPLATE);
 

@@ -212,8 +212,9 @@ export class ReportGenerator {
     // These are findings Claude never processed (e.g. early termination).
     if (open > 0) return 'needs_review';
 
-    // Only deferred, no accepted → needs_review (deferred still need attention)
-    if (accepted === 0 && deferred > 0) return 'needs_review';
+    // Any deferred findings → needs_review (deferred still need human attention,
+    // even if some other findings were already accepted).
+    if (deferred > 0) return 'needs_review';
 
     // All findings rejected (false positives) → clean
     if (rejected === totalFindings) return 'clean';

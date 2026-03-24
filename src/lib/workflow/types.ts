@@ -378,6 +378,9 @@ export interface WorkflowMeta {
     consecutive_parse_failures: number;
     /** Consecutive rounds with zero progress (triggers pause_for_human at 2). */
     zero_progress_rounds: number;
+    /** Consecutive Claude invocation failures — persisted for crash-safe resume.
+     *  When this reaches CLAUDE_FAILURE_THRESHOLD, Claude is skipped (Codex-only mode). */
+    claude_consecutive_failures?: number;
   };
 }
 

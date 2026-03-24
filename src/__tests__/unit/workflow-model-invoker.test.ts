@@ -91,17 +91,16 @@ describe('ModelInvoker.invokeCodex', () => {
 
     const invoker = new ModelInvoker(spawnImpl);
 
-    // P1-2: exit code 1 is now detected as a non-retryable error pattern
-    // ("exited with code 1"), so it throws ModelInvocationError instead of
-    // TimeoutError. This is correct — deterministic process failures should
-    // not be retried.
+    // ISS-002 fix: exit code 1 is now retryable (ambiguous — could be transient).
+    // Only exit codes ≥2 are treated as non-retryable. With maxRetries: 0,
+    // the retryable error exhausts retries and throws TimeoutError.
     await assert.rejects(
       invoker.invokeCodex('x'.repeat(100_000), {
         timeoutMs: 1000,
         maxRetries: 0,
       }),
       (err: unknown) => {
-        assert.ok(err instanceof ModelInvocationError);
+        assert.ok(err instanceof TimeoutError);
         return true;
       },
     );
