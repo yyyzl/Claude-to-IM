@@ -21,6 +21,7 @@ import * as path from 'node:path';
 import { createSpecReviewEngine, createCodeReviewEngine } from '../../workflow/index.js';
 import type { WorkflowEngine } from '../../workflow/workflow-engine.js';
 import { WorkflowStore } from '../../workflow/workflow-store.js';
+import { ReportGenerator } from '../../workflow/report-generator.js';
 import { DiffReader } from '../../workflow/diff-reader.js';
 import { CODE_REVIEW_PROFILE } from '../../workflow/types.js';
 import type { WorkflowConfig, WorkflowEvent, WorkflowMeta, ReviewScope } from '../../workflow/types.js';
@@ -39,6 +40,7 @@ export type WorkflowSubcommand =
   | { kind: 'code-review'; range?: string; branchDiff?: string; excludePatterns?: string[]; contextPaths: string[]; claudeModel?: string; codexBackend?: string }
   | { kind: 'review-fix'; range?: string; branchDiff?: string; excludePatterns?: string[]; contextPaths: string[]; claudeModel?: string; codexBackend?: string }
   | { kind: 'status'; runId?: string }
+  | { kind: 'report'; runId: string }
   | { kind: 'resume'; runId: string }
   | { kind: 'stop'; runId?: string };
 
@@ -149,6 +151,11 @@ export function parseWorkflowArgs(argsRaw: string): WorkflowSubcommand {
     case 'status':
       return { kind: 'status', runId: parts[1] };
 
+    case 'report': {
+      if (!parts[1]) return { kind: 'help' };
+      return { kind: 'report', runId: parts[1] };
+    }
+
     case 'resume': {
       if (!parts[1]) return { kind: 'help' };
       return { kind: 'resume', runId: parts[1] };
@@ -211,6 +218,10 @@ export async function handleWorkflowCommand(
 
     case 'status':
       await handleStatus(adapter, msg, cmd, key, cwd);
+      return;
+
+    case 'report':
+      await handleReport(adapter, msg, cmd, cwd);
       return;
 
     case 'resume':
@@ -742,6 +753,98 @@ async function handleStatus(
       '当前聊天没有运行中的工作流。\n使用 <code>/workflow spec-review &lt;spec&gt; &lt;plan&gt;</code> 或 <code>/workflow code-review</code> 启动。',
     );
   }
+}
+
+/**
+ * Handle `/workflow report <run-id>` — deliver the full code-review report.
+ *
+ * Reads the persisted Markdown report from the workflow store. If it doesn't
+ * exist yet (e.g. workflow still running), generates it on the fly.
+ *
+ * Long reports are chunked into segments that respect IM platform message
+ * length limits (≈4000 chars per segment for Feishu rich text).
+ */
+async function handleReport(
+  adapter: BaseChannelAdapter,
+  msg: InboundMessage,
+  cmd: Extract<WorkflowSubcommand, { kind: 'report' }>,
+  cwd: string,
+): Promise<void> {
+  try {
+    const basePath = path.join(cwd, '.claude-workflows');
+    const store = new WorkflowStore(basePath);
+    const meta = await store.getMeta(cmd.runId);
+
+    if (!meta) {
+      await deliverText(adapter, msg, `未找到工作流: <code>${esc(cmd.runId)}</code>`);
+      return;
+    }
+
+    // Try to read persisted report first
+    let markdown: string | null = null;
+    try {
+      // WorkflowStore persists runs under {basePath}/runs/{runId}/
+      const reportPath = path.join(basePath, 'runs', cmd.runId, 'code-review-report.md');
+      markdown = await fs.readFile(reportPath, 'utf-8');
+    } catch {
+      // Not persisted — generate on the fly
+    }
+
+    // Fallback: generate report on the fly
+    if (!markdown) {
+      try {
+        const generator = new ReportGenerator(store);
+        const result = await generator.generate(cmd.runId);
+        markdown = result.markdown;
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        await deliverText(adapter, msg, `生成报告失败: ${esc(errMsg)}`);
+        return;
+      }
+    }
+
+    // Chunk the report for delivery (Feishu rich text limit ~4000 chars)
+    const MAX_CHUNK = 3800;
+    const chunks = chunkMarkdownReport(markdown, MAX_CHUNK);
+
+    for (let i = 0; i < chunks.length; i++) {
+      const prefix = chunks.length > 1 ? `<i>[${i + 1}/${chunks.length}]</i>\n` : '';
+      // Wrap in <pre> for monospace rendering of Markdown tables
+      await deliverText(adapter, msg, `${prefix}<pre>${esc(chunks[i])}</pre>`);
+    }
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    await deliverText(adapter, msg, `读取报告失败: ${esc(errMsg)}`);
+  }
+}
+
+/**
+ * Split a Markdown report into chunks that respect a maximum character limit.
+ *
+ * Splits at section boundaries (## or ### headers) when possible,
+ * falling back to line boundaries.
+ */
+function chunkMarkdownReport(markdown: string, maxChunkSize: number): string[] {
+  if (markdown.length <= maxChunkSize) return [markdown];
+
+  const chunks: string[] = [];
+  const lines = markdown.split('\n');
+  let current = '';
+
+  for (const line of lines) {
+    // If adding this line would exceed the limit, flush current chunk
+    if (current.length + line.length + 1 > maxChunkSize && current.length > 0) {
+      chunks.push(current.trimEnd());
+      current = '';
+    }
+    current += (current ? '\n' : '') + line;
+  }
+
+  if (current.trim()) {
+    chunks.push(current.trimEnd());
+  }
+
+  return chunks.length > 0 ? chunks : [markdown.substring(0, maxChunkSize)];
 }
 
 async function handleResume(
@@ -1376,6 +1479,21 @@ function bindProgressEvents(
     }
   });
 
+  engine.on('claude_decision_skipped', (e: WorkflowEvent) => {
+    const data = e.data as { error_type?: string; message?: string; reason?: string; skipped?: boolean };
+    const round = ensureRound(state, e.round);
+    round.claude = 'done';
+    const detail = data.message
+      ? data.message.substring(0, 100)
+      : (data.reason ?? 'Claude 跳过');
+    round.warnings.push(detail);
+    if (state.cardMode) {
+      scheduleCardUpdate();
+    } else {
+      pushText(`⚠️ Claude 决策跳过 (第 ${e.round} 轮): ${esc(detail)}`);
+    }
+  });
+
   engine.on('codex_parse_error', (e: WorkflowEvent) => {
     const round = ensureRound(state, e.round);
     round.warnings.push(`Codex 输出解析失败`);
@@ -1493,6 +1611,7 @@ function buildHelpText(): string {
     '',
     '<b>控制命令</b>',
     '<code>/workflow status [run-id]</code>  查看状态',
+    '<code>/workflow report &lt;run-id&gt;</code>  查看审查报告',
     '<code>/workflow resume &lt;run-id&gt;</code>  恢复工作流',
     '<code>/workflow stop [run-id]</code>  停止工作流（可恢复）',
     '<code>/workflow help</code>  显示此帮助',

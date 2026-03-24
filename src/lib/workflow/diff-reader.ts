@@ -209,14 +209,19 @@ export class DiffReader {
       });
     }
 
-    const changedFiles = await this.readFileContents(files, diff);
+    // Filter the raw diff text to remove sections belonging to excluded files.
+    // Without this, snapshot.diff contains ~60% noise from excluded files,
+    // inflating downstream prompts far beyond budget (P0-1).
+    const filteredDiff = this.filterDiffByExcluded(diff, excludedFiles);
+
+    const changedFiles = await this.readFileContents(files, filteredDiff);
 
     return {
       created_at: new Date().toISOString(),
       head_commit: headCommit,
       base_ref: baseRef,
       scope,
-      diff,
+      diff: filteredDiff,
       files,
       changed_files: changedFiles,
       excluded_files: excludedFiles,
@@ -497,6 +502,35 @@ export class DiffReader {
     }
 
     return results;
+  }
+
+  /**
+   * Remove diff sections for excluded files from the raw diff text.
+   *
+   * Uses {@link splitDiffByFile} to split the diff into per-file sections,
+   * then reassembles only sections whose file path is NOT in the excluded set.
+   *
+   * @param diff - Full unified diff text.
+   * @param excludedFiles - Files excluded from review (with reasons).
+   * @returns Filtered diff text with excluded file sections removed.
+   */
+  private filterDiffByExcluded(
+    diff: string,
+    excludedFiles: Array<{ path: string; reason: string }>,
+  ): string {
+    if (excludedFiles.length === 0 || !diff) return diff;
+
+    const excludedPaths = new Set(excludedFiles.map((f) => f.path));
+    const perFileDiffs = this.splitDiffByFile(diff);
+
+    const kept: string[] = [];
+    for (const [filePath, section] of perFileDiffs) {
+      if (!excludedPaths.has(filePath)) {
+        kept.push(section);
+      }
+    }
+
+    return kept.join('');
   }
 
   /**

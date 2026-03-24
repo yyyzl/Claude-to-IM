@@ -58,7 +58,7 @@ export type WorkflowEventType =
   | 'codex_review_timeout' | 'codex_review_retried'
   | 'codex_parse_error'
   | 'claude_decision_started' | 'claude_decision_completed'
-  | 'claude_decision_timeout' | 'claude_decision_retried'
+  | 'claude_decision_timeout' | 'claude_decision_retried' | 'claude_decision_skipped'
   | 'claude_parse_error'
   | 'decision_validation_failed'
   | 'issue_created' | 'issue_status_changed'
@@ -821,7 +821,7 @@ export interface CodeReviewReport {
   /** Per-file review results. */
   file_results: FileReviewResult[];
   /** Overall conclusion. */
-  conclusion: 'clean' | 'minor_issues_only' | 'issues_found' | 'critical_issues';
+  conclusion: 'clean' | 'needs_review' | 'minor_issues_only' | 'issues_found' | 'critical_issues';
   /** Report generation timestamp (ISO 8601). */
   generated_at: string;
   /** Files excluded from review. */
@@ -839,7 +839,7 @@ export interface FileReviewResult {
     category: CodeReviewCategory;
     description: string;
     line_range?: { start: number; end: number };
-    action: 'accept' | 'reject' | 'defer';
+    action: 'accept' | 'reject' | 'defer' | 'unreviewed';
     reason: string;
     fix_instruction?: string;
   }>;

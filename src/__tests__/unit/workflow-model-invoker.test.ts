@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import type { ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 
 import { ModelInvoker } from '../../lib/workflow/model-invoker.js';
-import { TimeoutError } from '../../lib/workflow/types.js';
+import { TimeoutError, ModelInvocationError } from '../../lib/workflow/types.js';
 
 class FakeWritable extends EventEmitter {
   constructor(private readonly onWrite?: () => void) {
@@ -91,13 +91,17 @@ describe('ModelInvoker.invokeCodex', () => {
 
     const invoker = new ModelInvoker(spawnImpl);
 
+    // P1-2: exit code 1 is now detected as a non-retryable error pattern
+    // ("exited with code 1"), so it throws ModelInvocationError instead of
+    // TimeoutError. This is correct — deterministic process failures should
+    // not be retried.
     await assert.rejects(
       invoker.invokeCodex('x'.repeat(100_000), {
         timeoutMs: 1000,
         maxRetries: 0,
       }),
       (err: unknown) => {
-        assert.ok(err instanceof TimeoutError);
+        assert.ok(err instanceof ModelInvocationError);
         return true;
       },
     );

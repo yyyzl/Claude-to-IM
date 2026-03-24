@@ -575,6 +575,7 @@ const NON_RETRYABLE_PATTERNS = [
   /invalid.*model/i,
   /exceeds.*maximum.*length/i,  // Codex CLI: "Input exceeds the maximum length of 1048576 characters"
   /input.*too.*large/i,         // Generic input-size rejection
+  /exited?\s+with\s+code\s+[1-9]/i,  // P1-2: Process exit code != 0 (deterministic failure, not transient)
 ] as const;
 
 /**

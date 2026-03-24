@@ -79,18 +79,31 @@ export class ReportGenerator {
     let accepted = 0;
     let rejected = 0;
     let deferred = 0;
+    let open = 0;
     for (const issue of issues) {
       switch (issue.status) {
         case 'accepted': accepted++; break;
         case 'rejected': rejected++; break;
         case 'deferred': deferred++; break;
+        case 'open': open++; break;
+        // 'resolved' counted via accepted path in determineConclusion
       }
     }
 
-    // Count by severity
+    // Count by severity (ALL issues — for report display)
     const bySeverity: Record<Severity, number> = { critical: 0, high: 0, medium: 0, low: 0 };
     for (const issue of issues) {
       bySeverity[issue.severity]++;
+    }
+
+    // Count by severity excluding rejected (for conclusion logic only).
+    // A rejected critical is a false positive — it should NOT inflate the
+    // final verdict to "critical_issues". (Fix 2: reviewer caught this.)
+    const bySeverityActive: Record<Severity, number> = { critical: 0, high: 0, medium: 0, low: 0 };
+    for (const issue of issues) {
+      if (issue.status !== 'rejected') {
+        bySeverityActive[issue.severity]++;
+      }
     }
 
     // Count by category (only issues with category field)
@@ -104,8 +117,9 @@ export class ReportGenerator {
     // Group issues by file
     const fileResults = this.groupByFile(issues);
 
-    // Determine conclusion
-    const conclusion = this.determineConclusion(bySeverity, accepted, rejected, deferred);
+    // Determine conclusion — use bySeverityActive (excludes rejected) to avoid
+    // false positives inflating the verdict.
+    const conclusion = this.determineConclusion(bySeverityActive, accepted, rejected, deferred, open);
 
     return {
       run_id: runId,
@@ -136,11 +150,13 @@ export class ReportGenerator {
         fileMap.set(filePath, { path: filePath, issues: [] });
       }
 
-      const actionMap: Record<string, 'accept' | 'reject' | 'defer'> = {
+      // P0-3: Distinguish 'open' (never reviewed by Claude) from 'deferred' (Claude chose to defer).
+      // Previously both mapped to 'defer', masking unreviewed issues as if they had been triaged.
+      const actionMap: Record<string, 'accept' | 'reject' | 'defer' | 'unreviewed'> = {
         accepted: 'accept',
         rejected: 'reject',
         deferred: 'defer',
-        open: 'defer',      // open issues shown as deferred in report
+        open: 'unreviewed', // never reviewed by Claude — no decision was made
         resolved: 'accept', // resolved shown as accepted
       };
 
@@ -150,7 +166,7 @@ export class ReportGenerator {
         category: issue.category ?? 'bug',
         description: issue.description,
         line_range: issue.source_line_range,
-        action: actionMap[issue.status] ?? 'defer',
+        action: actionMap[issue.status] ?? 'unreviewed',
         reason: issue.decision_reason ?? '',
         fix_instruction: issue.fix_instruction,
       });
@@ -160,13 +176,42 @@ export class ReportGenerator {
     return [...fileMap.values()].sort((a, b) => a.path.localeCompare(b.path));
   }
 
+  /**
+   * Determine the overall conclusion of the code review.
+   *
+   * Decision tree (P0-2 fix):
+   *   1. No findings at all → clean
+   *   2. All findings rejected → clean (all false positives)
+   *   3. Unreviewed (open) findings exist → needs_review
+   *   4. Accepted + critical severity → critical_issues
+   *   5. Accepted + high severity → issues_found
+   *   6. Only accepted medium/low → minor_issues_only
+   *
+   * Previously: `accepted === 0 → clean` was wrong when open issues existed.
+   */
   private determineConclusion(
     bySeverity: Record<Severity, number>,
     accepted: number,
-    _rejected: number,
-    _deferred: number,
+    rejected: number,
+    deferred: number,
+    open: number,
   ): CodeReviewReport['conclusion'] {
-    if (accepted === 0) return 'clean';
+    const totalFindings = Object.values(bySeverity).reduce((a, b) => a + b, 0);
+
+    // No findings at all → clean
+    if (totalFindings === 0) return 'clean';
+
+    // All findings rejected (false positives) → clean
+    if (rejected === totalFindings) return 'clean';
+
+    // Unreviewed (open) findings exist → needs_review
+    // These are findings Claude never processed (e.g. Claude crashed).
+    if (open > 0) return 'needs_review';
+
+    // Only deferred, no accepted → needs_review (deferred still need attention)
+    if (accepted === 0 && deferred > 0) return 'needs_review';
+
+    // From here, accepted > 0
     if (bySeverity.critical > 0) return 'critical_issues';
     if (bySeverity.high > 0) return 'issues_found';
     return 'minor_issues_only';
@@ -296,6 +341,7 @@ export class ReportGenerator {
   private formatConclusion(conclusion: CodeReviewReport['conclusion']): string {
     switch (conclusion) {
       case 'clean': return '✅ Clean';
+      case 'needs_review': return '⚠️ Needs Review';
       case 'minor_issues_only': return '🟡 Minor Issues Only';
       case 'issues_found': return '🟠 Issues Found';
       case 'critical_issues': return '🔴 Critical Issues';

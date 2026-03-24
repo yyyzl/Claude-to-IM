@@ -1,0 +1,5 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/workflow-engine.md", "reason": "工作流引擎规范 - 状态机、Profile、终止逻辑"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "错误处理规范"}
+{"file": ".trellis/spec/backend/module-boundaries.md", "reason": "模块边界约束"}

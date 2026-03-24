@@ -304,6 +304,12 @@ export class WorkflowEngine {
 
     let round = meta.current_round;
 
+    // P2-1/P2-2: Track consecutive Claude failures to enable short-circuit and degradation.
+    // When Claude fails N consecutive rounds with the same deterministic error, skip
+    // Claude in subsequent rounds (Codex-only degradation mode).
+    let claudeConsecutiveFailures = 0;
+    const CLAUDE_FAILURE_THRESHOLD = 2; // Skip Claude after 2 consecutive failures
+
     while (round <= config.max_rounds) {
       // Emit round_started (only when starting the first step of the round)
       if (meta.current_step === 'codex_review') {
@@ -545,6 +551,27 @@ export class WorkflowEngine {
       // Step C: claude_decision
       // ════════════════════════════════════════════════════════════
       if (step === 'claude_decision') {
+        // P2-1/P2-2: If Claude has failed consecutively, skip Claude decision step
+        // entirely (Codex-only degradation). Codex findings become the final output.
+        if (claudeConsecutiveFailures >= CLAUDE_FAILURE_THRESHOLD) {
+          console.warn(
+            `[WorkflowEngine] Claude skipped (run=${runId}, round=${round}) — ` +
+            `${claudeConsecutiveFailures} consecutive failures. Running in Codex-only mode.`,
+          );
+          await this.emit(runId, round, 'claude_decision_skipped', {
+            round,
+            skipped: true,
+            reason: `Claude skipped after ${claudeConsecutiveFailures} consecutive failures (Codex-only degradation)`,
+          });
+
+          // Skip to post_decision — do NOT call saveCheckpoint() here,
+          // as that sets status='paused' which is incorrect for degradation.
+          step = 'post_decision';
+          // Fall through to post_decision below
+        }
+      }
+
+      if (step === 'claude_decision') {
         // Reload transient state if resuming into this step
         if (!codexOutput) {
           codexOutput = await this.reloadCodexOutput(runId, round);
@@ -603,24 +630,50 @@ export class WorkflowEngine {
               await this.saveCheckpoint(runId, round, 'claude_decision');
               return; // Exit loop -- workflow has been paused
             }
-            // Non-retryable API/config error — terminate immediately with clear message
+            // Non-retryable API/config error — P2-1: increment failure counter
+            // and skip to next round instead of terminating immediately.
+            // Subsequent rounds will enter Codex-only mode if threshold is reached.
             if (err instanceof ModelInvocationError) {
+              claudeConsecutiveFailures++;
               console.error(
                 `[WorkflowEngine] Claude decision API ERROR (run=${runId}, round=${round}, ` +
-                `status=${err.statusCode ?? 'n/a'}): ${err.message}`,
+                `status=${err.statusCode ?? 'n/a'}): ${err.message}` +
+                ` [consecutive failures: ${claudeConsecutiveFailures}]`,
               );
-              await this.terminateWorkflowWithError(runId, round, err);
-              return;
+              await this.emit(runId, round, 'claude_decision_skipped', {
+                round,
+                error_type: 'model_invocation_error',
+                message: err.message,
+                consecutive_failures: claudeConsecutiveFailures,
+              });
+
+              // Skip Claude decision, advance to next round
+              round++;
+              if (round > config.max_rounds) {
+                await this.terminateWorkflow(runId, round - 1, 'max_rounds_reached');
+                return;
+              }
+              step = 'codex_review';
+              meta.current_round = round;
+              meta.current_step = 'codex_review';
+              await this.store.updateMeta(runId, {
+                current_round: round,
+                current_step: 'codex_review',
+              });
+              continue;
             }
             if (err instanceof TimeoutError) {
+              claudeConsecutiveFailures++;
               console.error(
                 `[WorkflowEngine] Claude decision TIMEOUT (run=${runId}, round=${round}, ` +
-                `retries=${err.retriesExhausted}). Skipping to next round.`,
+                `retries=${err.retriesExhausted}). Skipping to next round.` +
+                ` [consecutive failures: ${claudeConsecutiveFailures}]`,
               );
               await this.emit(runId, round, 'claude_decision_timeout', {
                 round,
                 retries_exhausted: err.retriesExhausted,
                 message: err.message,
+                consecutive_failures: claudeConsecutiveFailures,
               });
 
               // TIMEOUT GUARD: skip Claude decision, advance to next round
@@ -653,6 +706,9 @@ export class WorkflowEngine {
             await this.terminateWorkflowWithError(runId, round, err);
             return;
           }
+
+          // Claude succeeded — reset consecutive failure counter
+          claudeConsecutiveFailures = 0;
 
           // Persist raw output FIRST (crash-safe ordering)
           await this.store.saveRoundArtifact(runId, round, 'claude-raw.md', claudeRaw);
@@ -1159,9 +1215,12 @@ export class WorkflowEngine {
       resolved: allIssues.filter((i) => i.status === 'resolved').length,
     };
 
+    // P1-3: Update current_step to match last_completed.step, preventing
+    // contradictory meta like status=completed + current_step=claude_decision.
     await this.store.updateMeta(runId, {
       status: 'completed',
       current_round: round,
+      current_step: 'post_decision',
       last_completed: { round, step: 'post_decision' },
     });
 

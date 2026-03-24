@@ -872,9 +872,8 @@ async function handleMessage(
       const action = parts[1]; // stop, resume, report
       const runId = parts.slice(2).join(':');
       // Convert to synthetic /workflow command and re-process
-      const syntheticText = action === 'report'
-        ? `/workflow status ${runId}`
-        : `/workflow ${action} ${runId}`;
+      // P0-4: Route 'report' action to /workflow report (not /workflow status).
+      const syntheticText = `/workflow ${action} ${runId}`;
       const syntheticMsg: InboundMessage = { ...msg, text: syntheticText, callbackData: undefined };
       // Acknowledge the button press immediately
       ack();

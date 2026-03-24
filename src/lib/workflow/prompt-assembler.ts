@@ -35,6 +35,15 @@ import type {
  */
 const CODEX_PROMPT_BUDGET = 900_000;
 
+/**
+ * Prompt character budget for Claude Agent SDK code-review calls.
+ *
+ * Claude models have a large context window, but the Agent SDK subprocess
+ * can crash when input exceeds ~900KB (P1-1). We set a budget of 800K
+ * as the safe threshold, with the same full → hunks → truncate degradation.
+ */
+const CLAUDE_PROMPT_BUDGET = 800_000;
+
 /** Template file name for the Codex spec-review prompt. */
 const SPEC_REVIEW_TEMPLATE = 'spec-review-pack.md';
 
@@ -210,13 +219,50 @@ export class PromptAssembler {
   async renderClaudeCodeReviewPrompt(input: ClaudeCodeReviewInput): Promise<ClaudePromptParts> {
     const template = await this.store.loadTemplate(CLAUDE_CODE_REVIEW_TEMPLATE);
 
-    const user = this.replaceAllPlaceholders(template, {
+    // P1-1: Budget control for Claude prompt — same full → hunks → truncate
+    // degradation as Codex, but with a separate budget constant.
+    const commonValues = {
       round: input.round.toString(),
       codex_findings_with_ids: this.renderCodeReviewFindings(input.codexFindingsWithIds, input.hasNewFindings),
       ledger_summary: input.ledgerSummary,
+    };
+
+    // First pass: full content
+    let user = this.replaceAllPlaceholders(template, {
+      ...commonValues,
       diff: input.diff,
       changed_files: this.renderChangedFiles(input.changed_files),
     });
+
+    // Check budget — downgrade to hunks-only if over
+    if (user.length > CLAUDE_PROMPT_BUDGET) {
+      console.warn(
+        `[PromptAssembler] Claude code-review prompt exceeds budget ` +
+        `(${user.length} > ${CLAUDE_PROMPT_BUDGET} chars). ` +
+        `Downgrading changed_files from full content to diff-hunk context.`,
+      );
+      user = this.replaceAllPlaceholders(template, {
+        ...commonValues,
+        diff: input.diff,
+        changed_files: this.renderChangedFilesHunksOnly(input.changed_files),
+      });
+    }
+
+    // Safety valve: truncate diff if still over budget
+    if (user.length > CLAUDE_PROMPT_BUDGET) {
+      console.warn(
+        `[PromptAssembler] Claude code-review prompt STILL exceeds budget after hunk downgrade ` +
+        `(${user.length} > ${CLAUDE_PROMPT_BUDGET} chars). Truncating diff.`,
+      );
+      const overshoot = user.length - CLAUDE_PROMPT_BUDGET;
+      const truncatedDiff = input.diff.substring(0, Math.max(0, input.diff.length - overshoot - 200))
+        + `\n\n... [diff truncated — ${overshoot + 200} chars removed to fit Claude input limit] ...`;
+      user = this.replaceAllPlaceholders(template, {
+        ...commonValues,
+        diff: truncatedDiff,
+        changed_files: this.renderChangedFilesHunksOnly(input.changed_files),
+      });
+    }
 
     // Load system prompt template
     const system = await this.store.loadTemplate(CLAUDE_CODE_REVIEW_SYSTEM_TEMPLATE);
