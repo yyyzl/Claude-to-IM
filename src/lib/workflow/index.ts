@@ -5,9 +5,11 @@
  * functions for creating workflow engines:
  * - {@link createSpecReviewEngine} — Spec-Review workflow (original)
  * - {@link createCodeReviewEngine} — Code-Review workflow (P1b-CR-0)
+ * - {@link AutoFixer} — Review-and-Fix post-processor (P1b-CR-1)
  *
- * All P1b-CR-0 types (CodeReviewPack, CodeFinding, WorkflowProfile, etc.)
- * are automatically exported via `export * from './types.js'`.
+ * All P1b-CR-0/CR-1 types (CodeReviewPack, CodeFinding, WorkflowProfile,
+ * FixResult, AutoFixOptions, etc.) are automatically exported via
+ * `export * from './types.js'`.
  *
  * @module workflow
  */
@@ -29,6 +31,8 @@ export { IssueMatcher } from './issue-matcher.js';
 export { PatchApplier } from './patch-applier.js';
 export { DecisionValidator } from './decision-validator.js';
 export { DiffReader } from './diff-reader.js';
+export { ReportGenerator } from './report-generator.js';
+export { AutoFixer } from './auto-fixer.js';
 
 // Local imports for factory functions (re-exports above only forward
 // symbols; they do NOT bring them into the current module scope).

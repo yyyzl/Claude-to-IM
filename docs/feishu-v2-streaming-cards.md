@@ -1,6 +1,6 @@
 # 飞书 V2 — 流式卡片 + 权限按钮
 
-> 状态：**待开始**
+> 状态：**已完成（P2b 基础能力）** — 流式卡片 ✅ · 工具进度 ✅ · 权限按钮 ✅ · 工作流交互按钮（停止/恢复/报告）✅ · card.action.trigger monkey-patch ✅ · 393/393 测试通过
 > 目标：将 CodePilot 飞书 V2 的核心能力移植到 claude-to-im 开源库
 
 ## 背景
@@ -160,15 +160,15 @@ onStreamEnd?(chatId: string, status: 'completed' | 'interrupted' | 'error', resp
 
 ## 实施顺序
 
-一次性实施，但按依赖顺序编码：
+一次性实施，按依赖顺序编码（全部 ✅ 已完成）：
 
-1. **types.ts** — 新增 ToolCallInfo
-2. **channel-adapter.ts** — 新增可选方法声明
-3. **markdown/feishu.ts** — 新增卡片构建函数
-4. **conversation-engine.ts** — 新增 onToolEvent 回调
-5. **feishu-adapter.ts** — 核心实现（卡片生命周期 + monkey-patch + 按钮）
-6. **bridge-manager.ts** — 串联流式回调
-7. **skill: setup-guides.md** — 更新文档
+1. ✅ **types.ts** — 新增 ToolCallInfo
+2. ✅ **channel-adapter.ts** — 新增可选方法声明（onStreamText/onToolEvent/onStreamEnd/createWorkflowCard/updateWorkflowCard/finalizeWorkflowCard）
+3. ✅ **markdown/feishu.ts** — 新增卡片构建函数 + 工作流交互按钮（停止/恢复/报告）
+4. ✅ **conversation-engine.ts** — 新增 onToolEvent 回调
+5. ✅ **feishu-adapter.ts** — 核心实现（流式卡片 + monkey-patch + 权限按钮 + 工作流卡片）
+6. ✅ **bridge-manager.ts** — 串联流式回调 + workflow:* 按钮回调分发
+7. ⬜ **skill: setup-guides.md** — 更新文档（待后续补充权限 scope 列表）
 
 ## 测试计划
 

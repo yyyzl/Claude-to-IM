@@ -2,11 +2,11 @@
 
 > Based on the final plan v2 (multi-robot-collaboration)
 >
-> Scope: P0 (protocol definition) + P1a (Spec-Review single workflow MVP) + P2a (IM command integration)
+> Scope: P0 (protocol definition) + P1a (Spec-Review MVP) + P2a (IM command integration) + P1b-CR-0 (Code-Review MVP) + P1b-CR-1 (Review-and-Fix) + P2b (飞书卡片增强)
 >
-> Completed: P0 ✅ · P1a ✅ · P2a ✅
+> Completed: P0 ✅ · P1a ✅ · P2a ✅ · P1b-CR-0 ✅ · P1b-CR-1 ✅ · P2b ✅
 >
-> Future phases (P1b / P2b / P3) outlined at the end, not in current scope.
+> Future phases (P1b-CR-2 PR集成 / P3 SO API后端) outlined at the end, not in current scope.
 
 ---
 

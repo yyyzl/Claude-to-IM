@@ -185,6 +185,7 @@ export function buildFinalCardJson(
  * Layout:
  *   [header]  — title with coloured template
  *   [markdown] — progress content (rounds, events)
+ *   [column_set] — optional action buttons (Pause/Stop/Report)
  *   [hr + notation] — optional footer (elapsed / status)
  *
  * Used by workflow-command.ts to create & update the single progress card.
@@ -195,12 +196,21 @@ export function buildWorkflowCardJson(
     headerTitle?: string;
     headerTemplate?: string;
     footer?: { status: string; elapsed: string } | null;
+    /** Run ID for action button callbacks. If set, adds interactive buttons. */
+    runId?: string;
+    /** Whether the workflow is still running (controls which buttons to show). */
+    isRunning?: boolean;
+    /** Whether a report is available (shows "View Report" button). */
+    hasReport?: boolean;
   } = {},
 ): string {
   const {
     headerTitle = '🔄 Spec-Review 工作流',
     headerTemplate = 'blue',
     footer = null,
+    runId,
+    isRunning = false,
+    hasReport = false,
   } = opts;
 
   const elements: Array<Record<string, unknown>> = [];
@@ -212,6 +222,66 @@ export function buildWorkflowCardJson(
       text_align: 'left',
       text_size: 'normal',
     });
+  }
+
+  // Action buttons — shown when runId is provided
+  if (runId) {
+    const buttons: Array<Record<string, unknown>> = [];
+
+    if (isRunning) {
+      // Running → show Stop button
+      buttons.push({
+        tag: 'column',
+        width: 'auto',
+        elements: [{
+          tag: 'button',
+          text: { tag: 'plain_text', content: '⏹ 停止' },
+          type: 'danger',
+          size: 'small',
+          value: { callback_data: `workflow:stop:${runId}` },
+        }],
+      });
+    }
+
+    if (hasReport) {
+      // Report available → show Report button
+      buttons.push({
+        tag: 'column',
+        width: 'auto',
+        elements: [{
+          tag: 'button',
+          text: { tag: 'plain_text', content: '📊 查看报告' },
+          type: 'primary',
+          size: 'small',
+          value: { callback_data: `workflow:report:${runId}` },
+        }],
+      });
+    }
+
+    if (!isRunning && runId) {
+      // Completed/paused → show Resume button
+      buttons.push({
+        tag: 'column',
+        width: 'auto',
+        elements: [{
+          tag: 'button',
+          text: { tag: 'plain_text', content: '▶️ 恢复' },
+          type: 'default',
+          size: 'small',
+          value: { callback_data: `workflow:resume:${runId}` },
+        }],
+      });
+    }
+
+    if (buttons.length > 0) {
+      elements.push({ tag: 'hr' });
+      elements.push({
+        tag: 'column_set',
+        flex_mode: 'none',
+        horizontal_align: 'left',
+        columns: buttons,
+      });
+    }
   }
 
   if (footer) {

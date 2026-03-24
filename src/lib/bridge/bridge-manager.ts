@@ -864,8 +864,26 @@ async function handleMessage(
   };
   const ack = opts?.ack || defaultAck;
 
-  // Handle callback queries (permission buttons)
+  // Handle callback queries (permission buttons, workflow action buttons)
   if (msg.callbackData) {
+    // ── Workflow card action buttons (workflow:stop/resume/report) ──
+    if (msg.callbackData.startsWith('workflow:')) {
+      const parts = msg.callbackData.split(':');
+      const action = parts[1]; // stop, resume, report
+      const runId = parts.slice(2).join(':');
+      // Convert to synthetic /workflow command and re-process
+      const syntheticText = action === 'report'
+        ? `/workflow status ${runId}`
+        : `/workflow ${action} ${runId}`;
+      const syntheticMsg: InboundMessage = { ...msg, text: syntheticText, callbackData: undefined };
+      // Acknowledge the button press immediately
+      ack();
+      // Re-dispatch as a normal text command
+      await handleMessage(adapter, syntheticMsg, { ack: () => {} });
+      return;
+    }
+
+    // ── Permission buttons (perm:action:id) ──
     const handled = broker.handlePermissionCallback(msg.callbackData, msg.address.chatId, msg.callbackMessageId);
     if (handled) {
       // Send confirmation

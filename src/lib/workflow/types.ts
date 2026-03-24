@@ -940,3 +940,46 @@ export const CODE_REVIEW_PROFILE: WorkflowProfile = {
     acceptedIsTerminal: true,                // accepted = terminal (review conclusion)
   },
 };
+
+// ═══════════════════════════════════════════════════════════════
+// P1b-CR-1: Review-and-Fix Types
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Result of the auto-fix process.
+ *
+ * Returned by {@link AutoFixer.applyFixes} after running Codex in an
+ * isolated git worktree to apply fix_instructions from accepted issues.
+ */
+export interface FixResult {
+  /** Whether all fixes were applied successfully. */
+  success: boolean;
+  /** Total number of accepted issues with fix_instructions. */
+  totalCount: number;
+  /** Number of successfully fixed issues. */
+  fixedCount: number;
+  /** Issue IDs that were successfully fixed. */
+  fixedIssueIds: string[];
+  /** Issue IDs that failed to fix. */
+  failedIssueIds: string[];
+  /** Error messages for failed fixes. */
+  errors: string[];
+  /** Path to the worktree where fixes were applied. */
+  worktreePath: string;
+  /** Branch name in the worktree. */
+  worktreeBranch: string;
+  /** Preview of the generated diff (first 5000 chars). */
+  diffPreview: string;
+}
+
+/**
+ * Options for the auto-fix process.
+ */
+export interface AutoFixOptions {
+  /** Codex CLI backend name (default: 'codex'). */
+  codexBackend?: string;
+  /** Timeout for each Codex fix call in ms (default: 300_000 = 5 min). */
+  codexTimeoutMs?: number;
+  /** Maximum concurrent fix tasks (default: 1 — sequential for safety). */
+  maxConcurrency?: number;
+}

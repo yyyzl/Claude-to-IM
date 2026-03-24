@@ -40,7 +40,10 @@
     "build": "tsc -p tsconfig.build.json",
     "prepare": "npm run build",
     "typecheck": "tsc --noEmit",
-    "workflow:review": "node --import tsx src/lib/workflow/cli.ts",
+    "workflow:cli": "node --import tsx src/lib/workflow/cli.ts",
+    "workflow:spec-review": "node --import tsx src/lib/workflow/cli.ts spec-review",
+    "workflow:code-review": "node --import tsx src/lib/workflow/cli.ts code-review",
+    "workflow:review-fix": "node --import tsx src/lib/workflow/cli.ts review-fix",
     "test:unit": "node --test --import tsx --test-timeout=15000 src/__tests__/unit/bridge-*.test.ts src/__tests__/unit/workflow-*.test.ts",
     "test": "npm run typecheck && npm run test:unit",
     "example": "npx tsx src/lib/bridge/examples/mock-host.ts"

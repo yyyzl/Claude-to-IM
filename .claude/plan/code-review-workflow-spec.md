@@ -1,12 +1,12 @@
 # Spec: Code Review Workflow (Adversarial Verification)
 
-> **Scope**: P1b-CR-0 (review-only MVP) — 在现有 Workflow Engine 上扩展代码审查能力
+> **Scope**: P1b-CR-0 (review-only MVP) + P1b-CR-1 (review-and-fix) — 在现有 Workflow Engine 上扩展代码审查 + 自动修复能力
 >
 > **前置依赖**: P0 ✅ · P1a ✅ · P2a ✅（Spec-Review 已完整实现）
 >
-> **状态**: ✅ **IM 闭环 MVP 已收尾** — `Phase 1-5` 完成，真实 `diff + changed_files` 已接入主链路，完成态会落地 Markdown/JSON 报告，`367/367` 单元测试通过，TS 编译零错误；**独立 CLI `code-review` 子命令仍未实现**
+> **状态**: ✅ **P1b-CR-0 + P1b-CR-1 已完成** — `Phase 1-5` 完成，独立 CLI `code-review` / `review-fix` 子命令已实现，`AutoFixer` worktree 隔离修复模块已实现，`393/393` 单元测试通过，TS 编译零错误
 >
-> **目标**: 复用 Workflow Engine 核心循环，新增 `code-review` 工作流类型
+> **目标**: 复用 Workflow Engine 核心循环，新增 `code-review` 和 `review-fix` 工作流类型
 
 ---
 
@@ -53,10 +53,10 @@
 - 增量审查（只审查新改动，跳过已审查的文件）
 - 多语言感知的 AST 级分析
 
-### 1.5 Future Phases
+### 1.5 Phase Status
 
-- **P1b-CR-1**: Review-and-Fix 模式 — Codex 根据 fix_instruction 自动修复代码（worktree 隔离）
-- **P1b-CR-2**: PR 集成 — 审查结果自动发布为 PR review comments
+- **P1b-CR-1**: ✅ Review-and-Fix 模式 — `AutoFixer` + worktree 隔离 + Codex 修复（`auto-fixer.ts` 240行，CLI `review-fix` 子命令，Bridge `/workflow review-fix`）
+- **P1b-CR-2**: 🟠 PR 集成 — 审查结果自动发布为 PR review comments（未开始）
 
 ---
 

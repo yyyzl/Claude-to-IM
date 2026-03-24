@@ -37,6 +37,7 @@ export type WorkflowSubcommand =
   | { kind: 'help' }
   | { kind: 'spec-review'; specPath: string; planPath: string; contextPaths: string[]; claudeModel?: string; codexBackend?: string }
   | { kind: 'code-review'; range?: string; branchDiff?: string; excludePatterns?: string[]; contextPaths: string[]; claudeModel?: string; codexBackend?: string }
+  | { kind: 'review-fix'; range?: string; branchDiff?: string; excludePatterns?: string[]; contextPaths: string[]; claudeModel?: string; codexBackend?: string }
   | { kind: 'status'; runId?: string }
   | { kind: 'resume'; runId: string }
   | { kind: 'stop'; runId?: string };
@@ -85,7 +86,8 @@ export function parseWorkflowArgs(argsRaw: string): WorkflowSubcommand {
 
   switch (sub) {
     case 'spec-review':
-    case 'code-review': {
+    case 'code-review':
+    case 'review-fix': {
       // Extract common named options first
       let claudeModel: string | undefined;
       let codexBackend: string | undefined;
@@ -106,7 +108,7 @@ export function parseWorkflowArgs(argsRaw: string): WorkflowSubcommand {
         codexBackend = parts[backendIdx + 1];
       }
 
-      if (sub === 'code-review') {
+      if (sub === 'code-review' || sub === 'review-fix') {
         let range: string | undefined;
         let branchDiff: string | undefined;
         let excludePatterns: string[] | undefined;
@@ -127,7 +129,7 @@ export function parseWorkflowArgs(argsRaw: string): WorkflowSubcommand {
         }
 
         return {
-          kind: 'code-review',
+          kind: sub as 'code-review' | 'review-fix',
           range, branchDiff, excludePatterns,
           contextPaths, claudeModel, codexBackend,
         };
@@ -201,6 +203,10 @@ export async function handleWorkflowCommand(
 
     case 'code-review':
       await handleStartCodeReview(adapter, msg, cmd, cwd, key);
+      return;
+
+    case 'review-fix':
+      await handleStartReviewFix(adapter, msg, cmd, cwd, key);
       return;
 
     case 'status':
@@ -477,6 +483,174 @@ async function handleStartCodeReview(
         });
 
         // Cleanup on completion
+        const current = activeWorkflows.get(key);
+        if (current && current.engine === engine) activeWorkflows.delete(key);
+      } catch (err: unknown) {
+        const current = activeWorkflows.get(key);
+        if (current && current.engine === engine) activeWorkflows.delete(key);
+        const errMsg = err instanceof Error ? err.message : String(err);
+        deliverText(adapter, msg, `工作流异常退出: ${esc(errMsg)}`).catch(() => {});
+      }
+    })();
+
+  } catch (err: unknown) {
+    activeWorkflows.delete(key);
+    throw err;
+  } finally {
+    const current = activeWorkflows.get(key);
+    if (current && current.engine === (null as unknown as WorkflowEngine)) {
+      activeWorkflows.delete(key);
+    }
+  }
+}
+
+/**
+ * Handle `/workflow review-fix` — code-review + auto-fix via Codex in worktree.
+ *
+ * Flow: code-review workflow → collect accepted fix_instructions → Codex applies in worktree.
+ */
+async function handleStartReviewFix(
+  adapter: BaseChannelAdapter,
+  msg: InboundMessage,
+  cmd: Extract<WorkflowSubcommand, { kind: 'review-fix' }>,
+  cwd: string,
+  key: string,
+): Promise<void> {
+  // ── Guard: only one workflow per chat ──
+  if (activeWorkflows.has(key)) {
+    const running = activeWorkflows.get(key)!;
+    await deliverText(adapter, msg,
+      `已有工作流正在运行 (run: <code>${esc(running.runId)}</code>)\n` +
+      `使用 <code>/workflow stop</code> 停止后再启动新的。`,
+    );
+    return;
+  }
+
+  // Reserve the slot IMMEDIATELY
+  activeWorkflows.set(key, {
+    engine: null as unknown as WorkflowEngine,
+    runId: '(reserving)',
+    chatId: msg.address.chatId,
+    channelType: msg.address.channelType,
+    startedAt: Date.now(),
+  });
+
+  try {
+    // ── Build ReviewScope from CLI options ──
+    const scope: ReviewScope = buildReviewScope(cmd);
+
+    // ── Read context files ──
+    const contextFiles: Array<{ path: string; content: string }> = [];
+    for (const p of cmd.contextPaths) {
+      const fullPath = resolveSafePath(cwd, p);
+      if (!fullPath) {
+        await deliverText(adapter, msg, `Context 路径不在工作目录范围内: <code>${esc(p)}</code>，跳过。`);
+        continue;
+      }
+      try {
+        const content = await fs.readFile(fullPath, 'utf-8');
+        contextFiles.push({ path: p, content });
+      } catch {
+        await deliverText(adapter, msg, `Context 文件无法读取: <code>${esc(fullPath)}</code>，跳过。`);
+      }
+    }
+
+    // ── Create DiffReader and read snapshot ──
+    const diffReader = new DiffReader(cwd);
+    let snapshot;
+    try {
+      snapshot = await diffReader.createSnapshot(scope);
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      activeWorkflows.delete(key);
+      await deliverText(adapter, msg, `读取 git diff 失败: ${esc(errMsg)}`);
+      return;
+    }
+
+    if (snapshot.files.length === 0) {
+      activeWorkflows.delete(key);
+      await deliverText(adapter, msg, '没有发现代码变更，无需审查。');
+      return;
+    }
+
+    // ── Create engine and upgrade slot ──
+    const basePath = path.join(cwd, '.claude-workflows');
+    const engine = createCodeReviewEngine(basePath);
+
+    activeWorkflows.set(key, {
+      engine,
+      runId: '(pending)',
+      chatId: msg.address.chatId,
+      channelType: msg.address.channelType,
+      startedAt: Date.now(),
+    });
+
+    // Register run_id capture listener
+    engine.on('workflow_started', (e: WorkflowEvent) => {
+      const current = activeWorkflows.get(key);
+      if (current && current.engine === engine) {
+        activeWorkflows.set(key, { ...current, runId: e.run_id });
+      }
+    });
+
+    // Bind progress events
+    bindProgressEvents(engine, adapter, msg, key);
+
+    // Confirm start
+    const scopeDesc = formatScopeDescription(scope);
+    await deliverText(adapter, msg,
+      `🔧 正在启动 Review-and-Fix 工作流...\n` +
+      `范围: <code>${esc(scopeDesc)}</code>\n` +
+      `文件: ${snapshot.files.length} 个` +
+      (snapshot.excluded_files.length > 0 ? `（已排除 ${snapshot.excluded_files.length} 个）` : '') +
+      '\n<i>审查完成后将自动使用 Codex 在 worktree 中修复代码</i>',
+    );
+
+    // ── Build config overrides ──
+    const configOverrides: Partial<WorkflowConfig> = {};
+    if (cmd.claudeModel) configOverrides.claude_model = cmd.claudeModel;
+    if (cmd.codexBackend) configOverrides.codex_backend = cmd.codexBackend;
+
+    // ── Launch workflow + auto-fix ──
+    void (async () => {
+      try {
+        const runId = await engine.start({
+          spec: '',
+          plan: '',
+          contextFiles,
+          config: configOverrides,
+          profile: CODE_REVIEW_PROFILE,
+          snapshot,
+        });
+
+        // ── Auto-fix phase ──
+        await deliverText(adapter, msg, '📝 审查完成，开始自动修复...');
+
+        const { AutoFixer } = await import('../../workflow/auto-fixer.js');
+        const fixer = new AutoFixer(cwd, engine, basePath);
+        const fixResult = await fixer.applyFixes(runId, {
+          codexBackend: cmd.codexBackend,
+          codexTimeoutMs: configOverrides.codex_timeout_ms,
+        });
+
+        if (fixResult.fixedCount > 0) {
+          await deliverText(adapter, msg,
+            `✅ <b>Auto-fix 完成</b>\n` +
+            `修复: ${fixResult.fixedCount}/${fixResult.totalCount} 个问题\n` +
+            `Worktree: <code>${esc(fixResult.worktreePath)}</code>\n` +
+            `分支: <code>${esc(fixResult.worktreeBranch)}</code>\n\n` +
+            `<i>使用 git merge 合并修复，或直接在 worktree 中检查</i>`,
+          );
+        } else if (fixResult.totalCount > 0) {
+          await deliverText(adapter, msg,
+            `⚠️ Auto-fix 未能修复任何问题 (共 ${fixResult.totalCount} 个)\n` +
+            fixResult.errors.map((e) => `  • ${esc(e)}`).join('\n'),
+          );
+        } else {
+          await deliverText(adapter, msg, '✅ 审查未发现需要修复的问题。');
+        }
+
+        // Cleanup
         const current = activeWorkflows.get(key);
         if (current && current.engine === engine) activeWorkflows.delete(key);
       } catch (err: unknown) {
@@ -900,6 +1074,8 @@ function bindProgressEvents(
     const content = renderProgressMarkdown(state);
     const cardJson = buildWorkflowCardJson(content, {
       footer: { status: '🔄 运行中', elapsed },
+      runId: state.runId,
+      isRunning: true,
     });
 
     adapter.updateWorkflowCard?.(msg.address.chatId, cardJson).catch((err) => {
@@ -916,6 +1092,8 @@ function bindProgressEvents(
     const content = renderProgressMarkdown(state);
     const cardJson = buildWorkflowCardJson(content, {
       footer: { status: '🔄 启动中', elapsed: '0s' },
+      runId: state.runId,
+      isRunning: true,
     });
 
     state.cardCreated = true; // optimistic — prevent double creation
@@ -949,10 +1127,14 @@ function bindProgressEvents(
     }
 
     const elapsed = formatElapsed(Date.now() - state.startedAt);
+    const isCompleted = footerStatus.includes('✅') || footerStatus.includes('完成');
     const cardJson = buildWorkflowCardJson(content, {
       headerTitle,
       headerTemplate,
       footer: { status: footerStatus, elapsed },
+      runId: state.runId,
+      isRunning: false,
+      hasReport: isCompleted,
     });
 
     adapter.finalizeWorkflowCard?.(msg.address.chatId, cardJson)?.catch((err) => {
@@ -1296,6 +1478,13 @@ function buildHelpText(): string {
     '',
     '<code>/workflow code-review --exclude "*.test.ts,*.md"</code>',
     '  排除指定文件模式',
+    '',
+    '<b>Review-and-Fix (P1b-CR-1)</b>',
+    '<code>/workflow review-fix</code>',
+    '  审查 + 自动修复 staged changes',
+    '',
+    '<code>/workflow review-fix --branch-diff main</code>',
+    '  审查并修复分支变更（Codex 在 worktree 中修复）',
     '',
     '<b>通用选项</b>',
     '<code>--model &lt;model-id&gt;</code>  指定 Claude 模型',
