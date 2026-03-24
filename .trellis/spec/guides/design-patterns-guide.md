@@ -717,6 +717,18 @@ GitNexus 追踪到 `resume()` 由 `workflow/cli.ts` 和
 - 只记录最终完成状态，不记录中间 step。
 - 恢复时靠目录里有没有文件去猜当前状态，而不是读 meta。
 - 在 step 切换前不持久化元数据，导致崩溃后恢复点漂移。
+- **用局部变量跨 round 传递可恢复状态**（如 `let failureCount = 0`），resume 后局部变量从零开始，降级逻辑失效。所有影响 resume 语义的计数器必须持久化到 `termination_state`。
+- **error recovery path 不同步 `current_step`**：降级分支修改了局部 `step` 变量却不 `updateMeta`，崩溃后 resume 进入错误的分支。
+
+### 状态一致性铁律
+
+> **凡是修改局部状态变量（`step`、`round`、failure counters）的地方，都必须同步 `updateMeta()`。**
+
+实际操作：
+
+1. 搜索 `step =`、`round++`、`Failures++` 等赋值
+2. 确认每个赋值点紧跟着对应的 `updateMeta()` 调用
+3. 特别注意 error handling 分支——它们是最容易遗漏持久化的地方
 
 ### 路径覆盖要求（来自 ISS-005 教训）
 
