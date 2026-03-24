@@ -5,7 +5,7 @@
   用法：
     powershell -ExecutionPolicy Bypass -File scripts/start-bridges.ps1 [start|stop]
 
-  start   (默认) npm install → npm run build → 启动双桥接窗口
+  start   (默认) 先停止 3 个已知实例 → npm install → npm run build → 启动双桥接窗口
   stop    优雅停止双桥接，并兼容清理旧的默认 bridge-runner，超时则强杀
 #>
 
@@ -152,9 +152,12 @@ function Stop-AllBridges {
 }
 
 # ════════════════════════════════════════
-# Start：install → build → 启动窗口
+# Start：先停已知实例 → install → build → 启动窗口
 # ════════════════════════════════════════
 function Start-AllBridges {
+  Write-Host "[bridges] start: 先停止 3 个已知桥接实例..."
+  Stop-AllBridges
+
   $nodeModulesExist = Test-Path (Join-Path $repoRoot "node_modules")
 
   # npm install --ignore-scripts：跳过 prepare 钩子（避免 install 阶段触发 tsc 编译撞文件锁）

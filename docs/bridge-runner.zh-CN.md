@@ -117,9 +117,10 @@ BRIDGE_CONTROL_DIR=".ccg/bridge-codex" npx tsx scripts/feishu-claude-bridge.ts .
 powershell -ExecutionPolicy Bypass -File scripts/start-bridges.ps1
 ```
 
-`start-bridges.ps1 stop` / `start` 现在会额外兼容清理历史默认实例
-`.ccg/bridge-runner/`，避免旧的 `.env.bridge.local` 进程与
-`.env.bridge.codex` 共用同一飞书应用时继续抢消息。
+`start-bridges.ps1 stop` 会停止这 3 个已知实例：`.ccg/bridge-claude/`、
+`.ccg/bridge-codex/`、`.ccg/bridge-runner/`；`start` 会先执行同样的定向清理，
+再只启动 Claude / Codex 两个窗口，避免旧的 `.env.bridge.local` 进程与
+`.env.bridge.codex` 共用同一飞书应用时继续抢消息，也不会扫描或误杀其他 bridge。
 
 ## 3.1) 推荐：用 `scripts/bridge.ps1` 管理（更适合远程/无人值守）
 

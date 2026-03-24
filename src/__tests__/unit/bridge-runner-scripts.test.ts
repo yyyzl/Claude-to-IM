@@ -33,5 +33,6 @@ describe("bridge runner scripts", () => {
     assert.match(managerScriptText, /\$cleanupOnlyBridges\s*=\s*@\(/);
     assert.match(managerScriptText, /\.ccg\/bridge-runner/);
     assert.match(managerScriptText, /\$bridgesToStop\s*=\s*@\(\$managedBridges \+ \$cleanupOnlyBridges\)/);
+    assert.match(managerScriptText, /function Start-AllBridges \{[\s\S]*?Stop-AllBridges/);
   });
 });
