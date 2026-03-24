@@ -62,6 +62,20 @@ const CLAUDE_CODE_REVIEW_TEMPLATE = 'code-review-decision.md';
 /** Template file name for the Claude code-review system prompt. */
 const CLAUDE_CODE_REVIEW_SYSTEM_TEMPLATE = 'code-review-decision-system.md';
 
+/** Degradation information recorded when prompt exceeds budget limits. */
+export interface DegradationInfo {
+  /** How severely the prompt was degraded. */
+  level: 'hunks' | 'truncated' | 'hard_truncated';
+  /** Which model's budget triggered the degradation. */
+  target: 'codex' | 'claude';
+  /** Character count before degradation. */
+  original_size: number;
+  /** Character count after degradation. */
+  final_size: number;
+  /** Budget limit that was exceeded. */
+  budget: number;
+}
+
 /** Separated prompt components for Claude API calls. */
 export interface ClaudePromptParts {
   /** System prompt (role definition, decision framework). */
@@ -81,6 +95,13 @@ export interface ClaudePromptParts {
  * ```
  */
 export class PromptAssembler {
+  /**
+   * Degradation info from the most recent render call.
+   * `null` when no degradation occurred. Reset at the start of each render.
+   * The engine should check this after calling any render method.
+   */
+  lastDegradation: DegradationInfo | null = null;
+
   constructor(private readonly store: WorkflowStore) {}
 
   // ── Public API ──────────────────────────────────────────────────
@@ -101,7 +122,7 @@ export class PromptAssembler {
       rejected_issues: this.renderRejectedIssues(pack.rejected_issues),
       resolved_issues: this.renderResolvedIssues(pack.resolved_issues ?? []),
       accepted_issues: this.renderAcceptedIssues(pack.accepted_issues ?? []),
-      round_summary: pack.round_summary || 'First round',
+      round_summary: pack.round_summary || '首轮审查，暂无上一轮摘要。',
       round: pack.round.toString(),
       context_files: this.renderContextFiles(pack.context_files),
     });
@@ -124,7 +145,7 @@ export class PromptAssembler {
     const user = this.replaceAllPlaceholders(template, {
       round: input.round.toString(),
       codex_findings_with_ids: this.renderCodexFindings(input.codexFindingsWithIds, input.hasNewFindings),
-      previous_decisions: input.previousDecisions || 'First round - no previous decisions.',
+      previous_decisions: input.previousDecisions || '首轮审查，暂无历史决策。',
       ledger_summary: input.ledgerSummary,
       current_spec: input.currentSpec,
       current_plan: input.currentPlan,
@@ -149,10 +170,12 @@ export class PromptAssembler {
    *   2. If still over, the diff itself is truncated with a notice.
    */
   async renderCodeReviewPrompt(pack: CodeReviewPack): Promise<string> {
+    this.lastDegradation = null;
     const template = await this.store.loadTemplate(CODE_REVIEW_TEMPLATE);
 
     // First pass: render with full file content
     let result = this.renderCodeReviewFromTemplate(template, pack, 'full');
+    const originalSize = result.length;
 
     // Check against budget — Codex CLI hard limit is 1,048,576 chars.
     // Use 900K as the budget to leave headroom for Codex's own system prompt.
@@ -163,6 +186,10 @@ export class PromptAssembler {
         `Downgrading changed_files from full content to diff-hunk context.`,
       );
       result = this.renderCodeReviewFromTemplate(template, pack, 'hunks');
+      this.lastDegradation = {
+        level: 'hunks', target: 'codex',
+        original_size: originalSize, final_size: result.length, budget: CODEX_PROMPT_BUDGET,
+      };
     }
 
     // Safety valve: if still over budget after hunk downgrade, truncate the diff
@@ -175,6 +202,10 @@ export class PromptAssembler {
       const truncatedDiff = pack.diff.substring(0, Math.max(0, pack.diff.length - overshoot - 200))
         + `\n\n... [diff truncated — ${overshoot + 200} chars removed to fit Codex input limit] ...`;
       result = this.renderCodeReviewFromTemplate(template, pack, 'hunks', truncatedDiff);
+      this.lastDegradation = {
+        level: 'truncated', target: 'codex',
+        original_size: originalSize, final_size: result.length, budget: CODEX_PROMPT_BUDGET,
+      };
     }
 
     return result;
@@ -204,7 +235,7 @@ export class PromptAssembler {
       unresolved_issues: this.renderUnresolvedIssues(pack.unresolved_issues),
       accepted_issues: this.renderAcceptedIssues(pack.accepted_issues),
       rejected_issues: this.renderRejectedIssues(pack.rejected_issues),
-      round_summary: pack.round_summary || 'First round',
+      round_summary: pack.round_summary || '首轮代码审查，暂无上一轮摘要。',
       round: pack.round.toString(),
       context_files: this.renderContextFiles(pack.context_files),
       review_scope: this.renderReviewScope(pack.review_scope),
@@ -217,6 +248,7 @@ export class PromptAssembler {
    * Fresh context — no previousDecisions field.
    */
   async renderClaudeCodeReviewPrompt(input: ClaudeCodeReviewInput): Promise<ClaudePromptParts> {
+    this.lastDegradation = null;
     const template = await this.store.loadTemplate(CLAUDE_CODE_REVIEW_TEMPLATE);
 
     // P1-1: Budget control for Claude prompt — same full → hunks → truncate
@@ -233,6 +265,7 @@ export class PromptAssembler {
       diff: input.diff,
       changed_files: this.renderChangedFiles(input.changed_files),
     });
+    const originalSize = user.length;
 
     // Check budget — downgrade to hunks-only if over
     if (user.length > CLAUDE_PROMPT_BUDGET) {
@@ -246,6 +279,10 @@ export class PromptAssembler {
         diff: input.diff,
         changed_files: this.renderChangedFilesHunksOnly(input.changed_files),
       });
+      this.lastDegradation = {
+        level: 'hunks', target: 'claude',
+        original_size: originalSize, final_size: user.length, budget: CLAUDE_PROMPT_BUDGET,
+      };
     }
 
     // Safety valve: truncate diff if still over budget
@@ -262,6 +299,10 @@ export class PromptAssembler {
         diff: truncatedDiff,
         changed_files: this.renderChangedFilesHunksOnly(input.changed_files),
       });
+      this.lastDegradation = {
+        level: 'truncated', target: 'claude',
+        original_size: originalSize, final_size: user.length, budget: CLAUDE_PROMPT_BUDGET,
+      };
     }
 
     // ISS-006 fix: final length check after all degradation attempts.
@@ -274,6 +315,10 @@ export class PromptAssembler {
       );
       user = user.substring(0, CLAUDE_PROMPT_BUDGET - 100)
         + `\n\n... [prompt hard-truncated to fit ${CLAUDE_PROMPT_BUDGET} char budget] ...`;
+      this.lastDegradation = {
+        level: 'hard_truncated', target: 'claude',
+        original_size: originalSize, final_size: user.length, budget: CLAUDE_PROMPT_BUDGET,
+      };
     }
 
     // Load system prompt template
@@ -332,7 +377,7 @@ export class PromptAssembler {
    * @returns Formatted string, or `"None"` if the array is empty.
    */
   private renderUnresolvedIssues(issues: Issue[]): string {
-    if (issues.length === 0) return 'None';
+    if (issues.length === 0) return '无';
 
     return issues
       .map((issue) => `- [${issue.id}] (${issue.severity}) ${issue.description}`)
@@ -350,7 +395,7 @@ export class PromptAssembler {
    * @returns Formatted string, or `"None"` if the array is empty.
    */
   private renderRejectedIssues(rejected: RejectedIssueSummary[]): string {
-    if (rejected.length === 0) return 'None';
+    if (rejected.length === 0) return '无';
 
     return rejected
       .map((item) => `- [${item.id}] ${item.description} (rejected in round ${item.round_rejected})`)
@@ -368,7 +413,7 @@ export class PromptAssembler {
    * @returns Formatted string, or `"None"` if the array is empty.
    */
   private renderResolvedIssues(issues: ResolvedIssueSummary[]): string {
-    if (issues.length === 0) return 'None';
+    if (issues.length === 0) return '无';
     return issues
       .map((i) => `- [${i.id}] (${i.severity}, resolved in R${i.resolved_in_round}) ${i.description}`)
       .join('\n');
@@ -385,7 +430,7 @@ export class PromptAssembler {
    * @returns Formatted string, or `"None"` if the array is empty.
    */
   private renderAcceptedIssues(issues: AcceptedIssueSummary[]): string {
-    if (issues.length === 0) return 'None';
+    if (issues.length === 0) return '无';
     return issues
       .map((i) => `- [${i.id}] (${i.severity}, raised in R${i.round}) ${i.description}`)
       .join('\n');
@@ -405,7 +450,7 @@ export class PromptAssembler {
    * @returns Formatted string, or `"None"` if the array is empty.
    */
   private renderContextFiles(files: ContextFile[]): string {
-    if (files.length === 0) return 'None';
+    if (files.length === 0) return '无';
 
     return files
       .map((file) => `### ${file.path}\n\`\`\`\n${file.content}\n\`\`\``)
@@ -436,15 +481,15 @@ export class PromptAssembler {
     hasNewFindings: boolean,
   ): string {
     if (!hasNewFindings) {
-      return 'No new findings from Codex.';
+      return '本轮 Codex 未发现新的问题。';
     }
 
     return findings
       .map((item, index) => {
-        const newMarker = item.isNew ? ' (NEW)' : '';
+        const newMarker = item.isNew ? ' （新问题）' : '';
         const header = `${index + 1}. [${item.issueId}]${newMarker} (${item.finding.severity}) ${item.finding.issue}`;
-        const evidence = `   Evidence: ${item.finding.evidence}`;
-        const suggestion = `   Suggestion: ${item.finding.suggestion}`;
+        const evidence = `   证据：${item.finding.evidence}`;
+        const suggestion = `   建议：${item.finding.suggestion}`;
         return `${header}\n${evidence}\n${suggestion}`;
       })
       .join('\n');
@@ -458,11 +503,11 @@ export class PromptAssembler {
    * Each file shows its change type, language, and content.
    */
   private renderChangedFiles(files: ChangedFile[]): string {
-    if (files.length === 0) return 'No changed files.';
+    if (files.length === 0) return '无变更文件。';
 
     return files
       .map((file) => {
-        const header = `### \`${file.path}\` (${file.change_type}, +${file.stats.additions}/-${file.stats.deletions})`;
+        const header = `### \`${file.path}\`（${formatChangeType(file.change_type)}，+${file.stats.additions}/-${file.stats.deletions}）`;
         const content = `\`\`\`${file.language}\n${file.content}\n\`\`\``;
         return `${header}\n${content}`;
       })
@@ -477,11 +522,11 @@ export class PromptAssembler {
    * source, dramatically reducing prompt size for large reviews.
    */
   private renderChangedFilesHunksOnly(files: ChangedFile[]): string {
-    if (files.length === 0) return 'No changed files.';
+    if (files.length === 0) return '无变更文件。';
 
     return files
       .map((file) => {
-        const header = `### \`${file.path}\` (${file.change_type}, +${file.stats.additions}/-${file.stats.deletions})`;
+        const header = `### \`${file.path}\`（${formatChangeType(file.change_type)}，+${file.stats.additions}/-${file.stats.deletions}）`;
         const body = file.diff_hunks
           ? `\`\`\`diff\n${file.diff_hunks}\n\`\`\``
           : `\`\`\`${file.language}\n${file.content}\n\`\`\``; // fallback if no hunks
@@ -496,15 +541,15 @@ export class PromptAssembler {
   private renderReviewScope(scope: import('./types.js').ReviewScope): string {
     switch (scope.type) {
       case 'staged':
-        return 'Staged changes (git diff --cached)';
+        return '暂存区变更（git diff --cached）';
       case 'unstaged':
-        return 'Unstaged working tree changes (git diff)';
+        return '工作区未暂存变更（git diff）';
       case 'commit':
-        return `Single commit: ${scope.base_ref ?? 'HEAD'}`;
+        return `单个提交：${scope.base_ref ?? 'HEAD'}`;
       case 'commit_range':
-        return `Commit range: ${scope.base_ref}..${scope.head_ref}`;
+        return `提交区间：${scope.base_ref}..${scope.head_ref}`;
       case 'branch':
-        return `Branch diff: ${scope.base_ref}...${scope.head_ref}`;
+        return `分支差异：${scope.base_ref}...${scope.head_ref}`;
       default:
         return scope.type;
     }
@@ -520,21 +565,38 @@ export class PromptAssembler {
     hasNewFindings: boolean,
   ): string {
     if (!hasNewFindings) {
-      return 'No new findings from Codex in this round.';
+      return '本轮 Codex 未发现新的代码问题。';
     }
 
     return findings
       .map((item, index) => {
         const f = item.finding;
-        const newMarker = item.isNew ? ' (NEW)' : '';
+        const newMarker = item.isNew ? ' （新问题）' : '';
         const lineInfo = f.line_range
           ? ` L${f.line_range.start}-${f.line_range.end}`
           : '';
-        const header = `${index + 1}. [${item.issueId}]${newMarker} (${f.severity}, ${f.category}) \`${f.file}${lineInfo}\`: ${f.issue}`;
-        const evidence = `   Evidence: ${f.evidence}`;
-        const suggestion = `   Suggestion: ${f.suggestion}`;
+        const header = `${index + 1}. [${item.issueId}]${newMarker} (${f.severity}, ${f.category}) \`${f.file}${lineInfo}\`：${f.issue}`;
+        const evidence = `   证据：${f.evidence}`;
+        const suggestion = `   建议：${f.suggestion}`;
         return `${header}\n${evidence}\n${suggestion}`;
       })
       .join('\n');
+  }
+}
+
+function formatChangeType(changeType: string): string {
+  switch (changeType) {
+    case 'added':
+      return '新增';
+    case 'modified':
+      return '修改';
+    case 'deleted':
+      return '删除';
+    case 'renamed':
+      return '重命名';
+    case 'copied':
+      return '复制';
+    default:
+      return changeType;
   }
 }

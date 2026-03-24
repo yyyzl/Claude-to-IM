@@ -320,16 +320,16 @@ describe('PromptAssembler', () => {
       assert.ok(result.includes('2')); // round number
     });
 
-    // ── Case 2: Empty optional fields — shows "None" ──────────
-    it('renders "None" for empty optional arrays', async () => {
+    // ── Case 2: Empty optional fields — shows "无" ──────────
+    it('renders "无" for empty optional arrays', async () => {
       const pack = createMinimalPack();
       const result = await assembler.renderSpecReviewPrompt(pack);
 
-      // Count occurrences of "None" (unresolved_issues, rejected_issues, context_files)
-      const noneCount = countOccurrences(result, 'None');
+      // Count occurrences of "无" (unresolved_issues, rejected_issues, context_files)
+      const noneCount = countOccurrences(result, '无');
       assert.ok(
         noneCount >= 3,
-        `Expected at least 3 "None" entries for empty arrays, got ${noneCount}`,
+        `Expected at least 3 "无" entries for empty arrays, got ${noneCount}`,
       );
 
       // Spec and Plan should still appear
@@ -337,15 +337,15 @@ describe('PromptAssembler', () => {
       assert.ok(result.includes('# Minimal Plan'));
     });
 
-    // ── Case 3: Round 1, no round_summary — shows "First round" ──
-    it('shows "First round" when round_summary is empty', async () => {
+    // ── Case 3: Round 1, no round_summary — shows Chinese fallback ──
+    it('shows Chinese first-round fallback when round_summary is empty', async () => {
       const pack = createMinimalPack();
       // round_summary is already '' in minimal pack
       const result = await assembler.renderSpecReviewPrompt(pack);
 
       assert.ok(
-        result.includes('First round'),
-        'Expected "First round" when round_summary is empty',
+        result.includes('首轮审查，暂无上一轮摘要。'),
+        'Expected Chinese first-round fallback when round_summary is empty',
       );
     });
 
@@ -422,13 +422,13 @@ describe('PromptAssembler', () => {
     });
 
     // ── Case 7: No findings prompt ────────────────────────────
-    it('shows "No new findings from Codex." when hasNewFindings=false', async () => {
+    it('shows Chinese "no new findings" text when hasNewFindings=false', async () => {
       const input = createDecisionInputNoFindings();
       const { user: result } = await assembler.renderClaudeDecisionPrompt(input);
 
       assert.ok(
-        result.includes('No new findings from Codex.'),
-        'Expected "No new findings from Codex." message',
+        result.includes('本轮 Codex 未发现新的问题。'),
+        'Expected Chinese "no new findings" message',
       );
 
       // Other fields should still be present
@@ -438,32 +438,32 @@ describe('PromptAssembler', () => {
     });
 
     // ── Case 8: First round — no previous decisions ───────────
-    it('shows "First round - no previous decisions." when previousDecisions is empty', async () => {
+    it('shows Chinese "no previous decisions" text when previousDecisions is empty', async () => {
       const input = createDecisionInputFirstRound();
       const { user: result } = await assembler.renderClaudeDecisionPrompt(input);
 
       assert.ok(
-        result.includes('First round - no previous decisions.'),
-        'Expected "First round - no previous decisions." for first round',
+        result.includes('首轮审查，暂无历史决策。'),
+        'Expected Chinese "no previous decisions" text for first round',
       );
     });
 
     // ── Case 9: Finding format with (NEW), ID, evidence, suggestion ──
-    it('formats findings with (NEW) marker, issue ID, evidence and suggestion', async () => {
+    it('formats findings with Chinese new-marker, issue ID, evidence and suggestion', async () => {
       const input = createDecisionInputWithFindings();
       const { user: result } = await assembler.renderClaudeDecisionPrompt(input);
 
       // Finding 1 is NEW
       assert.ok(
-        result.includes('[ISS-004] (NEW) (critical) SQL injection vulnerability'),
-        'New finding ISS-004 missing (NEW) marker or incorrect format',
+        result.includes('[ISS-004] （新问题） (critical) SQL injection vulnerability'),
+        'New finding ISS-004 missing Chinese new-marker or incorrect format',
       );
       assert.ok(
-        result.includes('Evidence: User input passed directly to query builder'),
+        result.includes('证据：User input passed directly to query builder'),
         'Missing evidence for ISS-004',
       );
       assert.ok(
-        result.includes('Suggestion: Use parameterized queries'),
+        result.includes('建议：Use parameterized queries'),
         'Missing suggestion for ISS-004',
       );
 
@@ -476,15 +476,15 @@ describe('PromptAssembler', () => {
       const iss001Line = result.split('\n').find((line) => line.includes('[ISS-001]'));
       assert.ok(iss001Line, 'Could not find ISS-001 line');
       assert.ok(
-        !iss001Line.includes('(NEW)'),
-        'ISS-001 should NOT have (NEW) marker since isNew=false',
+        !iss001Line.includes('（新问题）'),
+        'ISS-001 should NOT have the Chinese new-marker since isNew=false',
       );
       assert.ok(
-        result.includes('Evidence: Line 42 in auth.ts'),
+        result.includes('证据：Line 42 in auth.ts'),
         'Missing evidence for ISS-001',
       );
       assert.ok(
-        result.includes('Suggestion: Add try-catch around auth call'),
+        result.includes('建议：Add try-catch around auth call'),
         'Missing suggestion for ISS-001',
       );
     });

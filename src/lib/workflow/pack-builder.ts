@@ -273,10 +273,10 @@ export class PackBuilder {
    */
   private buildCodeReviewLedgerSummary(ledger: IssueLedger): string {
     if (!ledger.issues || ledger.issues.length === 0) {
-      return 'No issues recorded yet.';
+      return '当前还没有记录任何问题。';
     }
 
-    const header = '| ID | Description | Status | Severity | File | Category |';
+    const header = '| ID | 问题描述 | 状态 | 严重级别 | 文件 | 类别 |';
     const separator = '|---|---|---|---|---|---|';
     const rows = ledger.issues.map(
       (issue) =>
@@ -291,16 +291,16 @@ export class PackBuilder {
    */
   private generateCodeReviewRoundSummary(round: number, ledger: IssueLedger): string {
     if (round === 1) {
-      return 'First code review round. Focus on comprehensive coverage of all changed files.';
+      return '首轮代码审查，请尽量覆盖所有变更文件。';
     }
 
     const stats = this.computeLedgerStats(ledger.issues);
     return (
-      `Round ${round - 1}: ` +
-      `${stats.open} open, ` +
-      `${stats.accepted} accepted, ` +
-      `${stats.rejected} rejected, ` +
-      `${stats.deferred} deferred`
+      `第 ${round - 1} 轮：` +
+      `${stats.open} 个待处理，` +
+      `${stats.accepted} 个已接受，` +
+      `${stats.rejected} 个已驳回，` +
+      `${stats.deferred} 个已暂缓`
     );
   }
 
@@ -314,10 +314,10 @@ export class PackBuilder {
    */
   buildLedgerSummary(ledger: IssueLedger): string {
     if (!ledger.issues || ledger.issues.length === 0) {
-      return 'No issues recorded yet.';
+      return '当前还没有记录任何问题。';
     }
 
-    const header = '| ID | Description | Status | Severity | Round |';
+    const header = '| ID | 问题描述 | 状态 | 严重级别 | 轮次 |';
     const separator = '|---|---|---|---|---|';
     const rows = ledger.issues.map(
       (issue) =>
@@ -448,18 +448,18 @@ export class PackBuilder {
    */
   private generateRoundSummary(round: number, ledger: IssueLedger): string {
     if (round === 1) {
-      return 'First review round. No prior issues or decisions exist. Focus on comprehensive coverage of the entire spec and plan.';
+      return '首轮审查，暂无历史问题或决策，请完整覆盖整个 spec 和 plan。';
     }
 
     const stats = this.computeLedgerStats(ledger.issues);
 
     return (
-      `Round ${round - 1}: ` +
-      `${stats.open} open, ` +
-      `${stats.accepted} accepted, ` +
-      `${stats.rejected} rejected, ` +
-      `${stats.deferred} deferred, ` +
-      `${stats.resolved} resolved`
+      `第 ${round - 1} 轮：` +
+      `${stats.open} 个待处理，` +
+      `${stats.accepted} 个已接受，` +
+      `${stats.rejected} 个已驳回，` +
+      `${stats.deferred} 个已暂缓，` +
+      `${stats.resolved} 个已解决`
     );
   }
 
@@ -590,10 +590,10 @@ export class PackBuilder {
       const truncated =
         summary.length > 200 ? summary.slice(0, 197) + '...' : summary;
 
-      return `**Round ${round}**: ${truncated}`;
+      return `**第 ${round} 轮**：${truncated}`;
     }
 
     // Fallback: indicate the artifact exists without detailed content
-    return `**Round ${round}**: [Claude decision recorded]`;
+    return `**第 ${round} 轮**：[已记录 Claude 决策]`;
   }
 }

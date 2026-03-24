@@ -634,18 +634,18 @@ describe('Code-Review Workflow Integration (P1b-CR-0)', () => {
       const reporter = new ReportGenerator(store);
       const { markdown } = await reporter.generate(runId);
 
-      assert.ok(markdown.includes('# Code Review Report'));
-      assert.ok(markdown.includes('## Summary'));
-      assert.ok(markdown.includes('## File Results'));
+      assert.ok(markdown.includes('# 代码审查报告'));
+      assert.ok(markdown.includes('## 摘要'));
+      assert.ok(markdown.includes('## 文件明细'));
       assert.ok(markdown.includes('`src/auth.ts`'));
       assert.ok(markdown.includes('`src/utils.ts`'));
-      assert.ok(markdown.includes('Fix Instruction'));
+      assert.ok(markdown.includes('修复建议'));
       assert.ok(markdown.includes('parameterized query'));
 
       // Excluded files section
-      assert.ok(markdown.includes('## Excluded Files'));
+      assert.ok(markdown.includes('## 已排除文件'));
       assert.ok(markdown.includes('.env'));
-      assert.ok(markdown.includes('sensitive'));
+      assert.ok(markdown.includes('敏感文件'));
     });
 
     it('report contains fix_instruction separately from reason', async () => {
@@ -671,7 +671,7 @@ describe('Code-Review Workflow Integration (P1b-CR-0)', () => {
       const jsonRaw = await fs.readFile(jsonPath, 'utf-8');
       const report = JSON.parse(jsonRaw) as { run_id: string; stats: { total_findings: number } };
 
-      assert.ok(markdown.includes('# Code Review Report'));
+      assert.ok(markdown.includes('# 代码审查报告'));
       assert.equal(report.run_id, runId);
       assert.equal(report.stats.total_findings, 3);
     });

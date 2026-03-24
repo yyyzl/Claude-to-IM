@@ -14,6 +14,8 @@ Output format (strict JSON):
   "summary": "one-paragraph summary" }
 
 IMPORTANT: severity must be one of: critical, high, medium, low (exactly these values).
+IMPORTANT: all explanatory text in "issue", "evidence", "suggestion", and "summary" must be written in Simplified Chinese.
+IMPORTANT: machine-consumed enum values such as "severity" and "overall_assessment" must remain in the exact English values listed above.
 
 ## Severity Calibration (be honest — inflating severity wastes review bandwidth)
 

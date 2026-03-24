@@ -144,7 +144,7 @@ export class ReportGenerator {
     const fileMap = new Map<string, FileReviewResult>();
 
     for (const issue of issues) {
-      const filePath = issue.source_file ?? '(unknown)';
+      const filePath = issue.source_file ?? '（未知文件）';
 
       if (!fileMap.has(filePath)) {
         fileMap.set(filePath, { path: filePath, issues: [] });
@@ -234,34 +234,34 @@ export class ReportGenerator {
     const lines: string[] = [];
 
     // Header
-    lines.push('# Code Review Report');
+    lines.push('# 代码审查报告');
     lines.push('');
-    lines.push(`**Run ID**: ${data.run_id}`);
-    lines.push(`**Scope**: ${this.formatScope(data.scope)}`);
-    lines.push(`**Rounds**: ${data.total_rounds}`);
-    lines.push(`**Generated**: ${data.generated_at}`);
+    lines.push(`**运行 ID**: ${data.run_id}`);
+    lines.push(`**审查范围**: ${this.formatScope(data.scope)}`);
+    lines.push(`**轮次**: ${data.total_rounds}`);
+    lines.push(`**生成时间**: ${data.generated_at}`);
     if (snapshot?.head_commit) {
-      lines.push(`**Head Commit**: ${snapshot.head_commit.substring(0, 10)}`);
+      lines.push(`**提交**: ${snapshot.head_commit.substring(0, 10)}`);
     }
     lines.push('');
 
     // Summary table
-    lines.push('## Summary');
+    lines.push('## 摘要');
     lines.push('');
-    lines.push('| Metric | Count |');
-    lines.push('|--------|-------|');
-    lines.push(`| Total findings | ${data.stats.total_findings} |`);
-    lines.push(`| Accepted | ${data.stats.accepted} |`);
-    lines.push(`| Rejected (false positive) | ${data.stats.rejected} |`);
-    lines.push(`| Deferred | ${data.stats.deferred} |`);
+    lines.push('| 指标 | 数量 |');
+    lines.push('|------|------|');
+    lines.push(`| 问题总数 | ${data.stats.total_findings} |`);
+    lines.push(`| 已接受 | ${data.stats.accepted} |`);
+    lines.push(`| 已驳回（误报） | ${data.stats.rejected} |`);
+    lines.push(`| 已暂缓 | ${data.stats.deferred} |`);
     lines.push('');
 
     // By severity
-    lines.push('### By Severity');
+    lines.push('### 按严重级别');
     for (const sev of SEVERITY_ORDER) {
       const count = data.stats.by_severity[sev];
       if (count > 0) {
-        lines.push(`- ${this.severityIcon(sev)} ${capitalize(sev)}: ${count}`);
+        lines.push(`- ${this.severityIcon(sev)} ${formatSeverity(sev)}：${count}`);
       }
     }
     lines.push('');
@@ -271,7 +271,7 @@ export class ReportGenerator {
       .filter(([, count]) => count > 0)
       .sort((a, b) => b[1] - a[1]);
     if (categories.length > 0) {
-      lines.push('### By Category');
+      lines.push('### 按类别');
       for (const [cat, count] of categories) {
         lines.push(`- ${formatCategory(cat)}: ${count}`);
       }
@@ -279,37 +279,37 @@ export class ReportGenerator {
     }
 
     // Conclusion
-    lines.push(`## Conclusion: ${this.formatConclusion(data.conclusion)}`);
+    lines.push(`## 结论：${this.formatConclusion(data.conclusion)}`);
     lines.push('');
     lines.push('---');
     lines.push('');
 
     // File Results
-    lines.push('## File Results');
+    lines.push('## 文件明细');
     lines.push('');
 
     if (data.file_results.length === 0) {
-      lines.push('No issues found.');
+      lines.push('未发现问题。');
     } else {
       for (const file of data.file_results) {
         lines.push(`### \`${file.path}\``);
         lines.push('');
-        lines.push('| ID | Severity | Category | Lines | Description | Action | Reason | Fix Instruction |');
-        lines.push('|----|----------|----------|-------|-------------|--------|--------|-----------------|');
+        lines.push('| ID | 严重级别 | 类别 | 行号 | 问题描述 | 处理结果 | 裁决理由 | 修复建议 |');
+        lines.push('|----|----------|------|------|----------|----------|----------|----------|');
 
         for (const issue of file.issues) {
           const lineStr = issue.line_range
             ? `${issue.line_range.start}-${issue.line_range.end}`
-            : '—';
-          const fix = issue.fix_instruction ?? '—';
-          const reason = issue.reason || '—';
+            : '无';
+          const fix = issue.fix_instruction ?? '无';
+          const reason = issue.reason || '无';
           const desc = issue.description.replace(/\|/g, '\\|').replace(/\n/g, ' ');
           const fixEsc = fix.replace(/\|/g, '\\|').replace(/\n/g, ' ');
           const reasonEsc = reason.replace(/\|/g, '\\|').replace(/\n/g, ' ');
 
           lines.push(
-            `| ${issue.id} | ${capitalize(issue.severity)} | ${formatCategory(issue.category)} ` +
-            `| ${lineStr} | ${desc} | ${capitalize(issue.action)} | ${reasonEsc} | ${fixEsc} |`,
+            `| ${issue.id} | ${formatSeverity(issue.severity)} | ${formatCategory(issue.category)} ` +
+            `| ${lineStr} | ${desc} | ${formatAction(issue.action)} | ${reasonEsc} | ${fixEsc} |`,
           );
         }
         lines.push('');
@@ -320,12 +320,12 @@ export class ReportGenerator {
     if (data.excluded_files.length > 0) {
       lines.push('---');
       lines.push('');
-      lines.push('## Excluded Files');
+      lines.push('## 已排除文件');
       lines.push('');
-      lines.push('| File | Reason |');
-      lines.push('|------|--------|');
+      lines.push('| 文件 | 原因 |');
+      lines.push('|------|------|');
       for (const ef of data.excluded_files) {
-        lines.push(`| ${ef.path} | ${ef.reason} |`);
+        lines.push(`| ${ef.path} | ${formatExcludedReason(ef.reason)} |`);
       }
       lines.push('');
     }
@@ -337,22 +337,22 @@ export class ReportGenerator {
 
   private formatScope(scope: { type: string; base_ref?: string; head_ref?: string }): string {
     switch (scope.type) {
-      case 'staged': return 'staged changes';
-      case 'unstaged': return 'unstaged changes';
-      case 'commit': return `commit (${scope.head_ref ?? 'HEAD'})`;
-      case 'commit_range': return `range (${scope.base_ref}..${scope.head_ref})`;
-      case 'branch': return `branch diff (${scope.base_ref}...${scope.head_ref ?? 'HEAD'})`;
+      case 'staged': return '暂存区变更';
+      case 'unstaged': return '工作区未暂存变更';
+      case 'commit': return `单个提交（${scope.head_ref ?? 'HEAD'}）`;
+      case 'commit_range': return `提交区间（${scope.base_ref}..${scope.head_ref})`;
+      case 'branch': return `分支差异（${scope.base_ref}...${scope.head_ref ?? 'HEAD'}）`;
       default: return scope.type;
     }
   }
 
   private formatConclusion(conclusion: CodeReviewReport['conclusion']): string {
     switch (conclusion) {
-      case 'clean': return '✅ Clean';
-      case 'needs_review': return '⚠️ Needs Review';
-      case 'minor_issues_only': return '🟡 Minor Issues Only';
-      case 'issues_found': return '🟠 Issues Found';
-      case 'critical_issues': return '🔴 Critical Issues';
+      case 'clean': return '✅ 通过';
+      case 'needs_review': return '⚠️ 仍需复核';
+      case 'minor_issues_only': return '🟡 仅有中低优先级问题';
+      case 'issues_found': return '🟠 发现需要处理的问题';
+      case 'critical_issues': return '🔴 存在严重问题';
     }
   }
 
@@ -368,10 +368,57 @@ export class ReportGenerator {
 
 // ── Module-level helpers ─────────────────────────────────────
 
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
+function formatSeverity(severity: Severity): string {
+  switch (severity) {
+    case 'critical':
+      return '严重';
+    case 'high':
+      return '高';
+    case 'medium':
+      return '中';
+    case 'low':
+      return '低';
+  }
 }
 
 function formatCategory(cat: string): string {
-  return cat.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  const map: Record<string, string> = {
+    bug: '缺陷',
+    security: '安全',
+    performance: '性能',
+    error_handling: '错误处理',
+    type_safety: '类型安全',
+    concurrency: '并发',
+    style: '风格',
+    architecture: '架构',
+    test_coverage: '测试覆盖',
+    documentation: '文档',
+  };
+  return map[cat] ?? cat;
+}
+
+function formatAction(action: string): string {
+  switch (action) {
+    case 'accept':
+      return '已接受';
+    case 'reject':
+      return '已驳回';
+    case 'defer':
+      return '已暂缓';
+    case 'unreviewed':
+      return '未裁决';
+    default:
+      return action;
+  }
+}
+
+function formatExcludedReason(reason: string): string {
+  if (reason === 'binary') return '二进制文件';
+  if (reason === 'sensitive') return '敏感文件';
+  if (reason === 'path_traversal') return '路径越界';
+  if (reason === 'blob_not_found') return '找不到 git blob';
+  if (reason.startsWith('pattern_excluded:')) {
+    return `匹配排除规则：${reason.slice('pattern_excluded:'.length).trim()}`;
+  }
+  return reason;
 }

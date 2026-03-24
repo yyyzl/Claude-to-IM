@@ -67,6 +67,8 @@ After the JSON block, write patches using markers:
    provided above and copy the heading format exactly. Wrong level = patch rejected.
 5. Each patch section should be MINIMAL — only the changed section, not entire chapters.
 6. Keep patches under 200 lines total. If more needed, defer remaining issues.
+7. All explanatory text in "reason", "summary", and any patch prose must be written in Simplified Chinese.
+8. Machine-consumed enum values such as "action" must remain in the exact English values listed above.
 
 ## Fallback
 

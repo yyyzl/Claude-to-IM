@@ -40,3 +40,5 @@ For EACH finding, you must decide:
 - No markdown formatting, no code fences, no explanations before or after the JSON
 - No session IDs, separators (---), or any non-JSON content after the closing }
 - fix_instruction is REQUIRED when action is "accept" — do not omit it
+- all explanatory text in "reason", "fix_instruction", and "summary" must be written in Simplified Chinese
+- machine-consumed enum values such as "action" must remain in the exact English values listed above
