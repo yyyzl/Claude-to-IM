@@ -196,20 +196,27 @@ export class ReportGenerator {
     deferred: number,
     open: number,
   ): CodeReviewReport['conclusion'] {
-    const totalFindings = Object.values(bySeverity).reduce((a, b) => a + b, 0);
+    // bySeverity only contains non-rejected issues (active), so add rejected
+    // back to get the true total across all statuses.
+    const activeFindings = Object.values(bySeverity).reduce((a, b) => a + b, 0);
+    const totalFindings = activeFindings + rejected;
 
     // No findings at all → clean
     if (totalFindings === 0) return 'clean';
 
-    // All findings rejected (false positives) → clean
-    if (rejected === totalFindings) return 'clean';
+    // ISS-001 fix: check open/deferred BEFORE the "all rejected" check.
+    // Previously, rejected was compared against bySeverity-only total, so
+    // mixed states like "1 rejected + 1 open" incorrectly returned 'clean'.
 
     // Unreviewed (open) findings exist → needs_review
-    // These are findings Claude never processed (e.g. Claude crashed).
+    // These are findings Claude never processed (e.g. early termination).
     if (open > 0) return 'needs_review';
 
     // Only deferred, no accepted → needs_review (deferred still need attention)
     if (accepted === 0 && deferred > 0) return 'needs_review';
+
+    // All findings rejected (false positives) → clean
+    if (rejected === totalFindings) return 'clean';
 
     // From here, accepted > 0
     if (bySeverity.critical > 0) return 'critical_issues';

@@ -1215,13 +1215,17 @@ export class WorkflowEngine {
       resolved: allIssues.filter((i) => i.status === 'resolved').length,
     };
 
-    // P1-3: Update current_step to match last_completed.step, preventing
-    // contradictory meta like status=completed + current_step=claude_decision.
+    // ISS-005 fix: Use the actual step at which termination occurred instead
+    // of hardcoding 'post_decision'. meta.current_step was already set at each
+    // call site (e.g. 'pre_termination', 'claude_decision', 'post_decision').
+    // For completed workflows resume won't happen, so this is purely for
+    // accurate metadata / debugging.
+    const actualStep = meta?.current_step ?? 'post_decision';
     await this.store.updateMeta(runId, {
       status: 'completed',
       current_round: round,
-      current_step: 'post_decision',
-      last_completed: { round, step: 'post_decision' },
+      current_step: actualStep,
+      last_completed: { round, step: actualStep },
     });
 
     let reportPaths: { markdown?: string; json?: string } = {};

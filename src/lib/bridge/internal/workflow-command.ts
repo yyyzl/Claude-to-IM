@@ -780,6 +780,12 @@ async function handleReport(
       return;
     }
 
+    // ISS-004: Only code-review workflows have reports.
+    if (meta.workflow_type !== 'code-review') {
+      await deliverText(adapter, msg, `该工作流类型 (${esc(meta.workflow_type ?? 'unknown')}) 不支持报告查看。仅 code-review 工作流生成报告。`);
+      return;
+    }
+
     // Try to read persisted report first
     let markdown: string | null = null;
     try {
@@ -803,8 +809,10 @@ async function handleReport(
       }
     }
 
-    // Chunk the report for delivery (Feishu rich text limit ~4000 chars)
-    const MAX_CHUNK = 3800;
+    // Chunk the report for delivery (Feishu rich text limit ~4000 chars).
+    // ISS-006: Reserve headroom for esc() expansion (&→&amp; etc.) and
+    // <pre>/<i> wrapper overhead (~60 chars). 3500 leaves ~500 chars buffer.
+    const MAX_CHUNK = 3500;
     const chunks = chunkMarkdownReport(markdown, MAX_CHUNK);
 
     for (let i = 0; i < chunks.length; i++) {
@@ -821,8 +829,13 @@ async function handleReport(
 /**
  * Split a Markdown report into chunks that respect a maximum character limit.
  *
- * Splits at section boundaries (## or ### headers) when possible,
- * falling back to line boundaries.
+ * Splits at line boundaries, and handles individual lines that exceed the
+ * limit by splitting them at character boundaries.
+ *
+ * ISS-002 fix: handles oversized single lines instead of emitting chunks
+ * larger than maxChunkSize.
+ * ISS-006 fix: accounts for esc() HTML entity expansion (worst case: each
+ * char becomes 4x for '&' → '&amp;') and <pre>/<i> wrapper overhead.
  */
 function chunkMarkdownReport(markdown: string, maxChunkSize: number): string[] {
   if (markdown.length <= maxChunkSize) return [markdown];
@@ -837,7 +850,21 @@ function chunkMarkdownReport(markdown: string, maxChunkSize: number): string[] {
       chunks.push(current.trimEnd());
       current = '';
     }
-    current += (current ? '\n' : '') + line;
+
+    // ISS-002: If a single line itself exceeds the limit, split it
+    if (line.length > maxChunkSize) {
+      // Flush any remaining content first
+      if (current.trim()) {
+        chunks.push(current.trimEnd());
+        current = '';
+      }
+      // Split the oversized line into maxChunkSize segments
+      for (let offset = 0; offset < line.length; offset += maxChunkSize) {
+        chunks.push(line.substring(offset, offset + maxChunkSize));
+      }
+    } else {
+      current += (current ? '\n' : '') + line;
+    }
   }
 
   if (current.trim()) {
@@ -1250,13 +1277,17 @@ function bindProgressEvents(
 
     const elapsed = formatElapsed(Date.now() - state.startedAt);
     const isCompleted = footerStatus.includes('✅') || footerStatus.includes('完成');
+    // ISS-004: Only show report button for code-review workflows.
+    // Previously all completed workflows got hasReport:true, causing
+    // spec-review to show a misleading "View Report" button.
+    const hasReport = isCompleted && state.workflowType === 'code-review';
     const cardJson = buildWorkflowCardJson(content, {
       headerTitle,
       headerTemplate,
       footer: { status: footerStatus, elapsed },
       runId: state.runId,
       isRunning: false,
-      hasReport: isCompleted,
+      hasReport,
     });
 
     adapter.finalizeWorkflowCard?.(msg.address.chatId, cardJson)?.catch((err) => {
