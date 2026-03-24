@@ -755,6 +755,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
   /**
    * Finalize the streaming card: close streaming mode, update with final content + footer.
+   *
+   * Strategy:
+   * 1. Wait for any in-flight cardElement.content request to finish (avoid sequence conflicts).
+   * 2. Try card.update (full replacement) up to 3 times with exponential back-off.
+   * 3. If card.update keeps failing, fall back to cardElement.content to at least strip tool info.
    */
   private async finalizeCard(
     chatId: string,
@@ -776,6 +781,21 @@ export class FeishuAdapter extends BaseChannelAdapter {
       state.throttleTimer = null;
     }
 
+    // ── Wait for in-flight cardElement.content to settle ──────────
+    // flushCardUpdate is fire-and-forget; if one is still in-flight its sequence
+    // might conflict with our card.update call.  Wait up to 3 s.
+    if (state.inFlight) {
+      const deadline = Date.now() + 3_000;
+      await new Promise<void>((resolve) => {
+        const tick = setInterval(() => {
+          if (!state.inFlight || Date.now() >= deadline) {
+            clearInterval(tick);
+            resolve();
+          }
+        }, 100);
+      });
+    }
+
     try {
       // Build and apply final card
       const statusLabels: Record<string, string> = {
@@ -794,11 +814,57 @@ export class FeishuAdapter extends BaseChannelAdapter {
       // the final card should show clean text + footer only.
       const finalCardJson = buildFinalCardJson(responseText, [], footer);
 
-      state.sequence++;
-      await (this.restClient as any).cardkit.v1.card.update({
-        path: { card_id: state.cardId },
-        data: { card: { type: 'card_json', data: finalCardJson }, sequence: state.sequence },
-      });
+      // ── Retry card.update up to 3 times with exponential back-off ──
+      const MAX_ATTEMPTS = 3;
+      let cardUpdated = false;
+      let lastErr: unknown;
+
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+          state.sequence++;
+          await (this.restClient as any).cardkit.v1.card.update({
+            path: { card_id: state.cardId },
+            data: { card: { type: 'card_json', data: finalCardJson }, sequence: state.sequence },
+          });
+          cardUpdated = true;
+          break;
+        } catch (err) {
+          lastErr = err;
+          if (attempt < MAX_ATTEMPTS) {
+            const backoff = attempt * 2_000; // 2 s, 4 s
+            console.warn(
+              `[feishu-adapter] card.update attempt ${attempt}/${MAX_ATTEMPTS} failed, retrying in ${backoff}ms:`,
+              err instanceof Error ? err.message : err,
+            );
+            await new Promise((r) => setTimeout(r, backoff));
+          }
+        }
+      }
+
+      if (!cardUpdated) {
+        console.warn(
+          `[feishu-adapter] card.update failed after ${MAX_ATTEMPTS} attempts, falling back to cardElement.content:`,
+          lastErr instanceof Error ? lastErr.message : lastErr,
+        );
+
+        // ── Fallback: strip tool info via element-level update ──────
+        // The card stays in streaming_mode but at least the visible content
+        // won't contain tool progress lines.
+        try {
+          const cleanContent = buildStreamingContent(responseText || '', []);
+          state.sequence++;
+          await (this.restClient as any).cardkit.v1.cardElement.content({
+            path: { card_id: state.cardId, element_id: 'streaming_content' },
+            data: { content: cleanContent, sequence: state.sequence },
+          });
+          console.log('[feishu-adapter] Fallback cardElement.content succeeded — tool info stripped');
+        } catch (fallbackErr) {
+          console.warn(
+            '[feishu-adapter] Fallback cardElement.content also failed:',
+            fallbackErr instanceof Error ? fallbackErr.message : fallbackErr,
+          );
+        }
+      }
 
       // 完成态额外发一条新消息，用于触发未读/推送提醒（卡片更新本身通常不会提醒）。
       // 可通过 bridge_feishu_stream_card_notify_on_complete=false 禁用。
@@ -828,8 +894,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
         console.warn('[feishu-adapter] Completion notice failed:', err instanceof Error ? err.message : err);
       }
 
-      console.log(`[feishu-adapter] Card finalized: cardId=${state.cardId}, status=${status}, elapsed=${elapsed}`);
-      return true;
+      console.log(`[feishu-adapter] Card finalized: cardId=${state.cardId}, status=${status}, elapsed=${elapsed}, updated=${cardUpdated}`);
+      return cardUpdated;
     } catch (err) {
       console.warn('[feishu-adapter] Card finalize failed:', err instanceof Error ? err.message : err);
       return false;
