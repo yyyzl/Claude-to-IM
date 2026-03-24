@@ -1452,3 +1452,64 @@ Three major features: (1) CLI rewrite with spec-review/code-review/review-fix su
 ### Next Steps
 
 - None - task complete
+
+
+## Session 30: fix: 模板引擎 4 Bug 导致 Codex code-review 全轮超时
+
+**Date**: 2026-03-24
+**Task**: fix: 模板引擎 4 Bug 导致 Codex code-review 全轮超时
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+## 问题现象
+
+`/workflow code-review` 连续 3 轮 Codex 审查"超时"（实际每轮仅 11-14 秒），0 issue，以 `max_rounds_reached` 终止。
+
+## 根因分析
+
+4 个 Bug 叠加导致 725KB prompt 膨胀到 4.5MB，超出 Codex CLI 的 1M 字符硬限制：
+
+| Bug | 类别 | 文件 | 严重度 |
+|-----|------|------|--------|
+| $ 反向引用膨胀 | String.replace 将 $' 解释为特殊模式 | prompt-assembler.ts | Critical |
+| Prompt 超限 | diff(449K) + 文件内容(290K) 无预算控制 | prompt-assembler.ts | Critical |
+| 误报 TimeoutError | withRetry 丢失真实错误 + 输入超限浪费重试 | model-invoker.ts | Medium |
+| 占位符级联展开 | diff 中 {{changed_files}} x6 被二次替换 | prompt-assembler.ts | Critical |
+
+## 修复内容
+
+**prompt-assembler.ts**: replaceAllPlaceholders() 单次扫描替换 + CODEX_PROMPT_BUDGET 900K + renderChangedFilesHunksOnly()
+**model-invoker.ts**: TimeoutError 保留真实错误 + NON_RETRYABLE_PATTERNS 新增输入超限
+
+## 验证: 4,591,453 chars -> 742,781 chars (6.2x shrink)
+
+## Spec 更新 (Break-the-Loop)
+
+- workflow-engine.md: 模板渲染安全铁律 + 外部系统硬限制表
+- cross-layer-thinking-guide.md: 内容注入导致跨层膨胀案例
+- guides/index.md: 触发条件增加内容注入场景
+
+**Updated Files**: prompt-assembler.ts, model-invoker.ts, workflow-engine.md, cross-layer-thinking-guide.md, guides/index.md
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ccca9d6` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
