@@ -1592,3 +1592,65 @@ Three major features: (1) CLI rewrite with spec-review/code-review/review-fix su
 ### Next Steps
 
 - None - task complete
+
+
+## Session 32: 方向A: Prompt模板优化 + Bug修复 + 降级透明性
+
+**Date**: 2026-03-25
+**Task**: 方向A: Prompt模板优化 + Bug修复 + 降级透明性
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+## 工作内容
+
+本次 session 执行"方向A: 先打磨再扩展"路线图的阶段1（Prompt模板优化）和阶段2（Bug修复），共完成 9 项任务。
+
+### 阶段1: Prompt 模板优化（6项）
+
+| # | 优化项 | 文件 | 效果 |
+|---|--------|------|------|
+| 1-1 | Few-shot 正反例 | `code-review-pack.md` | 基于真实运行数据的好/坏finding对比示例 |
+| 1-2 | 类别边界定义表 | `code-review-pack.md` | 10个类别的 IS/Is NOT 对比表，减少误分类 |
+| 1-3 | 审查深度优先级 | `code-review-pack.md` | 70% bug/security > 25% perf/type_safety > 5% style |
+| 1-4 | Claude 驳回引导 | `code-review-decision-system.md` | 6种常见应驳回模式 |
+| 1-5 | 语言指示 | 全部6个模板 | 统一简体中文输出 |
+| 1-6 | 降级透明性 | assembler + engine + command + types | 新增 context_degraded 事件 + IM 推送 |
+
+### 阶段2: Bug 修复（3项）
+
+| # | 状态 | 说明 |
+|---|------|------|
+| 2-1 | 已在之前修复 | determineConclusion() 混合状态逻辑已正确 |
+| 2-2 | 已在之前修复 | chunkMarkdownReport() 超长单行分割已实现 |
+| 2-3 | 本次修复 | TimeoutError 不再触发永久降级，只有 ModelInvocationError 触发 |
+
+### 验证: 394 tests pass, tsc --noEmit clean
+
+### 剩余计划（阶段3: 体验增强）
+- context_files 自动发现
+- /workflow list 历史浏览
+- 工作流参数自定义
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c55c15c` | (see git log) |
+| `de6f3e8` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
