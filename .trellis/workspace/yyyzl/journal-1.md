@@ -1513,3 +1513,82 @@ Three major features: (1) CLI rewrite with spec-review/code-review/review-fix su
 ### Next Steps
 
 - None - task complete
+
+
+## Session 31: Code-Review Workflow Bugfix (9 bugs + 4 review fixes)
+
+**Date**: 2026-03-24
+**Task**: Code-Review Workflow Bugfix (9 bugs + 4 review fixes)
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+## 修复概览
+
+修复 code-review 工作流根因链上的 9 个 Bug，加上审查反馈中发现的 4 个额外问题。
+
+### P0 修复（用户可见的关键问题）
+
+| Bug | 文件 | 修复 |
+|-----|------|------|
+| P0-1 | `diff-reader.ts` | `exclude_patterns` 现在过滤 `snapshot.diff` 文本，移除 60% 噪音 |
+| P0-2 | `report-generator.ts` | `determineConclusion()` 重写判定树，open 不再误报 clean |
+| P0-3 | `report-generator.ts` | `open→unreviewed` 语义区分，不再伪装为 defer |
+| P0-4 | `bridge-manager.ts` + `workflow-command.ts` | 新增 `/workflow report` 子命令完整链路 |
+
+### P1 修复（性能与错误分类）
+
+| Bug | 文件 | 修复 |
+|-----|------|------|
+| P1-1 | `prompt-assembler.ts` | Claude prompt 添加 800K 预算，三级降级 full→hunks→truncate |
+| P1-2 | `model-invoker.ts` | exit code 1 不再被误标为超时重试 |
+| P1-3 | `workflow-engine.ts` | `terminateWorkflow()` 同步更新 `current_step` |
+
+### P2 修复（弹性与降级）
+
+| Bug | 文件 | 修复 |
+|-----|------|------|
+| P2-1/P2-2 | `workflow-engine.ts` | Claude 连续失败 ≥2 次后跳过，Codex-only 降级模式 |
+
+### 审查反馈修复
+
+| # | 问题 | 修复 |
+|---|------|------|
+| Fix1 | 非超时错误仍发 `claude_decision_timeout` 事件 | 新增 `claude_decision_skipped` 事件 + UI handler |
+| Fix2 | rejected critical 抬高结论 | `bySeverityActive` 排除 rejected |
+| Fix3 | 降级分支调 `saveCheckpoint()` 误写 paused | 移除不当调用 |
+| Fix4 | `handleReport` 路径缺 `runs/` | 修正为 `{basePath}/runs/{runId}/` |
+
+### 类型变更
+
+- `CodeReviewReport.conclusion` 新增 `needs_review`
+- `FileReviewResult.action` 新增 `unreviewed`
+- `WorkflowEventType` 新增 `claude_decision_skipped`
+- `WorkflowSubcommand` 新增 `{ kind: 'report'; runId: string }`
+
+### 验证
+
+- TypeCheck: ✅ 通过
+- 单元测试: ✅ 267/267 通过
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `82889b3` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 30
+- **Total Sessions**: 31
 - **Last Active**: 2026-03-24
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1515 | Active |
+| `journal-1.md` | ~1594 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits |
 |---|------|-------|---------|
+| 31 | 2026-03-24 | Code-Review Workflow Bugfix (9 bugs + 4 review fixes) | `82889b3` |
 | 30 | 2026-03-24 | fix: 模板引擎 4 Bug 导致 Codex code-review 全轮超时 | `ccca9d6` |
 | 29 | 2026-03-24 | feat: P1b-CR-1 Review-and-Fix + CLI subcommands + Feishu interactive cards | `cfedd9b` |
 | 28 | 2026-03-24 | 拆分 workflow 审查命令 | `18978ba` |
