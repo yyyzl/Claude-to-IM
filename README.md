@@ -2,7 +2,7 @@
 
 English | [中文](README.zh-CN.md)
 
-Claude-to-IM is a host-agnostic bridge library that connects [Claude Code SDK](https://docs.anthropic.com/en/docs/claude-code/sdk) to IM platforms, allowing users to interact with Claude through Telegram, Discord, and Feishu (Lark).
+Claude-to-IM is a host-agnostic bridge library that connects [Claude Code SDK](https://docs.anthropic.com/en/docs/claude-code/sdk) to IM platforms, allowing users to interact with Claude through Telegram, Discord, Feishu (Lark), and QQ.
 
 This library handles all IM-side complexity — message routing, streaming previews, permission approval flows, Markdown rendering, chunking, retry, rate limiting — while delegating persistence, LLM calls, and permission resolution to the host application through a set of dependency injection interfaces.
 
@@ -14,13 +14,14 @@ Claude-to-IM was extracted from CodePilot as a standalone library for developers
 
 ## Features
 
-- **Multi-platform adapters**: Telegram (long polling), Discord (Gateway WebSocket), Feishu/Lark (WSClient)
+- **Multi-platform adapters**: Telegram (long polling), Discord (Gateway WebSocket), Feishu/Lark (WSClient), QQ (WebSocket Gateway)
 - **Streaming previews**: Real-time response drafts via message editing, with per-platform throttling
 - **Permission management**: Interactive inline buttons for Claude Code tool approvals (allow / deny / allow for session)
 - **Session binding**: Each IM chat maps to a persistent conversation session with working directory and model settings
 - **Markdown rendering**: Platform-native formatting — HTML for Telegram, Discord-flavored Markdown, Feishu rich text cards
 - **Reliable delivery**: Auto-chunking at platform limits, retry with exponential backoff, HTML fallback on parse errors, message deduplication
-- **Security**: Input validation, token bucket rate limiting (20 msg/min per chat), user authorization whitelists, full audit logging
+- **Security**: Input validation, token bucket rate limiting (20 msg/min per chat), user authorization whitelists, path traversal protection, full audit logging
+- **Workflow engine**: Automated dual-model (Claude + Codex) collaboration workflows — Spec-Review (Delphi method), Code-Review, and Review-Fix with crash-safe state machine
 - **Host-agnostic**: All host dependencies abstracted via 4 DI interfaces — no database driver, no LLM client, no framework lock-in
 
 ## Architecture
@@ -121,7 +122,7 @@ All settings are read through `BridgeStore.getSetting(key)`. Your host applicati
 | `bridge_default_cwd` | Default working directory for new sessions | `$HOME` |
 | `bridge_model` | Default Claude model | Host decides |
 
-Replace `{adapter}` with `telegram`, `discord`, or `feishu`.
+Replace `{adapter}` with `telegram`, `discord`, `feishu`, or `qq`.
 
 ## Limitations
 
@@ -155,53 +156,74 @@ You still need to create bots on each platform and obtain tokens:
 - **Discord**: Create an application in the [Developer Portal](https://discord.com/developers/applications) with Message Content Intent enabled
 - **Feishu**: Create an app in the [Developer Console](https://open.feishu.cn/app) with IM permissions
 
+## Workflow Engine
+
+The library includes an independent dual-model (Claude + Codex) collaboration engine for automated workflows:
+
+```bash
+# Spec-Review: multi-round document review (Delphi method)
+npm run workflow:spec-review -- --spec ./spec.md --plan ./plan.md
+
+# Code-Review: blind review of git diff
+npm run workflow:code-review -- --branch-diff main
+
+# Review-Fix: review + auto-fix + re-review loop
+npm run workflow:review-fix -- --branch-diff main
+```
+
+Or via IM commands: `/workflow spec-review`, `/workflow code-review`, `/workflow review-fix`, `/workflow status`, `/workflow stop`.
+
+See [`docs/development.md`](docs/development.md) and [`src/lib/workflow/ARCHITECTURE.md`](src/lib/workflow/ARCHITECTURE.md) for details.
+
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [Development Guide](docs/development.md) | Host interface specs, SSE format, adapter development, step-by-step integration tutorial |
-| [Architecture](src/lib/bridge/ARCHITECTURE.md) | Module dependency graph, message flows, design decisions |
+| [Development Guide](docs/development.md) | Host interface specs, SSE format, adapter development, workflow integration, step-by-step tutorial |
+| [Bridge Architecture](src/lib/bridge/ARCHITECTURE.md) | Module dependency graph, message flows, design decisions |
+| [Workflow Architecture](src/lib/workflow/ARCHITECTURE.md) | 5-step state machine, profile-driven strategy, crash-safe resume |
+| [Workflow Conclusions](docs/workflow-conclusions-summary.md) | Comprehensive design decisions summary (1300+ lines) |
 | [Security](src/lib/bridge/SECURITY.md) | Threat model, mitigations, deployment recommendations |
 | [Contributing](src/lib/bridge/CONTRIBUTING.md) | Dev setup, code style, testing guide |
 | [Migration](src/lib/bridge/MIGRATION.md) | Before/after import patterns for migrating from direct imports |
+| [Changelog](CHANGELOG.md) | Version history and notable changes |
 
 ## Project Structure
 
 ```
 src/
-  lib/bridge/
-    context.ts              # DI container (initBridgeContext / getBridgeContext)
-    host.ts                 # Host interface definitions (BridgeStore, LLMProvider, etc.)
-    types.ts                # Shared type definitions (messages, bindings, status)
-    bridge-manager.ts       # Orchestrator — start/stop, message dispatch, session locks
-    channel-adapter.ts      # Abstract base class + adapter registry
-    channel-router.ts       # ChannelAddress -> ChannelBinding resolution
-    conversation-engine.ts  # LLM stream processing, SSE consumption
-    delivery-layer.ts       # Reliable outbound delivery (chunk, retry, dedup, audit)
-    permission-broker.ts    # Tool permission forwarding and callback handling
-    adapters/
-      telegram-adapter.ts   # Telegram Bot API long polling
-      discord-adapter.ts    # Discord.js Gateway WebSocket
-      feishu-adapter.ts     # Feishu/Lark WSClient
-      telegram-media.ts     # Telegram file download/attachment handling
-      telegram-utils.ts     # Telegram API helpers
-      index.ts              # Side-effect imports for adapter self-registration
-    markdown/
-      ir.ts                 # Intermediate representation for Markdown AST
-      render.ts             # Generic IR -> platform string renderer
-      telegram.ts           # Markdown -> Telegram HTML
-      discord.ts            # Markdown -> Discord-flavored Markdown
-      feishu.ts             # Markdown -> Feishu rich text / cards
-    security/
-      validators.ts         # Input validation (path traversal, injection, sanitization)
-      rate-limiter.ts       # Token bucket rate limiter (per chat)
-    examples/
-      mock-host.ts          # Runnable example with InMemoryStore + EchoLLM
-  __tests__/unit/
-    bridge-channel-router.test.ts
-    bridge-delivery-layer.test.ts
-    bridge-manager.test.ts
-    bridge-permission-broker.test.ts
+  lib/
+    bridge/                       # IM bridge system
+      context.ts                  # DI container (initBridgeContext / getBridgeContext)
+      host.ts                     # Host interface definitions
+      types.ts                    # Shared type definitions
+      bridge-manager.ts           # Orchestrator — start/stop, dispatch, session locks
+      channel-adapter.ts          # Abstract base class + adapter registry
+      channel-router.ts           # ChannelAddress -> ChannelBinding resolution
+      conversation-engine.ts      # LLM stream processing, SSE consumption
+      delivery-layer.ts           # Reliable outbound delivery (chunk, retry, dedup)
+      permission-broker.ts        # Tool permission forwarding and callback handling
+      adapters/
+        telegram-adapter.ts       # Telegram Bot API long polling
+        discord-adapter.ts        # Discord.js Gateway WebSocket
+        feishu-adapter.ts         # Feishu/Lark WSClient + interactive cards
+        qq-adapter.ts             # QQ WebSocket Gateway
+      markdown/                   # Platform-specific rendering
+      security/                   # Input validation + rate limiting
+      internal/                   # Commands (/workflow, /git, /codex, etc.)
+    workflow/                     # Dual-model collaboration engine
+      workflow-engine.ts          # 5-step state machine orchestrator
+      types.ts                    # All types, profiles, configs, custom errors
+      index.ts                    # Factory functions + public API
+      model-invoker.ts            # Agent SDK + Codex CLI abstraction
+      pack-builder.ts             # Review pack assembly
+      termination-judge.ts        # Dynamic termination (5 conditions)
+      issue-matcher.ts            # Finding -> ledger dedup/matching
+      diff-reader.ts              # Git diff parsing
+      auto-fixer.ts               # Review-and-Fix post-processor
+      report-generator.ts         # Final Markdown/JSON report
+      cli.ts                      # CLI entry point
+  __tests__/unit/                 # 367 unit tests
 ```
 
 ## Testing
@@ -210,7 +232,7 @@ src/
 # Type checking
 npm run typecheck
 
-# Unit tests (28 tests)
+# Unit tests (367 tests)
 npm run test:unit
 
 # Both

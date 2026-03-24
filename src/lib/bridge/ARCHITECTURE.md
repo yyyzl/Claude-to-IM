@@ -6,9 +6,10 @@
 bridge-manager.ts (orchestrator)
 ├── channel-adapter.ts (abstract base + registry)
 │   └── adapters/
-│       ├── telegram-adapter.ts
-│       ├── discord-adapter.ts
-│       └── feishu-adapter.ts
+│       ├── telegram-adapter.ts (long polling + media groups)
+│       ├── discord-adapter.ts (Gateway WebSocket + discord.js)
+│       ├── feishu-adapter.ts (WSClient + interactive cards)
+│       └── qq-adapter.ts (WebSocket Gateway + REST)
 ├── channel-router.ts (address → session binding)
 ├── conversation-engine.ts (LLM stream processing)
 ├── permission-broker.ts (tool approval forwarding)
@@ -18,10 +19,16 @@ bridge-manager.ts (orchestrator)
 │   ├── render.ts (generic renderer)
 │   ├── telegram.ts (Markdown → HTML chunks)
 │   ├── discord.ts (native Discord markdown)
-│   └── feishu.ts (Feishu cards/posts)
+│   └── feishu.ts (Feishu cards/posts + workflow card builder)
 ├── security/
-│   ├── validators.ts (input validation)
+│   ├── validators.ts (input validation + path traversal protection)
 │   └── rate-limiter.ts (token bucket per chat)
+├── internal/
+│   ├── workflow-command.ts (/workflow command handler)
+│   ├── codex-passthrough.ts (Codex CLI passthrough)
+│   ├── git-llm.ts + git-command.ts (Git operations)
+│   ├── session-lock.ts + timeouts.ts (session management)
+│   └── bridge-help.ts + usage-command.ts (help + usage stats)
 ├── types.ts (shared type definitions)
 ├── host.ts (host interface definitions)
 └── context.ts (DI container)
@@ -91,3 +98,17 @@ Preview drafts use configurable interval (700ms Telegram, 1500ms Discord) + mini
 
 ### Session Lock Chains
 `processWithSessionLock()` uses Promise chaining — not mutual exclusion — so different sessions process concurrently while same-session messages serialize. Lock cleanup happens in `.finally()`.
+
+### Workflow Card Lifecycle (2026-03-24)
+Feishu adapter supports workflow progress cards via optional methods:
+- `createWorkflowCard()` — creates initial interactive card
+- `updateWorkflowCard()` — updates existing card in-place (debounced)
+- `finalizeWorkflowCard()` — sets terminal state (completed/failed/paused) with 3-retry + exponential backoff + cardElement fallback
+
+Cards degrade gracefully: if creation fails, `workflow-command.ts` falls back to text-mode push.
+
+### Active Task Tracking by Chat (2026-03-21)
+`/stop` and `/status` use `activeTasksByChat` Map (keyed by `channelType:chatId`) instead of session ID. This prevents "No task running" false negatives when sessions switch mid-workflow.
+
+### Path Traversal Protection (2026-03-20)
+`resolveSafePath()` in `validators.ts` ensures spec/plan file paths resolve within the working directory. Prevents arbitrary file reads via malicious `/workflow` arguments.

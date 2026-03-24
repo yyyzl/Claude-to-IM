@@ -15,6 +15,7 @@
 - [SSE 流格式](#sse-流格式)
 - [分步集成教程](#分步集成教程)
 - [开发新适配器](#开发新适配器)
+- [Workflow Engine 集成](#workflow-engine-集成)
 - [测试](#测试)
 - [故障排查](#故障排查)
 
@@ -709,6 +710,146 @@ export const PLATFORM_LIMITS: Record<string, number> = {
 ### 第 5 步：测试
 
 按照现有适配器测试的模式创建 `src/__tests__/unit/bridge-my-platform-adapter.test.ts`。
+
+---
+
+## Workflow Engine 集成
+
+Workflow Engine 是独立于 Bridge 的双模型协作编排层，支持 Spec-Review（文档审查）和 Code-Review（代码审查）两种自动化工作流。
+
+### 概览
+
+```
+Bridge (IM 交互层)  ──or──  CLI (命令行)
+        │                        │
+        ▼                        ▼
+   Workflow Engine (编排层)
+   ├── Codex 盲审 → Issue 匹配 → Claude 裁决 → 终止判断
+   └── 持久化到 .claude-workflows/runs/{run-id}/
+```
+
+**两种入口**：
+
+1. **IM 入口**：飞书/Telegram/Discord 中输入 `/workflow spec-review` 或 `/workflow code-review`
+2. **CLI 入口**：`npm run workflow:spec-review` / `npm run workflow:code-review` / `npm run workflow:review-fix`
+
+### 快速开始（CLI）
+
+```bash
+# Spec-Review：审查 spec + plan 文档
+npm run workflow:spec-review -- --spec ./spec.md --plan ./plan.md
+
+# Code-Review：审查 git diff
+npm run workflow:code-review -- --branch-diff main
+
+# Review-Fix：审查 + 自动修复循环
+npm run workflow:review-fix -- --branch-diff main
+```
+
+### 快速开始（IM 命令）
+
+在已接入 Bridge 的 IM 群中：
+
+```
+/workflow spec-review spec.md plan.md
+/workflow code-review --branch-diff main
+/workflow review-fix --branch-diff main --exclude test/**
+/workflow status
+/workflow stop
+/workflow resume <run-id>
+/workflow report <run-id>
+```
+
+### 程序化集成
+
+```typescript
+import {
+  createSpecReviewEngine,
+  createCodeReviewEngine,
+  SPEC_REVIEW_PROFILE,
+  CODE_REVIEW_PROFILE,
+} from 'claude-to-im/workflow';
+
+// 创建引擎（工厂函数自动装配 9 个依赖）
+const engine = createCodeReviewEngine('/path/to/workdir');
+
+// 监听事件
+engine.on('workflow_started', (e) => console.log('Started:', e.run_id));
+engine.on('codex_review_completed', (e) => console.log('Findings:', e.data));
+engine.on('workflow_completed', (e) => console.log('Done:', e.data));
+
+// 启动工作流
+await engine.start({
+  spec: '',           // code-review 不需要 spec
+  plan: '',           // code-review 不需要 plan
+  contextFiles: [],
+  profile: CODE_REVIEW_PROFILE,
+  config: {
+    max_rounds: 3,
+    codex_timeout_ms: 5_400_000,  // 90 分钟
+  },
+  reviewScope: {
+    branchDiff: 'main',
+  },
+});
+```
+
+### 工作流类型
+
+| 类型 | Profile | 说明 |
+|------|---------|------|
+| Spec-Review | `SPEC_REVIEW_PROFILE` | Codex 盲审 spec+plan → Claude 裁决+补丁 → 多轮迭代 |
+| Code-Review | `CODE_REVIEW_PROFILE` | Codex 盲审 git diff → Claude 过滤误报 → 生成报告 |
+| Review-Fix | `CODE_REVIEW_PROFILE` + AutoFixer | Code-Review + 自动修复 + 重审循环 |
+
+### 事件类型
+
+| 事件 | 说明 |
+|------|------|
+| `workflow_started` | 工作流启动，包含 `run_id` |
+| `round_started` | 新一轮开始 |
+| `codex_review_started/completed/timeout` | Codex 审查生命周期 |
+| `issue_matching_completed` | Issue 去重完成，包含新增数量 |
+| `claude_decision_started/completed` | Claude 裁决生命周期 |
+| `termination_triggered` | 终止条件触发 |
+| `workflow_completed` | 工作流正常完成 |
+| `workflow_failed` | 工作流异常终止 |
+| `human_review_requested` | 死循环检测，需要人工介入 |
+
+### 配置参数
+
+```typescript
+interface WorkflowConfig {
+  max_rounds: number;                  // 默认 3（架构级 5）
+  codex_timeout_ms: number;            // 默认 5_400_000 (90min)
+  claude_timeout_ms: number;           // 默认 5_400_000 (90min)
+  codex_max_retries: number;           // 默认 1
+  claude_max_retries: number;          // 默认 1
+  codex_context_window_tokens: number; // 默认 128_000
+  claude_model: string;                // 默认 "claude-sonnet-4"
+  codex_backend: string;               // 默认 "codex"
+  context_files: ContextFile[];        // 全局参考文件
+}
+```
+
+### 产出物
+
+工作流运行后在 `.claude-workflows/runs/{run-id}/` 生成：
+
+| 文件 | 说明 |
+|------|------|
+| `meta.json` | 状态元信息，支持断点续传 |
+| `issue-ledger.json` | Issue 决策台账（单一事实源） |
+| `events.ndjson` | 完整事件日志（追加模式） |
+| `spec-v{N}.md` / `plan-v{N}.md` | 版本化文档（Spec-Review） |
+| `rounds/R{N}-*.md` | 每轮原始输入输出 |
+| `reports/*.md` / `reports/*.json` | 最终审查报告（Code-Review） |
+
+### 更多信息
+
+- 架构详情：[`src/lib/workflow/ARCHITECTURE.md`](../src/lib/workflow/ARCHITECTURE.md)
+- 完整设计决策：[`docs/workflow-conclusions-summary.md`](workflow-conclusions-summary.md)
+- 编码规范：[`.trellis/spec/backend/workflow-engine.md`](../.trellis/spec/backend/workflow-engine.md)
 
 ---
 

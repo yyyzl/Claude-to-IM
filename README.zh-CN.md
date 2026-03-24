@@ -172,15 +172,37 @@ $env:BRIDGE_CONTROL_DIR=".ccg/bridge-codex"; npx tsx scripts/feishu-claude-bridg
 - **Discord**：在 [Developer Portal](https://discord.com/developers/applications) 创建应用，启用 Message Content Intent
 - **飞书**：在[开发者后台](https://open.feishu.cn/app)创建应用，配置 IM 权限
 
+## Workflow Engine
+
+本库包含独立的双模型（Claude + Codex）协作引擎，支持自动化工作流：
+
+```bash
+# Spec-Review：多轮文档审查（德尔菲法）
+npm run workflow:spec-review -- --spec ./spec.md --plan ./plan.md
+
+# Code-Review：盲审 git diff
+npm run workflow:code-review -- --branch-diff main
+
+# Review-Fix：审查 + 自动修复 + 重审循环
+npm run workflow:review-fix -- --branch-diff main
+```
+
+或通过 IM 命令：`/workflow spec-review`、`/workflow code-review`、`/workflow review-fix`、`/workflow status`、`/workflow stop`。
+
+详见 [`docs/development.zh-CN.md`](docs/development.zh-CN.md) 和 [`src/lib/workflow/ARCHITECTURE.md`](src/lib/workflow/ARCHITECTURE.md)。
+
 ## 文档
 
-| 文档                                     | 说明                         |
-| -------------------------------------- | -------------------------- |
-| [开发指南](docs/development.zh-CN.md)      | 宿主接口规范、SSE 格式、适配器开发、分步集成教程 |
-| [架构](src/lib/bridge/ARCHITECTURE.md)   | 模块依赖图、消息流、设计决策             |
-| [安全](src/lib/bridge/SECURITY.md)       | 威胁模型、缓解措施、部署建议             |
-| [贡献指南](src/lib/bridge/CONTRIBUTING.md) | 开发环境、代码风格、测试指南             |
-| [迁移](src/lib/bridge/MIGRATION.md)      | 从直接导入迁移到 DI 的前后对比          |
+| 文档 | 说明 |
+|------|------|
+| [开发指南](docs/development.zh-CN.md) | 宿主接口规范、SSE 格式、适配器开发、Workflow 集成、分步教程 |
+| [Bridge 架构](src/lib/bridge/ARCHITECTURE.md) | 模块依赖图、消息流、设计决策 |
+| [Workflow 架构](src/lib/workflow/ARCHITECTURE.md) | 5 步状态机、Profile 策略、崩溃恢复 |
+| [Workflow 全结论汇总](docs/workflow-conclusions-summary.md) | 全部设计决策汇总（1300+ 行） |
+| [安全](src/lib/bridge/SECURITY.md) | 威胁模型、缓解措施、部署建议 |
+| [贡献指南](src/lib/bridge/CONTRIBUTING.md) | 开发环境、代码风格、测试指南 |
+| [迁移](src/lib/bridge/MIGRATION.md) | 从直接导入迁移到 DI 的前后对比 |
+| [变更日志](CHANGELOG.md) | 版本历史与重要变更 |
 
 ## 项目结构
 
@@ -227,7 +249,7 @@ src/
 # 类型检查
 npm run typecheck
 
-# 单元测试（28 个测试）
+# 单元测试（367 个测试）
 npm run test:unit
 
 # 全部

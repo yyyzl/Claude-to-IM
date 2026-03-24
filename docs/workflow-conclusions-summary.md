@@ -2,9 +2,11 @@
 
 > **用途**：供用户据此优化飞书 `/workflow` 工作流
 >
-> **生成日期**：2026-03-21
+> **生成日期**：2026-03-21（最后更新：2026-03-24）
 >
 > **覆盖范围**：5 个 AI 方案 → 最终方案 v2 → Spec/Plan 设计 → 3 轮 Codex 对抗审查 → 13 项修复闭环 → 15 个开发 Session → 当前实现状态 → 优化建议
+>
+> **2026-03-24 更新**：修正 P2B 飞书深度集成状态（⬜→✅），补充 Code-Review MVP / Review-Fix / CLI 子命令完成标记
 
 ---
 
@@ -189,7 +191,7 @@ Step D (post_decision)   → 终止判断 + 轮次收尾
 | Worktree 隔离 | 需同时编译/测试 | `git worktree add` |
 | 文件所有权 | 轻量并行 | TaskPack.scope 严格互斥 |
 
-### 3.3 工作流 3：代码审查（对抗性验证）⬜ 未实现
+### 3.3 工作流 3：代码审查（对抗性验证）✅ 已实现（Review-only MVP + Review-Fix 循环）
 
 **角色分工**：Claude 和 Codex **都清空上下文**，避免确认偏差。
 
@@ -455,6 +457,7 @@ Agent SDK 配置：`tools: []`（纯文本）、`persistSession: false`、`maxTu
 | **P1a Spec-Review MVP** | ✅ 完成 | 14 源文件 / 3965 行 / 108 tests |
 | **P2A IM 集成** | ✅ 完成 | /workflow 命令 + 事件推送 + 竞态修复 |
 | **引擎增强** | ✅ 完成 | system prompt + 可配模型 + 背压 + CJK + Agent SDK 迁移 |
+| **P2B 飞书深度集成** | ✅ 大部分完成 | Interactive Card + 进度更新 + Inline 按钮 + 人工介入 + 结果报告卡片 |
 
 ### 8.2 代码文件清单
 
@@ -495,6 +498,8 @@ src/lib/bridge/internal/
 | `/workflow code-review [--range A..B|--branch-diff base]` | 启动 Code-Review review-only MVP（IM 入口） | ✅ |
 | `/workflow spec-review ... --model <m> --codex-backend <b>` | 为文档审查指定模型 | ✅ |
 | `/workflow code-review --model <m> --codex-backend <b>` | 为代码审查指定模型 | ✅ |
+| `/workflow review-fix [--range A..B\|--branch-diff base]` | 启动 Review-Fix 循环（审查+自动修复） | ✅ |
+| `/workflow report <run-id>` | 查看代码审查报告 | ✅ |
 | `/workflow status [run-id]` | 查看进度 | ✅ |
 | `/workflow resume <run-id>` | 恢复暂停的工作流 | ✅ |
 | `/workflow stop` | 停止当前工作流 | ✅ |
@@ -517,44 +522,51 @@ src/lib/bridge/internal/
 
 ## 九、未完成阶段及待优化方向
 
-### 9.1 P1b：开发流 + 代码审查流（🟡 部分完成）
+### 9.1 P1b：开发流 + 代码审查流（🟡 代码审查已完成，开发流未开始）
 
-**预估工作量**：3-5 天
+**当前状态说明**（更新于 2026-03-24）：
 
-**当前状态说明**：
-
-- `code-review review-only MVP` 已完成 IM 闭环：真实 `diff + changed_files` 输入、Issue Ledger、报告 artifact、resume、完成态提示都已打通
-- 独立 CLI `code-review` 子命令 **未实现**
-- `dev workflow` 仍未开始
+- ✅ `code-review review-only MVP` 已完成 IM 闭环：真实 `diff + changed_files` 输入、Issue Ledger、报告 artifact、resume、完成态提示都已打通
+- ✅ `review-fix` 循环已完成：自动修复 + 重新审查闭环
+- ✅ 独立 CLI `code-review` / `review-fix` 子命令已实现（`npm run workflow:code-review` / `npm run workflow:review-fix`）
+- ✅ 飞书卡片交互按钮（Stop / Resume / View Report）已实现（见 P2B）
+- ⬜ `dev workflow` 仍未开始
 
 | 子项 | 状态 | 说明 |
 |------|------|------|
-| Code-Review review-only MVP | ✅ 完成 | IM `/workflow code-review` 可用，完成后落地 Markdown / JSON 报告 |
-| 独立 CLI `code-review` 子命令 | ⬜ 未完成 | 当前仅 IM 入口，需单独实现 CLI 命令与帮助文案 |
+| Code-Review review-only MVP | ✅ 完成 | IM `/workflow code-review` + CLI `npm run workflow:code-review` |
+| Review-Fix 循环 | ✅ 完成 | IM `/workflow review-fix` + CLI `npm run workflow:review-fix` |
+| 飞书卡片集成 | ✅ 完成 | Interactive Card + 进度更新 + 按钮 + 终态报告 |
+| Code-Review bug 修复 | ✅ 完成 | 20+ 个 bug 闭环（ISS-001 ~ ISS-005 + 引擎 bug + 模板 bug） |
 | Dev workflow | ⬜ 未开始 | TaskPack / DeliveryPack / Manager-Worker 状态机仍待实现 |
+
+**Dev workflow 剩余任务**：
 
 | 任务 | 说明 |
 |------|------|
-| WorkflowDefinition 注册机制 | 支持 spec-review / dev / code-review 三种类型 |
 | TaskPack / DeliveryPack 数据结构 | 开发流专用 Pack |
-| ReviewPack 数据结构 | 代码审查专用 Pack |
 | 工作流 2 状态机 | Manager-Worker 模式，WorkItem 粒度 |
-| 工作流 3 状态机 | Adversarial 5 步循环 |
 | 并行 Codex 支持 | 多 WorkItem 并行执行 + 隔离策略 |
-| 对应 prompt 模板 | task-pack.md / review-pack.md |
+| 对应 prompt 模板 | task-pack.md / delivery-pack.md |
 
-### 9.2 P2B：飞书深度集成（⬜ 未开始）
+### 9.2 P2B：飞书深度集成（✅ 大部分完成，更新于 2026-03-24）
 
-**预估工作量**：3-5 天
+**实际进度**：6 项中 5 项已完成，剩余 1 项为低优先级增强。
 
-| 任务 | 说明 | 优先级 |
-|------|------|--------|
-| **飞书 Interactive Card** | 用卡片替代纯文本推送，展示结构化进度 | 🔴 高 |
-| **Inline 按钮** | approve / reject / skip / 终止，直接在卡片内操作 | 🔴 高 |
-| **人工介入流程** | 死循环检测时弹出裁决卡片，用户点击后 resume | 🔴 高 |
-| **进度卡片更新** | 不发新消息，而是更新已有卡片的状态 | 🟡 中 |
-| **结果报告卡片** | 工作流结束时推送汇总报告（轮次、问题统计、最终状态） | 🟡 中 |
-| **文件预览** | 在卡片内展示修改后的 spec/plan diff | 🟢 低 |
+| 任务 | 状态 | 说明 |
+|------|------|------|
+| **飞书 Interactive Card** | ✅ 完成 | `createWorkflowCard()` + `updateWorkflowCard()` 结构化进度卡片，debounced 批量更新 |
+| **进度卡片更新（不发新消息）** | ✅ 完成 | `scheduleCardUpdate()` + `flushCardUpdate()` 原地更新已有卡片，非发新消息 |
+| **Inline 按钮** | ✅ 完成 | Stop / Resume / View Report 按钮；`hasReport` 按工作流类型条件显示（ISS-004 修复） |
+| **人工介入流程** | ✅ 完成 | `human_review_requested` 事件 → 橙色 "⚠️ 需要人工审查" 卡片 + `/workflow resume` 恢复 |
+| **结果报告卡片** | ✅ 完成 | `finalizeCard()` 生成完成/失败/暂停终态卡片，含轮次统计、Issue 状态、报告路径 |
+| **文件预览** | ⬜ 未实现 | 在卡片内展示修改后的 spec/plan diff（🟢 低优先级增强） |
+
+**实现细节**：
+- `workflow-command.ts` 中 `bindProgressEvents()` 统一管理 card-mode / text-mode 双通道
+- 支持 12+ 种事件类型的卡片映射：workflow_started → round_started → codex/claude 各阶段 → termination → completion/failure
+- 卡片创建失败自动降级为 text-mode（graceful fallback）
+- `finalizeCard()` 增加 3 次重试 + 指数退避 + cardElement 降级（2026-03-24 修复）
 
 ### 9.3 引擎优化方向
 
