@@ -1390,8 +1390,14 @@ function bindProgressEvents(
     const sizeInfo = data.original_size && data.final_size
       ? ` (${Math.round(data.original_size / 1024)}KB → ${Math.round(data.final_size / 1024)}KB)`
       : '';
-    // Only push text — cards already show real-time progress, no need to update card for this
-    pushText(`${levelLabel} ${targetLabel} ${phaseName}上下文已降级${sizeInfo}`);
+    const degradeMsg = `${levelLabel} ${targetLabel} ${phaseName}上下文已降级${sizeInfo}`;
+    if (state.cardMode) {
+      const round = ensureRound(state, e.round);
+      round.warnings.push(degradeMsg);
+      scheduleCardUpdate();
+    } else {
+      pushText(degradeMsg);
+    }
   });
 
   engine.on('claude_decision_started', (e: WorkflowEvent) => {

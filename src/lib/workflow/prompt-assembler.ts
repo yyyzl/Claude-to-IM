@@ -398,7 +398,7 @@ export class PromptAssembler {
     if (rejected.length === 0) return '无';
 
     return rejected
-      .map((item) => `- [${item.id}] ${item.description} (rejected in round ${item.round_rejected})`)
+      .map((item) => `- [${item.id}] ${item.description}（第 ${item.round_rejected} 轮已驳回）`)
       .join('\n');
   }
 
@@ -415,7 +415,7 @@ export class PromptAssembler {
   private renderResolvedIssues(issues: ResolvedIssueSummary[]): string {
     if (issues.length === 0) return '无';
     return issues
-      .map((i) => `- [${i.id}] (${i.severity}, resolved in R${i.resolved_in_round}) ${i.description}`)
+      .map((i) => `- [${i.id}]（${i.severity}，第 ${i.resolved_in_round} 轮已解决）${i.description}`)
       .join('\n');
   }
 
@@ -432,7 +432,7 @@ export class PromptAssembler {
   private renderAcceptedIssues(issues: AcceptedIssueSummary[]): string {
     if (issues.length === 0) return '无';
     return issues
-      .map((i) => `- [${i.id}] (${i.severity}, raised in R${i.round}) ${i.description}`)
+      .map((i) => `- [${i.id}]（${i.severity}，第 ${i.round} 轮提出）${i.description}`)
       .join('\n');
   }
 
@@ -545,7 +545,7 @@ export class PromptAssembler {
       case 'unstaged':
         return '工作区未暂存变更（git diff）';
       case 'commit':
-        return `单个提交：${scope.base_ref ?? 'HEAD'}`;
+        return `单个提交：${scope.head_ref ?? scope.base_ref ?? 'HEAD'}`;
       case 'commit_range':
         return `提交区间：${scope.base_ref}..${scope.head_ref}`;
       case 'branch':
