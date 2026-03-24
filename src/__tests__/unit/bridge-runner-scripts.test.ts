@@ -26,4 +26,12 @@ describe("bridge runner scripts", () => {
     assert.doesNotMatch(managerScriptText, /ValidateSet\("start", "stop", "restart"\)/);
     assert.doesNotMatch(managerScriptText, /\[start\|stop\|restart\]/);
   });
+
+  it("cleans up the legacy default bridge-runner when managing dual bridges", () => {
+    const managerScriptText = fs.readFileSync(bridgeManagerScriptPath, "utf8");
+
+    assert.match(managerScriptText, /\$cleanupOnlyBridges\s*=\s*@\(/);
+    assert.match(managerScriptText, /\.ccg\/bridge-runner/);
+    assert.match(managerScriptText, /\$bridgesToStop\s*=\s*@\(\$managedBridges \+ \$cleanupOnlyBridges\)/);
+  });
 });

@@ -1,12 +1,12 @@
 ﻿<#
   Claude + Codex 双桥接管理脚本
-  支持 start / stop 两种操作。
+  支持 start / stop 两种操作，并兼容清理旧的默认 bridge-runner。
 
   用法：
     powershell -ExecutionPolicy Bypass -File scripts/start-bridges.ps1 [start|stop]
 
   start   (默认) npm install → npm run build → 启动双桥接窗口
-  stop    优雅停止两个桥接，超时则强杀
+  stop    优雅停止双桥接，并兼容清理旧的默认 bridge-runner，超时则强杀
 #>
 
 param(
@@ -46,7 +46,8 @@ function Stop-ProcessTree([int]$processId, [string]$label = "") {
 }
 
 # ── 桥接实例定义 ──
-$bridges = @(
+# managed：由本脚本负责启动的双桥接。
+$managedBridges = @(
   @{
     Name       = "Claude"
     EnvFile    = ".env.bridge.claude"
@@ -59,13 +60,24 @@ $bridges = @(
   }
 )
 
+# cleanup-only：只负责兼容清理历史默认实例，避免它与 codex 桥接共用同一飞书应用时抢消息。
+$cleanupOnlyBridges = @(
+  @{
+    Name       = "Legacy Default"
+    EnvFile    = ".env.bridge.local"
+    ControlDir = ".ccg/bridge-runner"
+  }
+)
+
+$bridgesToStop = @($managedBridges + $cleanupOnlyBridges)
+
 # ════════════════════════════════════════
 # Stop：优雅停止 → 超时强杀
 # ════════════════════════════════════════
 function Stop-AllBridges {
   # 第 1 步：收集每个桥接的 PID 信息（一次性读取，后续复用）
   $bridgeInfo = @()
-  foreach ($b in $bridges) {
+  foreach ($b in $bridgesToStop) {
     $controlDir = Join-Path $repoRoot $b.ControlDir
     $info = @{
       Name       = $b.Name
@@ -187,7 +199,7 @@ function Start-AllBridges {
   }
 
   # 启动双桥接（先清理残留旧窗口，再开新窗口）
-  foreach ($b in $bridges) {
+  foreach ($b in $managedBridges) {
     $controlDir = Join-Path $repoRoot $b.ControlDir
     $cmdPidFile = Join-Path $controlDir "cmd-pid"
     New-Item -ItemType Directory -Force -Path $controlDir | Out-Null
@@ -207,7 +219,7 @@ function Start-AllBridges {
     Write-Host "[bridges] $($b.Name): cmd 窗口 PID=$($cmdProc.Id)"
   }
 
-  Write-Host "[bridges] 全部就绪：已启动 $($bridges.Count) 个桥接窗口。" -ForegroundColor Green
+  Write-Host "[bridges] 全部就绪：已启动 $($managedBridges.Count) 个桥接窗口。" -ForegroundColor Green
 }
 
 # ════════════════════════════════════════
