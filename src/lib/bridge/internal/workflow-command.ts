@@ -1382,6 +1382,18 @@ function bindProgressEvents(
     }
   });
 
+  engine.on('context_degraded', (e: WorkflowEvent) => {
+    const data = e.data as { level?: string; target?: string; original_size?: number; final_size?: number; phase?: string };
+    const levelLabel = data.level === 'hard_truncated' ? '⚠️ 硬截断' : data.level === 'truncated' ? '⚠️ 截断' : '📉 降级为 hunks';
+    const targetLabel = data.target === 'codex' ? 'Codex' : 'Claude';
+    const phaseName = data.phase === 'codex_review' ? '审查' : '决策';
+    const sizeInfo = data.original_size && data.final_size
+      ? ` (${Math.round(data.original_size / 1024)}KB → ${Math.round(data.final_size / 1024)}KB)`
+      : '';
+    // Only push text — cards already show real-time progress, no need to update card for this
+    pushText(`${levelLabel} ${targetLabel} ${phaseName}上下文已降级${sizeInfo}`);
+  });
+
   engine.on('claude_decision_started', (e: WorkflowEvent) => {
     const round = ensureRound(state, e.round);
     round.claude = 'running';

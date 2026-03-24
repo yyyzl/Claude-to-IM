@@ -349,6 +349,12 @@ export class WorkflowEngine {
               runId, round, 'pack.json', JSON.stringify(pack, null, 2),
             );
             prompt = await this.promptAssembler.renderCodeReviewPrompt(pack);
+            if (this.promptAssembler.lastDegradation) {
+              await this.emit(runId, round, 'context_degraded', {
+                ...this.promptAssembler.lastDegradation,
+                phase: 'codex_review',
+              });
+            }
           } else {
             const pack = await this.packBuilder.buildSpecReviewPack(runId, round, config);
             await this.store.saveRoundArtifact(
@@ -632,6 +638,12 @@ export class WorkflowEngine {
               changedFiles, diff,
             );
             claudePrompt = await this.promptAssembler.renderClaudeCodeReviewPrompt(crInput);
+            if (this.promptAssembler.lastDegradation) {
+              await this.emit(runId, round, 'context_degraded', {
+                ...this.promptAssembler.lastDegradation,
+                phase: 'claude_decision',
+              });
+            }
           } else {
             const input = await this.packBuilder.buildClaudeDecisionInput(
               runId, round, allMatchedIssues,
@@ -696,11 +708,14 @@ export class WorkflowEngine {
               continue;
             }
             if (err instanceof TimeoutError) {
-              claudeConsecutiveFailures++;
+              // Timeouts are transient — do NOT increment the permanent degradation
+              // counter. Only ModelInvocationError (deterministic auth/config failures)
+              // should trigger Codex-only degradation. Skip this round's Claude decision
+              // but allow future rounds to try Claude again.
               console.error(
                 `[WorkflowEngine] Claude decision TIMEOUT (run=${runId}, round=${round}, ` +
                 `retries=${err.retriesExhausted}). Skipping to next round.` +
-                ` [consecutive failures: ${claudeConsecutiveFailures}]`,
+                ` [consecutive API failures: ${claudeConsecutiveFailures}]`,
               );
               await this.emit(runId, round, 'claude_decision_timeout', {
                 round,
@@ -723,15 +738,11 @@ export class WorkflowEngine {
               step = 'codex_review';
               meta.current_round = round;
               meta.current_step = 'codex_review';
-              // ISS-010 fix: persist claude failure counter for crash-safe resume
-              const curMetaTimeout = await this.store.getMeta(runId);
+              // No need to persist claude_consecutive_failures — timeouts don't
+              // count toward permanent degradation (only ModelInvocationError does).
               await this.store.updateMeta(runId, {
                 current_round: round,
                 current_step: 'codex_review',
-                termination_state: {
-                  ...(curMetaTimeout?.termination_state ?? { consecutive_parse_failures: 0, zero_progress_rounds: 0 }),
-                  claude_consecutive_failures: claudeConsecutiveFailures,
-                },
               });
               continue;
             }
