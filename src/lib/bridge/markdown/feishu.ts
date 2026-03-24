@@ -205,7 +205,7 @@ export function buildWorkflowCardJson(
   } = {},
 ): string {
   const {
-    headerTitle = '🔄 Spec-Review 工作流',
+    headerTitle = '🔄 工作流',
     headerTemplate = 'blue',
     footer = null,
     runId,

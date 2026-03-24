@@ -29,6 +29,7 @@ function makeState(overrides: Partial<WorkflowProgressState> = {}): WorkflowProg
     currentRound: 1,
     rounds: new Map(),
     startedAt: Date.now(),
+    workflowType: 'spec-review',
     cardMode: true,
     cardCreated: true,
     updateTimer: null,

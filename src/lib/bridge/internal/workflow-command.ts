@@ -335,7 +335,7 @@ async function handleStartSpecReview(
     });
 
     // Bind progress events (message push)
-    bindProgressEvents(engine, adapter, msg, key);
+    bindProgressEvents(engine, adapter, msg, key, 'spec-review');
 
     // Confirm start immediately (non-blocking)
     await deliverText(adapter, msg,
@@ -461,7 +461,7 @@ async function handleStartCodeReview(
     });
 
     // Bind progress events
-    bindProgressEvents(engine, adapter, msg, key);
+    bindProgressEvents(engine, adapter, msg, key, 'code-review');
 
     // Confirm start
     const scopeDesc = formatScopeDescription(scope);
@@ -605,7 +605,7 @@ async function handleStartReviewFix(
     });
 
     // Bind progress events
-    bindProgressEvents(engine, adapter, msg, key);
+    bindProgressEvents(engine, adapter, msg, key, 'review-fix');
 
     // Confirm start
     const scopeDesc = formatScopeDescription(scope);
@@ -868,10 +868,12 @@ async function handleResume(
   const basePath = path.join(cwd, '.claude-workflows');
   const resumeStore = new WorkflowStore(basePath);
   const resumeMeta = await resumeStore.getMeta(cmd.runId);
-  const engine = resumeMeta?.workflow_type === 'code-review'
+  const resumeType: WorkflowProgressState['workflowType'] =
+    resumeMeta?.workflow_type === 'code-review' ? 'code-review' : 'spec-review';
+  const engine = resumeType === 'code-review'
     ? createCodeReviewEngine(basePath)
     : createSpecReviewEngine(basePath);
-  bindProgressEvents(engine, adapter, msg, key);
+  bindProgressEvents(engine, adapter, msg, key, resumeType);
 
   activeWorkflows.set(key, {
     engine,
@@ -962,6 +964,8 @@ interface WorkflowProgressState {
   termination?: { reason: string; details?: string };
   humanReview?: { reason?: string };
   startedAt: number;
+  /** Workflow type — used to render the correct card header title. */
+  workflowType: 'spec-review' | 'code-review' | 'review-fix';
   /** Whether the adapter supports workflow cards (detected once). */
   cardMode: boolean;
   /** Whether the card has been created yet. */
@@ -1126,11 +1130,23 @@ function ensureRound(state: WorkflowProgressState, round: number): RoundProgress
  * This is the **single point** where events become messages.
  * Card mode: all events update one card. Text mode: each event sends a text message.
  */
+/**
+ * Map workflow type to the card header title shown during execution.
+ */
+function workflowHeaderTitle(type: WorkflowProgressState['workflowType']): string {
+  switch (type) {
+    case 'code-review': return '🔍 Code-Review 工作流';
+    case 'review-fix':  return '🔧 Review-Fix 工作流';
+    case 'spec-review': return '🔄 Spec-Review 工作流';
+  }
+}
+
 function bindProgressEvents(
   engine: WorkflowEngine,
   adapter: BaseChannelAdapter,
   msg: InboundMessage,
   _key: string,
+  workflowType: WorkflowProgressState['workflowType'] = 'spec-review',
 ): void {
   // Detect card support
   const supportsCards = typeof adapter.createWorkflowCard === 'function';
@@ -1148,6 +1164,7 @@ function bindProgressEvents(
     currentRound: 0,
     rounds: new Map(),
     startedAt: Date.now(),
+    workflowType,
     cardMode: supportsCards,
     cardCreated: false,
     updateTimer: null,
@@ -1176,6 +1193,7 @@ function bindProgressEvents(
     const elapsed = formatElapsed(Date.now() - state.startedAt);
     const content = renderProgressMarkdown(state);
     const cardJson = buildWorkflowCardJson(content, {
+      headerTitle: workflowHeaderTitle(state.workflowType),
       footer: { status: '🔄 运行中', elapsed },
       runId: state.runId,
       isRunning: true,
@@ -1194,6 +1212,7 @@ function bindProgressEvents(
 
     const content = renderProgressMarkdown(state);
     const cardJson = buildWorkflowCardJson(content, {
+      headerTitle: workflowHeaderTitle(state.workflowType),
       footer: { status: '🔄 启动中', elapsed: '0s' },
       runId: state.runId,
       isRunning: true,

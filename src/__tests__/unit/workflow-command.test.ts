@@ -371,6 +371,7 @@ describe('renderCompletionMarkdown', () => {
       runId: 'run-123',
       currentRound: 2,
       rounds: new Map(),
+      workflowType: 'code-review',
       cardMode: false,
       cardCreated: false,
       startedAt: Date.now(),
