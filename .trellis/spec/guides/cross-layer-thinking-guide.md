@@ -154,7 +154,36 @@ InboundMessage
 
 **教训**：当用户生成的内容（diff、源码、配置）被注入到模板/命令/查询中时，必须把它当作"不可信输入"处理。这不只是安全问题，也是正确性问题。
 
-### 错误 5：忘记平台扇出
+### 错误 5：不同基数的数据做比较
+
+坏例子：
+
+- 函数接收 `bySeverity`（已排除 rejected）和 `rejected`（来自全集），然后用 `rejected === totalFindings` 判断"全部 rejected"，但 `totalFindings` 是从 active-only 的 `bySeverity` 求和得来的。混合状态（1 rejected + 1 open）会误判。
+
+好例子：
+
+- 参数命名体现数据集来源（`activeCount` vs `totalCount`）
+- 比较前先确认两个值的基数一致，或显式还原到同一基数
+- 在函数签名的 JSDoc 里标注每个参数的数据来源
+
+**教训**：当多个参数来自不同的过滤/聚合管道时，比较操作极易产生语义错误。TS 的类型系统只校验结构，不校验语义——必须靠命名约定和代码注释补偿。
+
+### 错误 6：状态机多路径未覆盖
+
+坏例子：
+
+- `terminateWorkflow()` 硬编码 `current_step = 'post_decision'`，但实际上状态机有 7 个调用点，包括从 `pre_termination`、`codex_review`（超时）、`claude_decision`（失败）等步骤触发终止
+- 新增 `hasReport: true` 时只考虑了 code-review 完成路径，忘记 spec-review 也会走到同一 `finalizeCard()`
+
+好例子：
+
+- 读取 meta 中已持久化的 `current_step` 作为真实终止点
+- 对每个消费状态机步骤的函数，列出它可能遇到的所有 step 值并逐一处理
+- 新增工作流类型特有功能时，搜索所有消费该功能标志的路径，确认每个都有类型守卫
+
+**教训**：状态机的每个"分支汇合点"（如 terminateWorkflow、finalizeCard）都必须考虑所有到达路径，而不仅仅是 happy path。这类 bug 在增量开发中特别常见——新功能加入时只测试了新路径，忘记检查旧的汇合点是否仍然正确。
+
+### 错误 7：忘记平台扇出
 
 坏例子：
 
@@ -181,6 +210,9 @@ InboundMessage
 - [ ] 测试、脚本、文档是否跟着契约一起更新
 - [ ] 用户内容注入是否安全（`String.replace` 的 `$` 反向引用、模板占位符级联、SQL/shell 注入）
 - [ ] 输出是否在下游系统的大小/格式限制内（Codex 1M chars、HTTP body limit 等）
+- [ ] 多个参数来自不同数据集时，比较操作的基数是否一致
+- [ ] 状态机的所有到达路径是否都被汇合点函数正确处理
+- [ ] 新增的 workflow 类型特有功能是否有类型守卫（搜索所有消费点）
 
 ---
 

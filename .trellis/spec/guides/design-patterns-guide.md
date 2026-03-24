@@ -718,6 +718,23 @@ GitNexus 追踪到 `resume()` 由 `workflow/cli.ts` 和
 - 恢复时靠目录里有没有文件去猜当前状态，而不是读 meta。
 - 在 step 切换前不持久化元数据，导致崩溃后恢复点漂移。
 
+### 路径覆盖要求（来自 ISS-005 教训）
+
+状态机的每个**汇合点函数**（如 `terminateWorkflow()`、`finalizeCard()`）可能从多条路径到达。实现时必须列出所有可能的到达路径并逐一验证：
+
+```text
+terminateWorkflow() 的 7 条到达路径：
+1. pre_termination → no_new_high_severity → terminate
+2. post_decision → max_rounds / no_new_high → terminate
+3. codex_review → timeout → max_rounds → terminate
+4. claude_decision → ModelInvocationError → max_rounds → terminate
+5. claude_decision → TimeoutError → max_rounds → terminate
+6. claude_decision → parse failure → max_rounds → terminate
+7. post_decision → loop exhausted → terminate
+```
+
+**规则**：汇合点函数不应硬编码任何路径特有的值（如 `current_step = 'post_decision'`），而应从已持久化的 meta 中读取当前真实状态。
+
 ---
 
 ## 使用这份指南的正确方式
