@@ -1420,3 +1420,35 @@ Fix Phase 4 gaps (WorkflowStore snapshot, engine profile routing, IM code-review
 ### Next Steps
 
 - None - task complete
+
+
+## Session 29: feat: P1b-CR-1 Review-and-Fix + CLI subcommands + Feishu interactive cards
+
+**Date**: 2026-03-24
+**Task**: feat: P1b-CR-1 Review-and-Fix + CLI subcommands + Feishu interactive cards
+
+### Summary
+
+Three major features: (1) CLI rewrite with spec-review/code-review/review-fix subcommands, (2) AutoFixer module with worktree isolation + Codex fixes (P1b-CR-1), (3) Feishu workflow card interactive buttons (stop/resume/report). 393/393 tests pass, +1422/-154 lines across 12 files.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cfedd9b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

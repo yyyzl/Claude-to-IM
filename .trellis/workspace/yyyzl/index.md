@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 28
+- **Total Sessions**: 29
 - **Last Active**: 2026-03-24
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1422 | Active |
+| `journal-1.md` | ~1454 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits |
 |---|------|-------|---------|
+| 29 | 2026-03-24 | feat: P1b-CR-1 Review-and-Fix + CLI subcommands + Feishu interactive cards | `cfedd9b` |
 | 28 | 2026-03-24 | 拆分 workflow 审查命令 | `18978ba` |
 | 27 | 2026-03-24 | Close Out Code-Review IM MVP | `5148d8d`, `a2e74a8` |
 | 26 | 2026-03-24 | P1b-CR-0 Phase 4 fix + Phase 5: complete code-review MVP | `948603e` |
