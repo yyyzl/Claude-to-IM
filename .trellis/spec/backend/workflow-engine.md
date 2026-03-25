@@ -16,31 +16,25 @@
 
 ```ts
 // src/lib/workflow/index.ts
-export function createSpecReviewEngine(basePath?: string): _WorkflowEngine {
+// basePath: string (legacy) or WorkflowStorePaths (split paths for external repos)
+export function createSpecReviewEngine(basePath?: string | WorkflowStorePaths): _WorkflowEngine {
   const store = new _WorkflowStore(basePath);
-  const compressor = new _ContextCompressor();
-  const packBuilder = new _PackBuilder(store, compressor);
-  const promptAssembler = new _PromptAssembler(store);
-  const modelInvoker = new _ModelInvoker();
-  const terminationJudge = new _TerminationJudge();
-  const jsonParser = new _JsonParser();
-  const issueMatcher = new _IssueMatcher();
-  const patchApplier = new _PatchApplier();
-  const decisionValidator = new _DecisionValidator();
-
-  return new _WorkflowEngine(
-    store, packBuilder, promptAssembler, modelInvoker,
-    terminationJudge, jsonParser, issueMatcher, patchApplier,
-    decisionValidator,
-  );
+  // ... 9 dependencies wired via _buildEngine() internal helper
 }
 ```
 
-bridge 侧接入示例：
+bridge 侧接入示例（支持外部仓库审查）：
 
 ```ts
 // src/lib/bridge/internal/workflow-command.ts
-const engine = createCodeReviewEngine(basePath);
+import { resolveWorkflowPaths } from '../../workflow/path-resolver.js';
+
+// Split paths: templates from tool's built-in assets, run artifacts in target repo.
+const wfPaths = resolveWorkflowPaths({ repoCwd: cwd });
+const engine = createCodeReviewEngine({
+  runBasePath: wfPaths.runBasePath,       // → cwd/.claude-workflows
+  templateBasePath: wfPaths.templateBasePath, // → tool's built-in assets
+});
 
 await engine.start({
   spec: '',
@@ -147,10 +141,10 @@ export interface WorkflowProfile {
 
 真实目录来自 `src/lib/workflow/workflow-store.ts`：
 
+路径职责拆分（外部仓库支持）：
+
 ```text
-.claude-workflows/
-├── templates/
-├── schemas/
+runBasePath/                         # 运行产物（per-target-repo）
 └── runs/
     └── {run-id}/
         ├── meta.json
@@ -166,14 +160,23 @@ export interface WorkflowProfile {
             ├── R1-codex-review.md
             ├── R1-claude-input.md
             └── R1-claude-raw.md
+
+templateBasePath/                    # 模板资源（tool-bundled, read-only）
+├── templates/
+└── schemas/
 ```
+
+默认策略（由 `resolveWorkflowPaths()` 实现）：
+- `runBasePath` = `{repoCwd}/.claude-workflows` （per-repo 隔离）
+- `templateBasePath` = 工具内置资源目录 （通过 `resolveBuiltinAssetRoot()` 定位）
 
 关键约束：
 
 - 所有持久化都必须走 `WorkflowStore`。
 - `spec` 和 `plan` 是版本化文件，不能覆盖原文件名。
 - 事件日志是 `ndjson` 追加写，不要改成覆盖写。
-- 模板必须放在 `{basePath}/templates/`；`loadTemplate()` 找不到时直接抛错，不静默降级。
+- 模板默认从工具内置资源加载，不默认信任目标仓库模板。`loadTemplate()` 找不到时直接抛错并显示完整路径诊断。
+- `WorkflowStore` 构造器支持 `string`（旧行为）或 `WorkflowStorePaths`（拆分路径）。
 
 ### 2.4 事件契约
 

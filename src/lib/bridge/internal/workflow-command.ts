@@ -23,6 +23,7 @@ import type { WorkflowEngine } from '../../workflow/workflow-engine.js';
 import { WorkflowStore } from '../../workflow/workflow-store.js';
 import { ReportGenerator } from '../../workflow/report-generator.js';
 import { DiffReader } from '../../workflow/diff-reader.js';
+import { resolveWorkflowPaths } from '../../workflow/path-resolver.js';
 import { CODE_REVIEW_PROFILE } from '../../workflow/types.js';
 import type { WorkflowConfig, WorkflowEvent, WorkflowMeta, ReviewScope } from '../../workflow/types.js';
 import type { BaseChannelAdapter } from '../channel-adapter.js';
@@ -312,9 +313,12 @@ async function handleStartSpecReview(
     }
 
     // ── Create engine and upgrade slot ──
-    // Pass cwd-based basePath so workflow artifacts live alongside the chat's working directory,
-    // not wherever the bot process happens to start.
-    const engine = createSpecReviewEngine(path.join(cwd, '.claude-workflows'));
+    // Split paths: run artifacts stay in target repo, templates from tool's built-in assets.
+    const wfPaths = resolveWorkflowPaths({ repoCwd: cwd });
+    const engine = createSpecReviewEngine({
+      runBasePath: wfPaths.runBasePath,
+      templateBasePath: wfPaths.templateBasePath,
+    });
 
     // Upgrade the placeholder to a real provisional entry with engine.
     activeWorkflows.set(key, {
@@ -441,8 +445,12 @@ async function handleStartCodeReview(
     }
 
     // ── Create engine and upgrade slot ──
-    const basePath = path.join(cwd, '.claude-workflows');
-    const engine = createCodeReviewEngine(basePath);
+    // Split paths: run artifacts stay in target repo, templates from tool's built-in assets.
+    const wfPaths = resolveWorkflowPaths({ repoCwd: cwd });
+    const engine = createCodeReviewEngine({
+      runBasePath: wfPaths.runBasePath,
+      templateBasePath: wfPaths.templateBasePath,
+    });
 
     activeWorkflows.set(key, {
       engine,
@@ -585,8 +593,12 @@ async function handleStartReviewFix(
     }
 
     // ── Create engine and upgrade slot ──
-    const basePath = path.join(cwd, '.claude-workflows');
-    const engine = createCodeReviewEngine(basePath);
+    // Split paths: run artifacts stay in target repo, templates from tool's built-in assets.
+    const wfPaths = resolveWorkflowPaths({ repoCwd: cwd });
+    const engine = createCodeReviewEngine({
+      runBasePath: wfPaths.runBasePath,
+      templateBasePath: wfPaths.templateBasePath,
+    });
 
     activeWorkflows.set(key, {
       engine,
@@ -638,7 +650,8 @@ async function handleStartReviewFix(
         await deliverText(adapter, msg, '📝 审查完成，开始自动修复...');
 
         const { AutoFixer } = await import('../../workflow/auto-fixer.js');
-        const fixer = new AutoFixer(cwd, engine, basePath);
+        // AutoFixer only reads run artifacts (ledger, findings) — no templates needed.
+        const fixer = new AutoFixer(cwd, engine, wfPaths.runBasePath);
         const fixResult = await fixer.applyFixes(runId, {
           codexBackend: cmd.codexBackend,
           codexTimeoutMs: configOverrides.codex_timeout_ms,
@@ -778,8 +791,9 @@ async function handleReport(
       return;
     }
 
-    const basePath = path.join(cwd, '.claude-workflows');
-    const store = new WorkflowStore(basePath);
+    // Report only reads run artifacts — no templates needed.
+    const runBasePath = path.join(cwd, '.claude-workflows');
+    const store = new WorkflowStore(runBasePath);
     const meta = await store.getMeta(cmd.runId);
 
     if (!meta) {
@@ -796,8 +810,8 @@ async function handleReport(
     // Try to read persisted report first
     let markdown: string | null = null;
     try {
-      // WorkflowStore persists runs under {basePath}/runs/{runId}/
-      const reportPath = path.join(basePath, 'runs', cmd.runId, 'code-review-report.md');
+      // WorkflowStore persists runs under {runBasePath}/runs/{runId}/
+      const reportPath = path.join(runBasePath, 'runs', cmd.runId, 'code-review-report.md');
       markdown = await fs.readFile(reportPath, 'utf-8');
     } catch {
       // Not persisted — generate on the fly
@@ -906,16 +920,16 @@ async function handleResume(
     return;
   }
 
-  // Use cwd-based basePath to match start's storage location.
-  // Determine engine type from persisted meta.
-  const basePath = path.join(cwd, '.claude-workflows');
-  const resumeStore = new WorkflowStore(basePath);
+  // Split paths: run artifacts stay in target repo, templates from tool's built-in assets.
+  const wfPaths = resolveWorkflowPaths({ repoCwd: cwd });
+  const storePaths = { runBasePath: wfPaths.runBasePath, templateBasePath: wfPaths.templateBasePath };
+  const resumeStore = new WorkflowStore(storePaths);
   const resumeMeta = await resumeStore.getMeta(cmd.runId);
   const resumeType: WorkflowProgressState['workflowType'] =
     resumeMeta?.workflow_type === 'code-review' ? 'code-review' : 'spec-review';
   const engine = resumeType === 'code-review'
-    ? createCodeReviewEngine(basePath)
-    : createSpecReviewEngine(basePath);
+    ? createCodeReviewEngine(storePaths)
+    : createSpecReviewEngine(storePaths);
   bindProgressEvents(engine, adapter, msg, key, resumeType);
 
   activeWorkflows.set(key, {
@@ -1612,6 +1626,7 @@ async function deliverRunStatus(
   cwd: string,
 ): Promise<void> {
   try {
+    // Status only reads run artifacts — no templates needed.
     const store = new WorkflowStore(path.join(cwd, '.claude-workflows'));
     const meta: WorkflowMeta | null = await store.getMeta(runId);
 

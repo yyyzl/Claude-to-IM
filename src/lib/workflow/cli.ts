@@ -40,6 +40,7 @@ import { createSpecReviewEngine, createCodeReviewEngine } from './index.js';
 import { DiffReader } from './diff-reader.js';
 import { ReportGenerator } from './report-generator.js';
 import { WorkflowStore } from './workflow-store.js';
+import { resolveWorkflowPaths } from './path-resolver.js';
 import {
   CODE_REVIEW_PROFILE,
   type ContextFile,
@@ -279,7 +280,15 @@ async function handleSpecReview(args: ParsedArgs): Promise<void> {
     process.exit(1);
   }
 
-  const engine = createSpecReviewEngine(args.basePath);
+  // When --base-path is explicitly provided, use it as unified root (legacy).
+  // Otherwise, resolve split paths: templates from built-in assets, runs from cwd.
+  const specStorePaths = args.basePath
+    ? args.basePath
+    : (() => {
+        const wfPaths = resolveWorkflowPaths({ repoCwd: process.cwd() });
+        return { runBasePath: wfPaths.runBasePath, templateBasePath: wfPaths.templateBasePath };
+      })();
+  const engine = createSpecReviewEngine(specStorePaths);
   bindEventLogger(engine);
 
   let runId: string | undefined;
@@ -299,7 +308,15 @@ async function handleSpecReview(args: ParsedArgs): Promise<void> {
 
 async function handleCodeReview(args: ParsedArgs, enableFix: boolean): Promise<void> {
   const cwd = args.cwd ? path.resolve(args.cwd) : process.cwd();
-  const engine = createCodeReviewEngine(args.basePath);
+  // When --base-path is explicitly provided, use it as unified root (legacy).
+  // Otherwise, resolve split paths: templates from built-in assets, runs from target repo.
+  const crStorePaths = args.basePath
+    ? args.basePath
+    : (() => {
+        const wfPaths = resolveWorkflowPaths({ repoCwd: cwd });
+        return { runBasePath: wfPaths.runBasePath, templateBasePath: wfPaths.templateBasePath };
+      })();
+  const engine = createCodeReviewEngine(crStorePaths);
   bindEventLogger(engine);
 
   let runId: string | undefined;
@@ -351,8 +368,8 @@ async function handleCodeReview(args: ParsedArgs, enableFix: boolean): Promise<v
 
   console.log(`\nCode review completed. Run ID: ${runId}`);
 
-  // Generate report
-  const reportGen = new ReportGenerator(new WorkflowStore(args.basePath));
+  // Generate report — only needs run artifacts, no templates.
+  const reportGen = new ReportGenerator(new WorkflowStore(crStorePaths));
   const { markdown, data } = await reportGen.generate(runId);
 
   // Print summary to console
@@ -370,7 +387,11 @@ async function handleCodeReview(args: ParsedArgs, enableFix: boolean): Promise<v
 
     try {
       const { AutoFixer } = await import('./auto-fixer.js');
-      const fixer = new AutoFixer(cwd, engine, args.basePath);
+      // AutoFixer only needs run artifacts (reads ledger, saves fix results).
+      const fixerBasePath = typeof crStorePaths === 'string'
+        ? crStorePaths
+        : crStorePaths.runBasePath;
+      const fixer = new AutoFixer(cwd, engine, fixerBasePath);
       const fixResult = await fixer.applyFixes(runId, {
         codexBackend: args.codexBackend,
         codexTimeoutMs: mergedConfig.codex_timeout_ms,
@@ -406,8 +427,15 @@ async function handleResume(args: ParsedArgs): Promise<void> {
     process.exit(1);
   }
 
-  // Detect workflow type from stored meta
-  const store = new WorkflowStore(args.basePath);
+  // Detect workflow type from stored meta.
+  // Resume needs both run artifacts (to find the existing run) and templates (for prompts).
+  const resumeStorePaths = args.basePath
+    ? args.basePath
+    : (() => {
+        const wfPaths = resolveWorkflowPaths({ repoCwd: process.cwd() });
+        return { runBasePath: wfPaths.runBasePath, templateBasePath: wfPaths.templateBasePath };
+      })();
+  const store = new WorkflowStore(resumeStorePaths);
   const meta = await store.getMeta(args.resumeRunId);
   if (!meta) {
     console.error(`Error: run not found: ${args.resumeRunId}`);
@@ -416,8 +444,8 @@ async function handleResume(args: ParsedArgs): Promise<void> {
 
   const isCodeReview = meta.workflow_type === 'code-review';
   const engine = isCodeReview
-    ? createCodeReviewEngine(args.basePath)
-    : createSpecReviewEngine(args.basePath);
+    ? createCodeReviewEngine(resumeStorePaths)
+    : createSpecReviewEngine(resumeStorePaths);
 
   bindEventLogger(engine);
   setupSigintHandler(engine, () => args.resumeRunId);

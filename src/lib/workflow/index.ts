@@ -17,8 +17,13 @@
 // Re-export all public types (includes P1b-CR-0 types, profiles, etc.)
 export * from './types.js';
 
+// Re-export path resolver (external-repo support)
+export { resolveWorkflowPaths, resolveBuiltinAssetRoot } from './path-resolver.js';
+export type { WorkflowPaths, ResolveWorkflowPathsOptions } from './path-resolver.js';
+
 // Re-export classes
 export { WorkflowStore } from './workflow-store.js';
+export type { WorkflowStorePaths } from './workflow-store.js';
 export { WorkflowEngine } from './workflow-engine.js';
 export { PackBuilder } from './pack-builder.js';
 export type { IContextCompressor } from './pack-builder.js';
@@ -37,6 +42,7 @@ export { AutoFixer } from './auto-fixer.js';
 // Local imports for factory functions (re-exports above only forward
 // symbols; they do NOT bring them into the current module scope).
 import { WorkflowStore as _WorkflowStore } from './workflow-store.js';
+import type { WorkflowStorePaths as _WorkflowStorePaths } from './workflow-store.js';
 import { WorkflowEngine as _WorkflowEngine } from './workflow-engine.js';
 import { PackBuilder as _PackBuilder } from './pack-builder.js';
 import { PromptAssembler as _PromptAssembler } from './prompt-assembler.js';
@@ -51,13 +57,13 @@ import { DecisionValidator as _DecisionValidator } from './decision-validator.js
 // ── Factory Functions ───────────────────────────────────────────
 
 /**
- * Factory: create a fully-wired WorkflowEngine for Spec-Review.
+ * Build a WorkflowEngine with all 9 dependencies wired.
+ * Internal helper shared by both factory functions.
  *
- * All 9 dependencies are created and wired together.
- * ContextCompressor is injected into PackBuilder (not directly into engine).
+ * @param storeInit  - Legacy single basePath string, split paths object, or undefined.
  */
-export function createSpecReviewEngine(basePath?: string): _WorkflowEngine {
-  const store = new _WorkflowStore(basePath);
+function _buildEngine(storeInit?: string | _WorkflowStorePaths): _WorkflowEngine {
+  const store = new _WorkflowStore(storeInit);
   const compressor = new _ContextCompressor();
   const packBuilder = new _PackBuilder(store, compressor);
   const promptAssembler = new _PromptAssembler(store);
@@ -76,28 +82,27 @@ export function createSpecReviewEngine(basePath?: string): _WorkflowEngine {
 }
 
 /**
+ * Factory: create a fully-wired WorkflowEngine for Spec-Review.
+ *
+ * @param basePath  - Legacy single basePath or split {@link WorkflowStorePaths}.
+ *   When a split paths object is provided, templates are loaded from
+ *   `templateBasePath` while run artifacts are stored under `runBasePath`.
+ *   This enables reviewing external repos that don't carry their own templates.
+ */
+export function createSpecReviewEngine(basePath?: string | _WorkflowStorePaths): _WorkflowEngine {
+  return _buildEngine(basePath);
+}
+
+/**
  * Factory: create a fully-wired WorkflowEngine for Code-Review.
  *
  * Same dependencies as Spec-Review — the behavioral difference is
  * driven by {@link CODE_REVIEW_PROFILE} passed to `engine.start()`.
  * PatchApplier is still injected (required by constructor signature)
  * but will NOT be called when `profile.behavior.applyPatches` is false.
+ *
+ * @param basePath  - Legacy single basePath or split {@link WorkflowStorePaths}.
  */
-export function createCodeReviewEngine(basePath?: string): _WorkflowEngine {
-  const store = new _WorkflowStore(basePath);
-  const compressor = new _ContextCompressor();
-  const packBuilder = new _PackBuilder(store, compressor);
-  const promptAssembler = new _PromptAssembler(store);
-  const modelInvoker = new _ModelInvoker();
-  const terminationJudge = new _TerminationJudge();
-  const jsonParser = new _JsonParser();
-  const issueMatcher = new _IssueMatcher();
-  const patchApplier = new _PatchApplier();
-  const decisionValidator = new _DecisionValidator();
-
-  return new _WorkflowEngine(
-    store, packBuilder, promptAssembler, modelInvoker,
-    terminationJudge, jsonParser, issueMatcher, patchApplier,
-    decisionValidator,
-  );
+export function createCodeReviewEngine(basePath?: string | _WorkflowStorePaths): _WorkflowEngine {
+  return _buildEngine(basePath);
 }

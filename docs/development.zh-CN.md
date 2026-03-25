@@ -733,6 +733,13 @@ Bridge (IM 交互层)  ──or──  CLI (命令行)
 1. **IM 入口**：飞书/Telegram/Discord 中输入 `/workflow spec-review` 或 `/workflow code-review`
 2. **CLI 入口**：`npm run workflow:spec-review` / `npm run workflow:code-review` / `npm run workflow:review-fix`
 
+**外部仓库审查**：
+
+`/workflow` 支持直接审查任意目标仓库，无需目标仓库自带模板文件。通过 `/new` 或 `/cwd` 切换到外部仓库后，`/workflow code-review` 等命令开箱即用：
+- 模板默认从工具内置资源加载（`resolveBuiltinAssetRoot()` 自动定位）
+- 运行产物写回目标仓库的 `.claude-workflows/runs/`
+- 如需自定义模板根路径，可设置 `$WORKFLOW_ASSET_ROOT` 环境变量
+
 ### 快速开始（CLI）
 
 ```bash

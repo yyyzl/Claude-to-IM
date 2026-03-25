@@ -253,17 +253,23 @@ interface ClaudeDecisionOutput {
 
 ### 4.3 Artifact Store 目录
 
+> **路径职责拆分**：模板和运行产物现在可以来自不同目录。
+> 审查外部仓库时，模板从工具内置资源加载（`templateBasePath`），
+> 运行产物写回目标仓库（`runBasePath`）。详见 `path-resolver.ts`。
+
 ```
-.claude-workflows/
+templateBasePath/                  # 工具内置资源（只读）
 ├── templates/                     # Prompt 模板
 │   ├── spec-review-pack.md        # Codex 盲审 prompt
 │   ├── claude-decision.md         # Claude 裁决 prompt
 │   ├── claude-decision-system.md  # Claude 系统角色定义
 │   └── round-summary.md           # 轮次摘要模板
-├── schemas/                       # JSON Schema
-│   ├── issue-ledger.schema.json
-│   ├── meta.schema.json
-│   └── event.schema.json
+└── schemas/                       # JSON Schema
+    ├── issue-ledger.schema.json
+    ├── meta.schema.json
+    └── event.schema.json
+
+runBasePath/                       # 默认 = {repoCwd}/.claude-workflows
 └── runs/{run-id}/                 # 运行时数据（.gitignore）
     ├── meta.json                  # 状态 + 断点续传
     ├── spec-v1.md ... spec-v{N}.md
@@ -367,7 +373,7 @@ interface ClaudeDecisionOutput {
 | **Claude 系统提示** | 新增 `claude-decision-system.md`，定义 Technical Decision Authority 角色 |
 | **可配置模型** | `claude_model` / `codex_backend` + `--model` / `--codex-backend` CLI 参数 |
 | **超时调优** | 默认从 3min/2min → 90min；Claude max_tokens 4096 → 200K |
-| **Store 路径统一** | start/resume/status 统一使用 cwd-based basePath |
+| **Store 路径统一** | start/resume/status 统一使用 cwd-based basePath（仅限 run artifacts；模板路径已拆分为独立的 `templateBasePath`，默认从工具内置资源加载，见 `path-resolver.ts`） |
 | **背压 stdin 写入** | 32KB 分块写入 + drain 背压，防大 prompt 管道溢出 |
 | **诊断日志** | spawn/timeout/exit/retry/abort/stdin-error 全路径日志 |
 | **CJK token 估算** | CJK 字符 0.67 token vs ASCII 0.25 token |

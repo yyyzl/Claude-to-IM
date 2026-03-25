@@ -2,11 +2,10 @@
  * Artifact Store for workflow runs.
  * Handles all persistence: meta, spec/plan versions, ledger, round artifacts, events, templates.
  *
- * Directory structure:
- *   {basePath}/
- *     templates/      -- Prompt templates (git-tracked)
- *     schemas/        -- JSON schemas (git-tracked)
- *     runs/           -- Runtime output (gitignored)
+ * Path responsibilities (split since external-repo support):
+ *
+ *   runBasePath/                 -- Run artifact storage (per-target-repo)
+ *     runs/
  *       {run-id}/
  *         meta.json
  *         spec-v1.md, spec-v2.md, ...
@@ -15,6 +14,11 @@
  *         events.ndjson
  *         rounds/
  *           R1-pack.json, R1-codex-review.md, R1-claude-raw.md, ...
+ *
+ *   templateBasePath/            -- Prompt templates (tool-bundled, read-only)
+ *     templates/
+ *
+ * Backward compatibility: passing a single string uses it for both paths.
  */
 
 import * as fs from 'node:fs/promises';
@@ -26,17 +30,52 @@ import type {
   ReviewSnapshot,
 } from './types.js';
 
-export class WorkflowStore {
-  private readonly basePath: string;
+/**
+ * Split-path configuration for WorkflowStore.
+ *
+ * Allows callers to separate run artifacts (per-target-repo)
+ * from template/schema assets (tool-bundled).
+ */
+export interface WorkflowStorePaths {
+  /** Root for run artifacts — `{runBasePath}/runs/{runId}/`. */
+  runBasePath: string;
+  /** Root for template lookup — `{templateBasePath}/templates/{name}`. */
+  templateBasePath?: string;
+  /** Root for schema lookup — defaults to templateBasePath. */
+  schemaBasePath?: string;
+}
 
-  constructor(basePath?: string) {
-    this.basePath = basePath ?? '.claude-workflows';
+export class WorkflowStore {
+  /** Root for run artifacts (runs/, events, etc.). */
+  private readonly runBasePath: string;
+  /** Root for template lookup (templates/). */
+  private readonly templateBasePath: string;
+  /** Root for schema lookup (schemas/). */
+  private readonly schemaBasePath: string;
+
+  /**
+   * @param basePathOrPaths  Legacy single path (backward compat) or split paths.
+   *   - `string`: all directories share the same root (old behavior).
+   *   - `WorkflowStorePaths`: explicit split between run artifacts and templates.
+   *   - `undefined`: defaults to `.claude-workflows` for everything (old behavior).
+   */
+  constructor(basePathOrPaths?: string | WorkflowStorePaths) {
+    if (typeof basePathOrPaths === 'object' && basePathOrPaths !== null) {
+      this.runBasePath = basePathOrPaths.runBasePath;
+      this.templateBasePath = basePathOrPaths.templateBasePath ?? basePathOrPaths.runBasePath;
+      this.schemaBasePath = basePathOrPaths.schemaBasePath ?? this.templateBasePath;
+    } else {
+      const bp = basePathOrPaths ?? '.claude-workflows';
+      this.runBasePath = bp;
+      this.templateBasePath = bp;
+      this.schemaBasePath = bp;
+    }
   }
 
   // ── Helper: paths ────────────────────────────────────────────
 
   private runDir(runId: string): string {
-    return path.join(this.basePath, 'runs', runId);
+    return path.join(this.runBasePath, 'runs', runId);
   }
 
   private roundsDir(runId: string): string {
@@ -312,17 +351,36 @@ export class WorkflowStore {
 
   /**
    * Load a prompt template from the templates/ directory.
-   * THROWS if the template is not found (critical error -- templates must exist).
+   *
+   * Uses `templateBasePath` (tool-bundled assets) which may differ from
+   * `runBasePath` (target-repo artifacts). This is critical for external
+   * repo reviews where templates live in the tool, not the target repo.
+   *
+   * THROWS if the template is not found (critical error — templates must exist).
    */
   async loadTemplate(name: string): Promise<string> {
-    const filePath = path.join(this.basePath, 'templates', name);
+    const filePath = path.join(this.templateBasePath, 'templates', name);
     try {
       return await fs.readFile(filePath, 'utf-8');
     } catch (err: unknown) {
       if (isNotFoundError(err)) {
-        throw new Error(
-          `[WorkflowStore] Template not found: ${name} (looked in ${path.resolve(this.basePath, 'templates')})`,
-        );
+        const details = [
+          `[WorkflowStore] Template not found: ${name}`,
+          `  Template root : ${path.resolve(this.templateBasePath, 'templates')}`,
+          `  Run root      : ${path.resolve(this.runBasePath)}`,
+        ];
+        if (this.templateBasePath !== this.runBasePath) {
+          details.push(
+            '  Hint: Template and run paths are split (external repo mode).',
+            '  Check that the tool\'s built-in asset root is correctly resolved.',
+          );
+        } else {
+          details.push(
+            '  Hint: Template and run paths share the same root.',
+            '  If reviewing an external repo, ensure resolveWorkflowPaths() is used.',
+          );
+        }
+        throw new Error(details.join('\n'));
       }
       throw err;
     }
