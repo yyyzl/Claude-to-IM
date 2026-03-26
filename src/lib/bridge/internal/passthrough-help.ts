@@ -3,6 +3,7 @@
  *
  * - `//xxx`          → Claude passthrough (message forwarded to Claude session)
  * - `//trellis:xxx`  → Trellis passthrough (透传给 Claude，由 skill 处理)
+ * - `//fusion:xxx`   → Fusion passthrough (透传给 Claude，由 Fusion skill 处理)
  * - `/codex:xxx`     → Codex passthrough (dispatched to codeagent-wrapper)
  */
 
@@ -75,6 +76,16 @@ export function buildClaudePassthroughHelp(): string {
     '//trellis:parallel &lt;task-dir&gt; - 启动多 Agent 并行（Worktree 模式）',
     '//trellis:finish-work - 提交前收尾检查（代码/测试/规范同步）',
     '//trellis:record-session - 记录工作进度并归档已完成任务',
+    '',
+    '<b>🔗 Fusion 增强工作流</b> <i>(需 trellis-fusion 环境)</i>',
+    '//fusion:brainstorm-plus - 深度需求发现（info.md + 设计确认硬门槛）',
+    '//fusion:write-task-plan - 生成 TDD 执行计划（plan.md）',
+    '//fusion:execute-plan-tdd - 逐 slice 红绿重构执行',
+    '//fusion:harvest-learnings - 从完成任务中收割经验到 spec',
+    '//fusion:systematic-debugging - 四阶段系统性调试（根因→模式→假设→修复）',
+    '//fusion:review-with-agents - 双阶段子 Agent 交叉审查',
+    '//fusion:checkpoint - 保存当前执行状态（关键节点使用）',
+    '//fusion:resume-context - 语义恢复执行状态（新会话/compact 后）',
     '',
     '<b>💬 自由形式</b>',
     '<code>//</code> 后可跟任意自然语言，Claude 都会理解：',

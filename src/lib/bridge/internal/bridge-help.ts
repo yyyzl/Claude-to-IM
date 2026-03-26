@@ -22,6 +22,7 @@ export function buildBridgeCommandHelp(): string {
     '<b>Passthrough (透传)</b>',
     '//&lt;指令&gt; - 透传给 Claude（如 //review, //debug, //plan）',
     '//trellis:&lt;命令&gt; - Trellis 工作流（如 //trellis:start, //trellis:finish-work, //trellis:parallel）',
+    '//fusion:&lt;命令&gt; - Fusion 增强（如 //fusion:brainstorm-plus, //fusion:checkpoint）',
     '/codex:&lt;角色&gt; - 透传给 Codex（如 /codex:analyze, /codex:review）',
     '//help - Claude 透传命令完整清单',
     '/codex:help - Codex 透传命令完整清单',
