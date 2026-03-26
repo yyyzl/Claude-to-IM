@@ -102,7 +102,7 @@ Description:
 |--------------|--------|---------|
 | Session Start | `start` | `start` |
 | Pre-development | `before-` | `before-dev` |
-| Check | `check-` | `check`, `check-cross-layer` |
+| Check | `check-` | `check` |
 | Record | `record-` | `record-session` |
 | Generate | `generate-` | `generate-api-doc` |
 | Update | `update-` | `update-changelog` |
@@ -131,10 +131,10 @@ git diff main...HEAD --name-only
 ### 2. Categorized Review
 
 **Frontend files** (`apps/web/`):
-- Reference `.trellis/spec/cli/frontend/index.md`
+- Reference `.trellis/spec/frontend/index.md`
 
 **Backend files** (`packages/api/`):
-- Reference `.trellis/spec/cli/backend/index.md`
+- Reference `.trellis/spec/backend/index.md`
 
 ### 3. Output Review Report
 
