@@ -15,3 +15,6 @@ dist/
 # Workflow Engine runtime data (not tracked)
 .claude-workflows/runs/
 .gitnexus
+
+# Fusion metadata (local)
+.fusion/

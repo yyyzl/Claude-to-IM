@@ -1,4 +1,100 @@
 {
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/session-start.py",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/fusion-session-start.py",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/session-start.py",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/fusion-session-start.py",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/session-start.py",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/fusion-session-start.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/inject-subagent-context.py",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/inject-subagent-context.py",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "check",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/ralph-loop.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/fusion-pre-compact.py",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  },
+  "enabledPlugins": {},
   "permissions": {
     "allow": [
       "Bash",
@@ -25,73 +121,5 @@
     "deny": [],
     "ask": []
   },
-  "defaultMode": "bypassPermissions",
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "startup",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 .claude/hooks/session-start.py",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "clear",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 .claude/hooks/session-start.py",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "compact",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 .claude/hooks/session-start.py",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Task",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 .claude/hooks/inject-subagent-context.py",
-            "timeout": 30
-          }
-        ]
-      },
-      {
-        "matcher": "Agent",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 .claude/hooks/inject-subagent-context.py",
-            "timeout": 30
-          }
-        ]
-      }
-    ],
-    "SubagentStop": [
-      {
-        "matcher": "check",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 .claude/hooks/ralph-loop.py",
-            "timeout": 10
-          }
-        ]
-      }
-    ]
-  }
+  "defaultMode": "bypassPermissions"
 }
