@@ -35,4 +35,14 @@ describe("bridge runner scripts", () => {
     assert.match(managerScriptText, /\$bridgesToStop\s*=\s*@\(\$managedBridges \+ \$cleanupOnlyBridges\)/);
     assert.match(managerScriptText, /function Start-AllBridges \{[\s\S]*?Stop-AllBridges/);
   });
+
+  it("guards against recycled pid files and uses targeted stop tokens", () => {
+    const managerScriptText = fs.readFileSync(bridgeManagerScriptPath, "utf8");
+
+    assert.match(managerScriptText, /function Read-HeartbeatPid/);
+    assert.match(managerScriptText, /function Test-BridgeProcess/);
+    assert.match(managerScriptText, /function Test-CmdBridgeWindow/);
+    assert.match(managerScriptText, /Get-CimInstance Win32_Process -Filter "ProcessId=\$processId"/);
+    assert.match(managerScriptText, /targetPid\s*=\s*\$info\.BridgePid/);
+  });
 });

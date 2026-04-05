@@ -33,8 +33,76 @@ function Read-PidFile([string]$path) {
   } catch { return $null }
 }
 
+function Read-JsonFile([string]$path) {
+  if (-not (Test-Path -LiteralPath $path)) { return $null }
+  try {
+    $raw = (Get-Content -LiteralPath $path -Encoding UTF8 -Raw).Trim()
+    if (-not $raw) { return $null }
+    return ($raw | ConvertFrom-Json)
+  } catch { return $null }
+}
+
+function Read-HeartbeatPid([string]$path) {
+  $parsed = 0
+  $json = Read-JsonFile $path
+  if (-not $json) { return $null }
+  if (-not ($json.PSObject.Properties.Name -contains "pid")) { return $null }
+  if ([int]::TryParse([string]$json.pid, [ref]$parsed) -and $parsed -gt 0) { return $parsed }
+  return $null
+}
+
 function Get-RunningProcess([int]$processId) {
   try { return (Get-Process -Id $processId -ErrorAction Stop) } catch { return $null }
+}
+
+function Get-ProcessSnapshot([int]$processId) {
+  $proc = Get-RunningProcess $processId
+  if (-not $proc) { return $null }
+
+  $name = [string]$proc.ProcessName
+  $cmdLine = ""
+  try {
+    $cim = Get-CimInstance Win32_Process -Filter "ProcessId=$processId" -ErrorAction Stop
+    if ($cim) {
+      if ($cim.Name) { $name = [string]$cim.Name }
+      if ($cim.CommandLine) { $cmdLine = [string]$cim.CommandLine }
+    }
+  } catch { }
+
+  return @{
+    ProcessId   = $processId
+    Name        = $name
+    CommandLine = $cmdLine
+  }
+}
+
+function Test-BridgeProcess($snapshot, [hashtable]$bridge) {
+  if (-not $snapshot) { return $false }
+
+  $name = ([string]$snapshot.Name).ToLowerInvariant()
+  if ($name -ne "node" -and $name -ne "node.exe") { return $false }
+
+  $cmdLine = ([string]$snapshot.CommandLine).ToLowerInvariant()
+  if (-not $cmdLine.Contains("feishu-claude-bridge.ts")) { return $false }
+
+  $envFile = ([string]$bridge.EnvFile).ToLowerInvariant()
+  if ($envFile -eq ".env.bridge.local") {
+    return -not ($cmdLine.Contains(".env.bridge.claude") -or $cmdLine.Contains(".env.bridge.codex"))
+  }
+
+  return $cmdLine.Contains($envFile)
+}
+
+function Test-CmdBridgeWindow($snapshot) {
+  if (-not $snapshot) { return $false }
+
+  $name = ([string]$snapshot.Name).ToLowerInvariant()
+  if ($name -ne "cmd" -and $name -ne "cmd.exe") { return $false }
+
+  $cmdLine = ([string]$snapshot.CommandLine).ToLowerInvariant()
+  if (-not $cmdLine) { return $false }
+
+  return $cmdLine.Contains("feishu-claude-bridge.ts") -or $cmdLine.Contains("start-bridges.ps1") -or $cmdLine.Contains("bridges.bat")
 }
 
 function Stop-ProcessTree([int]$processId, [string]$label = "") {
@@ -80,14 +148,54 @@ function Stop-AllBridges {
   foreach ($b in $bridgesToStop) {
     $controlDir = Join-Path $repoRoot $b.ControlDir
     $info = @{
-      Name       = $b.Name
-      ControlDir = $controlDir
-      PidFile    = Join-Path $controlDir "pid"
-      StopFile   = Join-Path $controlDir "stop"
-      CmdPidFile = Join-Path $controlDir "cmd-pid"
-      BridgePid  = Read-PidFile (Join-Path $controlDir "pid")
-      CmdPid     = Read-PidFile (Join-Path $controlDir "cmd-pid")
+      Bridge           = $b
+      Name             = $b.Name
+      ControlDir       = $controlDir
+      PidFile          = Join-Path $controlDir "pid"
+      HeartbeatFile    = Join-Path $controlDir "heartbeat.json"
+      StopFile         = Join-Path $controlDir "stop"
+      CmdPidFile       = Join-Path $controlDir "cmd-pid"
+      BridgePid        = $null
+      BridgePidSource  = $null
+      BridgePidFilePid = $null
+      HeartbeatPid     = $null
+      CmdPid           = $null
+      CmdPidRaw        = $null
     }
+
+    $info.BridgePidFilePid = Read-PidFile $info.PidFile
+    $info.HeartbeatPid = Read-HeartbeatPid $info.HeartbeatFile
+    $info.CmdPidRaw = Read-PidFile $info.CmdPidFile
+
+    $pidCandidates = @()
+    if ($info.BridgePidFilePid) {
+      $pidCandidates += @{ Pid = $info.BridgePidFilePid; Source = "pid" }
+    }
+    if ($info.HeartbeatPid -and $info.HeartbeatPid -ne $info.BridgePidFilePid) {
+      $pidCandidates += @{ Pid = $info.HeartbeatPid; Source = "heartbeat" }
+    }
+
+    foreach ($candidate in $pidCandidates) {
+      $snapshot = Get-ProcessSnapshot $candidate.Pid
+      if (Test-BridgeProcess $snapshot $b) {
+        $info.BridgePid = $candidate.Pid
+        $info.BridgePidSource = $candidate.Source
+        break
+      }
+      if ($snapshot) {
+        Write-Host "[bridges] $($b.Name): 忽略陈旧 $($candidate.Source) pid=$($candidate.Pid)（当前进程=$($snapshot.Name)）。" -ForegroundColor Yellow
+      }
+    }
+
+    if ($info.CmdPidRaw) {
+      $cmdSnapshot = Get-ProcessSnapshot $info.CmdPidRaw
+      if (Test-CmdBridgeWindow $cmdSnapshot) {
+        $info.CmdPid = $info.CmdPidRaw
+      } elseif ($cmdSnapshot) {
+        Write-Host "[bridges] $($b.Name): 忽略陈旧 cmd-pid=$($info.CmdPidRaw)（当前进程=$($cmdSnapshot.Name)）。" -ForegroundColor Yellow
+      }
+    }
+
     $bridgeInfo += $info
   }
 
@@ -96,18 +204,14 @@ function Stop-AllBridges {
   foreach ($info in $bridgeInfo) {
     if (-not $info.BridgePid) { continue }
 
-    $proc = Get-RunningProcess $info.BridgePid
-    if (-not $proc) {
-      Write-Host "[bridges] $($info.Name): 进程不存在 (pid=$($info.BridgePid))，清理残留文件。"
-      Remove-Item -LiteralPath $info.PidFile -Force -ErrorAction SilentlyContinue
-      Remove-Item -LiteralPath $info.StopFile -Force -ErrorAction SilentlyContinue
-      continue
-    }
-
     $anyRunning = $true
-    Write-Host "[bridges] $($info.Name): 发送停止信号 (pid=$($info.BridgePid)) ..."
+    $sourceSuffix = if ($info.BridgePidSource) { ", source=$($info.BridgePidSource)" } else { "" }
+    Write-Host "[bridges] $($info.Name): 发送停止信号 (pid=$($info.BridgePid)$sourceSuffix) ..."
     New-Item -ItemType Directory -Force -Path $info.ControlDir | Out-Null
-    Set-Content -LiteralPath $info.StopFile -Encoding UTF8 -Value (Get-Date).ToString("o")
+    Set-Content -LiteralPath $info.StopFile -Encoding UTF8 -Value (@{
+        ts        = (Get-Date).ToString("o")
+        targetPid = $info.BridgePid
+      } | ConvertTo-Json -Compress)
   }
 
   # 第 3 步：等待进程退出 + 超时强杀（仅当有存活进程时）
@@ -141,9 +245,9 @@ function Stop-AllBridges {
         Write-Host "[bridges] $($info.Name): 关闭 cmd 窗口 (cmd-pid=$($info.CmdPid)) ..."
         & taskkill.exe /PID $info.CmdPid /T /F 2>$null | Out-Null
       }
-      Remove-Item -LiteralPath $info.CmdPidFile -Force -ErrorAction SilentlyContinue
     }
 
+    Remove-Item -LiteralPath $info.CmdPidFile -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $info.PidFile -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $info.StopFile -Force -ErrorAction SilentlyContinue
   }

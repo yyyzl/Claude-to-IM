@@ -8,6 +8,12 @@
             "command": "python3 .codex/hooks/session-start.py",
             "timeout": 15,
             "statusMessage": "Loading Trellis context..."
+          },
+          {
+            "type": "command",
+            "command": "python3 .codex/hooks/fusion-session-start.py",
+            "timeout": 10,
+            "statusMessage": "Loading Fusion recovery context..."
           }
         ]
       }

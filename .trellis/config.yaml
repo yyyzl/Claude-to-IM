@@ -66,3 +66,7 @@ update:
     - .claude/hooks/fusion-session-start.py
     - .claude/hooks/fusion-pre-compact.py
     - .trellis/scripts/fusion/
+    # === Fusion Overlay (managed by trellis-fusion) ===
+    - .codex/skills/checkpoint/
+    - .codex/skills/resume-context/
+    - .codex/hooks/fusion-session-start.py

@@ -38,6 +38,34 @@ function normalizePermissionMode(mode?: string): string {
   return "default";
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function extractAssistantText(msg: unknown): string | null {
+  if (!isRecord(msg) || msg.type !== "assistant") return null;
+  const message = isRecord(msg.message) ? msg.message : null;
+  const content = Array.isArray(message?.content) ? message.content : null;
+  if (!content) return null;
+
+  const textParts: string[] = [];
+  for (const block of content) {
+    if (!isRecord(block) || block.type !== "text" || typeof block.text !== "string" || !block.text) continue;
+    textParts.push(block.text);
+  }
+
+  return textParts.length > 0 ? textParts.join("") : null;
+}
+
+function extractPartialTextDelta(msg: unknown): string | null {
+  if (!isRecord(msg) || msg.type !== "stream_event" || !isRecord(msg.event)) return null;
+  const event = msg.event;
+  if (event.type !== "content_block_delta" || !isRecord(event.delta)) return null;
+  const delta = event.delta;
+  if (delta.type !== "text_delta" || typeof delta.text !== "string" || !delta.text) return null;
+  return delta.text;
+}
+
 export class ClaudeCodeLLMProvider implements LLMProvider {
   private query: SDKQuery;
   private permissions: InMemoryPermissionGateway;
@@ -61,6 +89,8 @@ export class ClaudeCodeLLMProvider implements LLMProvider {
         let keepAliveTimer: NodeJS.Timeout | null = null;
         let resultMsg: any = null;
         let capturedSdkSessionId: string | null = null;
+        let streamedText = "";
+        let assistantTextSnapshot = "";
 
         // Clean up env vars that interfere with SDK child process:
         // CLAUDECODE: prevents "nested session" detection when bridge runs inside Claude Code
@@ -87,6 +117,7 @@ export class ClaudeCodeLLMProvider implements LLMProvider {
             model: params.model,
             resume,
             settingSources: ['user', 'project', 'local'],
+            includePartialMessages: true,
             systemPrompt: params.systemPrompt,
             abortController,
             permissionMode,
@@ -141,6 +172,17 @@ export class ClaudeCodeLLMProvider implements LLMProvider {
               emit(controller, "status", { session_id: msg.session_id });
             }
 
+            const partialText = extractPartialTextDelta(msg);
+            if (partialText) {
+              streamedText += partialText;
+              emit(controller, "text", partialText);
+            }
+
+            const assistantText = extractAssistantText(msg);
+            if (assistantText) {
+              assistantTextSnapshot = assistantText;
+            }
+
             // ── Forward tool events for /status live context display ──
             // Pattern 1: SDK yields assistant messages containing tool_use content blocks
             if (msg?.type === "assistant" && Array.isArray(msg?.message?.content)) {
@@ -180,7 +222,23 @@ export class ClaudeCodeLLMProvider implements LLMProvider {
 
           if (resultMsg?.type === "result") {
             if (resultMsg.subtype === "success") {
-              emit(controller, "text", resultMsg.result || "");
+              const finalText = assistantTextSnapshot || resultMsg.result || "";
+              if (finalText) {
+                if (!streamedText) {
+                  streamedText = finalText;
+                  emit(controller, "text", finalText);
+                } else if (finalText.startsWith(streamedText)) {
+                  const trailingText = finalText.slice(streamedText.length);
+                  if (trailingText) {
+                    streamedText += trailingText;
+                    emit(controller, "text", trailingText);
+                  }
+                } else if (finalText !== streamedText) {
+                  console.warn(
+                    "[claude-sdk] Streamed text differs from final assistant text; keeping streamed text to avoid duplication",
+                  );
+                }
+              }
               emit(controller, "result", {
                 usage: resultMsg.usage || null,
                 is_error: false,
