@@ -65,6 +65,8 @@ interface FeishuCardState {
   cooldownUntil: number;
   rateLimitBackoffMs: number;
   lastRateLimitLogAt: number;
+  /** 追加消息提示，显示在流式卡片底部 */
+  appendNotice: string | null;
 }
 
 /** Streaming card flush interval (ms). */
@@ -598,6 +600,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         cooldownUntil: 0,
         rateLimitBackoffMs: DEFAULT_RATE_LIMIT_BACKOFF_MS,
         lastRateLimitLogAt: 0,
+        appendNotice: null,
       });
 
       console.log(`[feishu-adapter] Streaming card created: cardId=${cardId}, msgId=${messageId}`);
@@ -690,7 +693,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
       return;
     }
 
-    const content = buildStreamingContent(state.pendingText || '', state.toolCalls);
+    let content = buildStreamingContent(state.pendingText || '', state.toolCalls);
+    // 追加消息提示：显示在流式内容底部
+    if (state.appendNotice) {
+      content = content + '\n\n---\n' + state.appendNotice;
+    }
 
     state.sequence++;
     const seq = state.sequence;
@@ -925,6 +932,25 @@ export class FeishuAdapter extends BaseChannelAdapter {
   }
 
   // ── Streaming adapter interface ────────────────────────────────
+
+  /**
+   * 在活跃的流式卡片上显示追加消息提示。
+   * 如果有活跃卡片，设置 appendNotice 并触发刷新，返回 true。
+   * 如果没有活跃卡片，返回 false（调用方应 fallback 为文本消息）。
+   */
+  notifyAppend(chatId: string, count: number, previewText: string): boolean {
+    const state = this.activeCards.get(chatId);
+    if (!state) return false;
+    const preview = previewText.length > 60
+      ? previewText.slice(0, 57) + '...'
+      : previewText;
+    state.appendNotice = count === 1
+      ? `📎 **+1 追加** ${preview}`
+      : `📎 **+${count} 追加**`;
+    // 触发一次卡片刷新以显示提示
+    this.scheduleCardUpdate(chatId);
+    return true;
+  }
 
   /**
    * Called by bridge-manager on each text SSE event.

@@ -117,6 +117,16 @@ export abstract class BaseChannelAdapter {
    */
   onStreamEnd?(_chatId: string, _status: 'completed' | 'interrupted' | 'error', _responseText: string): Promise<boolean>;
 
+  /**
+   * Notify the adapter that an inbound message was appended to the pending queue
+   * while a task is active. Adapters with streaming cards (e.g. Feishu) can show
+   * an inline indicator instead of sending a separate text message.
+   *
+   * Returns true if the notification was shown on the card (caller should skip text message).
+   * Returns false if no card is available (caller should fall back to text message).
+   */
+  notifyAppend?(_chatId: string, _count: number, _previewText: string): boolean;
+
   // ── Workflow progress card (optional) ──────────────────────────
 
   /**

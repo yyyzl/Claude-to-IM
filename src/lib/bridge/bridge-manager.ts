@@ -243,6 +243,8 @@ interface BridgeManagerState {
   autoStartChecked: boolean;
   /** Recent tool calls per session for /status live context: key = codepilotSessionId */
   recentToolCalls: Map<string, RecentToolCallEntry[]>;
+  /** 追加消息缓冲：当 LLM 正忙时，新消息暂存于此，任务完成后自动作为后续轮次处理。key = `${channelType}:${chatId}` */
+  pendingAppends: Map<string, InboundMessage[]>;
 }
 
 function getState(): BridgeManagerState {
@@ -262,6 +264,7 @@ function getState(): BridgeManagerState {
       gitDrafts: new Map(),
       autoStartChecked: false,
       recentToolCalls: new Map(),
+      pendingAppends: new Map(),
     };
   }
   // Backfill sessionLocks for states created before this field existed
@@ -286,6 +289,10 @@ function getState(): BridgeManagerState {
   // Backfill recentToolCalls for states created before this field existed
   if (!g[GLOBAL_KEY].recentToolCalls) {
     g[GLOBAL_KEY].recentToolCalls = new Map();
+  }
+  // Backfill pendingAppends for states created before this field existed
+  if (!g[GLOBAL_KEY].pendingAppends) {
+    g[GLOBAL_KEY].pendingAppends = new Map();
   }
   return g[GLOBAL_KEY];
 }
@@ -443,6 +450,100 @@ function formatTimeoutMs(ms: number): string {
   return `${mins}min`;
 }
 
+// ── Append (追加) helpers ──────────────────────────────────────
+//
+// 当 LLM 正在处理一条消息时，用户又发了新消息。新消息暂存到 pendingAppends，
+// 等当前任务完成后 merge 为一条、作为单个后续轮次处理——一张卡片。
+// Claude 能从上一轮的完整问答上下文中理解这些追加内容。
+//
+// 配置：
+// - 全局：bridge_append_enabled    (默认 true)
+// - 按渠道：bridge_${channelType}_append_enabled
+//
+// 与 debounce 的关系：
+// - debounce 处理"LLM 还没开始处理"时的连发合并
+// - append  处理"LLM 正在忙"时的消息缓冲（完成后合并处理）
+
+function isAppendEnabled(channelType: string): boolean {
+  const { store } = getBridgeContext();
+  const scoped = store.getSetting(`bridge_${channelType}_append_enabled`);
+  if (scoped != null) return parseBooleanSetting(scoped, true);
+  return parseBooleanSetting(store.getSetting('bridge_append_enabled'), true);
+}
+
+function appendMessageToChat(chatKey: string, msg: InboundMessage): void {
+  const state = getState();
+  const list = state.pendingAppends.get(chatKey) || [];
+  list.push(msg);
+  state.pendingAppends.set(chatKey, list);
+}
+
+/** 原子取出并清除指定 chatKey 的所有追加消息。 */
+function drainPendingAppends(chatKey: string): InboundMessage[] {
+  const state = getState();
+  const list = state.pendingAppends.get(chatKey);
+  if (!list || list.length === 0) return [];
+  state.pendingAppends.delete(chatKey);
+  return list;
+}
+
+/**
+ * 清除指定 chatKey 的追加消息（用于 /stop、/new、/bind 等场景）。
+ * 必须传入 adapter 以 ack 被丢弃的消息，否则未提交的 offset 会导致
+ * 适配器重放（尤其是 Telegram long-polling）。
+ */
+function clearPendingAppends(adapter: BaseChannelAdapter, chatKey: string): number {
+  const state = getState();
+  const list = state.pendingAppends.get(chatKey);
+  if (!list || list.length === 0) return 0;
+  const count = list.length;
+  state.pendingAppends.delete(chatKey);
+  // Ack 被丢弃的消息，推进 offset
+  for (const msg of list) {
+    if (msg.updateId != null && adapter.acknowledgeUpdate) {
+      try { adapter.acknowledgeUpdate(msg.updateId); } catch { /* best effort */ }
+    }
+  }
+  return count;
+}
+
+/**
+ * 排出并调度指定 chatKey 的追加消息。
+ * drain → merge → processWithSessionLock → handleMessage。
+ * 同时用于：finally 排出、群聊 userId 切换时提前 flush。
+ */
+function flushPendingAppends(adapter: BaseChannelAdapter, chatKey: string): void {
+  const messages = drainPendingAppends(chatKey);
+  if (messages.length === 0) return;
+  const merged = mergeInboundMessages(messages);
+  const ack = createAckForMergedMessages(adapter, messages);
+  const binding = router.resolve(merged.address);
+  const capturedSessionId = binding.codepilotSessionId;
+  processWithSessionLock(capturedSessionId, async () => {
+    // 执行时校验 session 是否变更（用户可能在排队期间执行了 /new、/bind）。
+    // 若 session 已切换，追加消息对旧会话的上下文已无意义，直接 ack 丢弃。
+    const currentBinding = router.resolve(merged.address);
+    if (currentBinding.codepilotSessionId !== capturedSessionId) {
+      try { ack(); } catch { /* best effort */ }
+      return;
+    }
+    await handleMessage(adapter, merged, { ack });
+  }).catch(err => {
+    if (err instanceof SessionQueueTimeoutError) {
+      void deliver(adapter, {
+        address: merged.address,
+        text: '追加消息处理超时，已自动取消。',
+        parseMode: 'plain',
+        replyToMessageId: merged.messageId,
+      }).catch(() => {});
+      // 超时也要 ack，否则消息会反复重试
+      try { ack(); } catch { /* best effort */ }
+      return;
+    }
+    console.error('[bridge-manager] Append flush error:', err);
+  });
+}
+
 /**
  * 输入合并窗口（毫秒）。
  *
@@ -555,6 +656,45 @@ function enqueueRegularMessage(
   adapter: BaseChannelAdapter,
   msg: InboundMessage,
 ): void {
+  // ── Append 检测 ──
+  // 如果当前 chat 已有活跃任务（LLM 正在处理），将新消息暂存到 pendingAppends，
+  // 等当前任务完成后合并为一条后续轮次处理。
+  // 注意：不提前 ack，保留 updateId 在 buffer 中，follow-up 处理完再统一 ack，
+  // 保证"处理完成后再提交 offset"的可靠性约束。
+  if (isAppendEnabled(adapter.channelType)) {
+    const activeTask = getActiveTaskForChat(msg.address);
+    if (activeTask) {
+      const chatKey = getChatTaskKey(msg.address);
+      // 群聊保护：不同 userId 的消息不混合（与 debounce 路径保持一致）。
+      // 遇到不同用户时先 flush 旧 buffer，再开新 buffer。
+      const existing = getState().pendingAppends.get(chatKey);
+      if (existing && existing.length > 0) {
+        const prevUserId = existing[0].address.userId || '';
+        const nextUserId = msg.address.userId || '';
+        if (prevUserId && nextUserId && prevUserId !== nextUserId) {
+          flushPendingAppends(adapter, chatKey);
+        }
+      }
+      appendMessageToChat(chatKey, msg);
+      const appendList = getState().pendingAppends.get(chatKey);
+      const appendCount = appendList ? appendList.length : 1;
+      // 优先在流式卡片上显示追加提示（飞书），fallback 为独立文本消息
+      const notifiedOnCard = adapter.notifyAppend?.(
+        msg.address.chatId, appendCount, msg.text?.trim() || '',
+      ) ?? false;
+      if (!notifiedOnCard) {
+        deliver(adapter, {
+          address: msg.address,
+          text: '✓ 已收到，当前任务完成后将依次处理',
+          parseMode: 'plain',
+          replyToMessageId: msg.messageId,
+        }).catch(() => {});
+      }
+      // 不 ack — updateId 保留在 msg 中，由 follow-up handleMessage 处理完后统一 ack
+      return;
+    }
+  }
+
   const debounceMs = getInputDebounceMs(adapter.channelType);
   if (debounceMs <= 0) {
     const binding = router.resolve(msg.address);
@@ -1283,6 +1423,10 @@ async function handleMessage(
     adapter.onMessageEnd?.(msg.address.chatId);
     // Commit the offset only after full processing (success or failure)
     ack();
+
+    // ── 排出追加消息 ──
+    // 当前任务已完成，activeTask 已清除。缓冲中的追加消息合并为一条后续轮次。
+    flushPendingAppends(adapter, getChatTaskKey(msg.address));
   }
 }
 
@@ -1341,6 +1485,8 @@ async function handleCommand(
 
       // If there is a running task for this chat, stop it before switching sessions.
       const stopped = abortActiveTaskForChat(msg.address);
+      // 切换会话时清除追加消息缓冲（旧会话的追加对新会话无意义）
+      clearPendingAppends(adapter, getChatTaskKey(msg.address));
 
       const binding = router.startNewSession(msg.address, workDir ? { workingDirectory: workDir } : {});
 
@@ -1395,6 +1541,8 @@ async function handleCommand(
         break;
       }
       const stopped = abortActiveTaskForChat(msg.address);
+      // 切换会话时清除追加消息缓冲（旧会话的追加对新会话无意义）
+      clearPendingAppends(adapter, getChatTaskKey(msg.address));
       const binding = router.bindToSession(msg.address, args);
       if (binding) {
         response = [
@@ -1545,7 +1693,11 @@ async function handleCommand(
         // by clearActiveTask() in handleMessage's finally block.
         const chatKey = getChatTaskKey(msg.address);
         getState().activeTasksByChat.delete(chatKey);
-        response = 'Stopping current task...';
+        // 同时清除该 chat 的追加消息缓冲
+        const droppedCount = clearPendingAppends(adapter, chatKey);
+        response = droppedCount > 0
+          ? `Stopping current task... (${droppedCount} pending appended message(s) also discarded)`
+          : 'Stopping current task...';
       } else {
         response = 'No task is currently running.';
       }
