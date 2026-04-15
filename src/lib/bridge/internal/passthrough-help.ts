@@ -73,6 +73,8 @@ export function buildClaudePassthroughHelp(): string {
     '',
     '<b>🌳 Trellis 开发工作流</b> <i>(需 .trellis/ 环境)</i>',
     '//trellis:start - 初始化 Trellis 开发会话（读取上下文+指南）',
+    '//trellis:before-dev - 编码前注入项目开发规范（v0.4 统一命令）',
+    '//trellis:check - 检查代码是否符合开发规范（v0.4 统一命令）',
     '//trellis:parallel &lt;task-dir&gt; - 启动多 Agent 并行（Worktree 模式）',
     '//trellis:finish-work - 提交前收尾检查（代码/测试/规范同步）',
     '//trellis:record-session - 记录工作进度并归档已完成任务',
