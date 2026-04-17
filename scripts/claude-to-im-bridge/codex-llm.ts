@@ -1,3 +1,5 @@
+import { open, readdir, stat } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import type { InMemoryPermissionGateway } from "./permissions.ts";
@@ -12,6 +14,15 @@ type TokenUsage = {
   cache_creation_input_tokens?: number;
   cost_usd?: number;
 };
+
+type CodexUsagePair = {
+  last: TokenUsage | null;
+  total: TokenUsage | null;
+  contextWindow: number | null;
+};
+
+const ROLLOUT_TAIL_CHUNK_BYTES = 128 * 1024;
+const ROLLOUT_TAIL_MAX_BYTES = 2 * 1024 * 1024;
 
 function redactSensitive(text: string): string {
   let out = text;
@@ -111,7 +122,12 @@ function normalizeTokenUsage(raw: unknown): TokenUsage | null {
 
   const usage: TokenUsage = { input_tokens: inputTokens, output_tokens: outputTokens };
 
-  const cacheRead = toSafeNonNegativeNumber(obj.cache_read_input_tokens ?? obj.cacheReadInputTokens);
+  const cacheRead = toSafeNonNegativeNumber(
+    obj.cache_read_input_tokens
+      ?? obj.cacheReadInputTokens
+      ?? obj.cached_input_tokens
+      ?? obj.cachedInputTokens,
+  );
   const cacheCreate = toSafeNonNegativeNumber(obj.cache_creation_input_tokens ?? obj.cacheCreationInputTokens);
   const costUsd = toSafeNonNegativeNumber(obj.cost_usd ?? obj.costUsd);
 
@@ -156,12 +172,8 @@ function tryParseJsonLikeString(value: unknown): unknown | null {
  * `total_token_usage` 保留给 daily summary（累计统计）；
  * `model_context_window` 作为 Codex 真实窗口直通分母。
  */
-function extractCodexUsagePair(value: unknown): {
-  last: TokenUsage | null;
-  total: TokenUsage | null;
-  contextWindow: number | null;
-} {
-  const out: { last: TokenUsage | null; total: TokenUsage | null; contextWindow: number | null } = {
+function extractCodexUsagePair(value: unknown): CodexUsagePair {
+  const out: CodexUsagePair = {
     last: null,
     total: null,
     contextWindow: null,
@@ -195,6 +207,107 @@ function extractCodexUsagePair(value: unknown): {
     }
   }
   return out;
+}
+
+function resolveCodexHomeDir(): string {
+  return pickString(process.env.CODEX_HOME) || path.join(os.homedir(), ".codex");
+}
+
+function resolveCodexSessionsDir(): string {
+  return path.join(resolveCodexHomeDir(), "sessions");
+}
+
+async function safeReadDir(dir: string) {
+  try {
+    return await readdir(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+}
+
+async function findLatestRolloutFileForSession(sessionId: string): Promise<string | null> {
+  if (!sessionId) return null;
+
+  const sessionsDir = resolveCodexSessionsDir();
+  let latest: { path: string; mtimeMs: number } | null = null;
+
+  for (const year of await safeReadDir(sessionsDir)) {
+    if (!year.isDirectory()) continue;
+    const yearDir = path.join(sessionsDir, year.name);
+    for (const month of await safeReadDir(yearDir)) {
+      if (!month.isDirectory()) continue;
+      const monthDir = path.join(yearDir, month.name);
+      for (const day of await safeReadDir(monthDir)) {
+        if (!day.isDirectory()) continue;
+        const dayDir = path.join(monthDir, day.name);
+        for (const file of await safeReadDir(dayDir)) {
+          if (!file.isFile()) continue;
+          if (!file.name.startsWith("rollout-") || !file.name.endsWith(`${sessionId}.jsonl`)) continue;
+
+          const filePath = path.join(dayDir, file.name);
+          try {
+            const meta = await stat(filePath);
+            if (!latest || meta.mtimeMs > latest.mtimeMs) {
+              latest = { path: filePath, mtimeMs: meta.mtimeMs };
+            }
+          } catch {
+            // Ignore races / transient filesystem errors and continue scanning.
+          }
+        }
+      }
+    }
+  }
+
+  return latest?.path ?? null;
+}
+
+function tryExtractCodexUsagePairFromJsonLine(line: string): CodexUsagePair | null {
+  if (!line.includes("token_count")) return null;
+  const parsed = tryParseJsonLikeString(line);
+  if (!parsed || typeof parsed !== "object") return null;
+  const payload = (parsed as { payload?: unknown }).payload;
+  if (!payload || typeof payload !== "object") return null;
+  if (pickString((payload as { type?: unknown }).type) !== "token_count") return null;
+
+  const pair = extractCodexUsagePair(payload);
+  if (pair.last || pair.total || pair.contextWindow != null) return pair;
+  return null;
+}
+
+async function readLatestCodexUsageFromRollout(sessionId: string): Promise<CodexUsagePair | null> {
+  const rolloutPath = await findLatestRolloutFileForSession(sessionId);
+  if (!rolloutPath) return null;
+
+  const fh = await open(rolloutPath, "r");
+  try {
+    const info = await fh.stat();
+    let offset = info.size;
+    let scannedBytes = 0;
+    let carry = "";
+
+    while (offset > 0 && scannedBytes < ROLLOUT_TAIL_MAX_BYTES) {
+      const chunkSize = Math.min(ROLLOUT_TAIL_CHUNK_BYTES, offset, ROLLOUT_TAIL_MAX_BYTES - scannedBytes);
+      offset -= chunkSize;
+      scannedBytes += chunkSize;
+
+      const buffer = Buffer.alloc(chunkSize);
+      await fh.read(buffer, 0, chunkSize, offset);
+
+      const text = buffer.toString("utf8") + carry;
+      const lines = text.split(/\r?\n/);
+      carry = offset > 0 ? (lines.shift() ?? "") : "";
+
+      for (let i = lines.length - 1; i >= 0; i -= 1) {
+        const pair = tryExtractCodexUsagePairFromJsonLine(lines[i]);
+        if (pair) return pair;
+      }
+    }
+
+    if (carry) return tryExtractCodexUsagePairFromJsonLine(carry);
+    return null;
+  } finally {
+    await fh.close();
+  }
 }
 
 function findTokenUsageInAny(value: unknown): TokenUsage | null {
@@ -942,6 +1055,26 @@ export class CodexAppServerLLMProvider implements LLMProvider {
         if (turnCompleted) {
           for (const itemId of pendingAgentMessageDeltaById.keys()) {
             flushPendingAgentMessageDelta(itemId);
+          }
+
+          // Codex rollout JSONL persists token_count as an out-of-band event_msg with
+          // no threadId / turnId. That means the live notification filter above cannot
+          // safely associate it with this turn. After turn completion, read the latest
+          // token_count from this session's rollout file and use it as authoritative
+          // ctx data when the in-memory stream did not provide it.
+          if (!lastUsage || !usage || contextWindow == null) {
+            try {
+              const rolloutPair = await readLatestCodexUsageFromRollout(opts.threadId);
+              if (!lastUsage && rolloutPair?.last) lastUsage = rolloutPair.last;
+              if (!usage && rolloutPair?.total) usage = rolloutPair.total;
+              if (contextWindow == null && rolloutPair?.contextWindow != null) {
+                contextWindow = rolloutPair.contextWindow;
+              }
+            } catch (err) {
+              console.warn(
+                `[codex-llm] Failed to read rollout token_count for ${opts.threadId}: ${toErrorMessage(err)}`,
+              );
+            }
           }
 
           const completedFinal = finalCompletedText ?? "";

@@ -1371,7 +1371,11 @@ async function handleMessage(
     // （见 updateSessionModel + updateChannelBinding 调用）。
     // 因此必须从 store 重新读取最新 session，才能拿到真实模型并据此解析 window。
     let ctxFooter: string | undefined;
-    const usageForCtx = result.lastTurnUsage ?? result.tokenUsage;
+    // 注意：绝不回退到 turn 累计 usage。
+    // `tokenUsage` 是整个 turn 的累计量，在 tool-use / 多轮 round-trip 下会显著大于
+    // 当前 prompt footprint，直接拿来算会出现 `ctx 256%` 这类明显错误的数字。
+    // 拿不到 `lastTurnUsage` 时宁可不显示 ctx，也不显示错值。
+    const usageForCtx = result.lastTurnUsage ?? null;
     if (usageForCtx) {
       try {
         const freshSession = store.getSession(binding.codepilotSessionId);

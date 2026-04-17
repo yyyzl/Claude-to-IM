@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { pathToFileURL } from 'node:url';
@@ -6,6 +8,8 @@ import { pathToFileURL } from 'node:url';
 type CollectTurnTextResult = {
   text: string;
   usage: unknown;
+  lastUsage?: unknown;
+  contextWindow?: number | null;
   emittedFinalText?: boolean;
 };
 
@@ -224,5 +228,117 @@ describe('CodexAppServerLLMProvider', () => {
 
     assert.deepEqual(textEvents.map((event) => event.data), ['final answer']);
     assert.ok(events.some((event) => event.type === 'result'), 'should emit result event');
+  });
+
+  it('collectTurnText backfills token_count from rollout file when notifications carry no thread/turn ids', async () => {
+    const provider = await createProvider();
+    const threadId = '019d9bd3-b5a7-7213-9a6c-4fcb03ca7cdc';
+    const turnId = 'turn-rollout-1';
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-home-'));
+    const oldCodexHome = process.env.CODEX_HOME;
+
+    try {
+      process.env.CODEX_HOME = tmpRoot;
+
+      const rolloutDir = path.join(tmpRoot, 'sessions', '2026', '04', '17');
+      await fs.mkdir(rolloutDir, { recursive: true });
+      await fs.writeFile(
+        path.join(rolloutDir, `rollout-2026-04-17T22-23-56-${threadId}.jsonl`),
+        [
+          JSON.stringify({
+            timestamp: '2026-04-17T22:23:56.000Z',
+            type: 'session_meta',
+            payload: { id: threadId, cwd: 'G:\\project\\Claude-to-IM' },
+          }),
+          JSON.stringify({
+            timestamp: '2026-04-17T22:24:01.000Z',
+            type: 'event_msg',
+            payload: {
+              type: 'token_count',
+              info: {
+                last_token_usage: {
+                  input_tokens: 6708,
+                  cached_input_tokens: 1234,
+                  output_tokens: 51,
+                  reasoning_output_tokens: 0,
+                  total_tokens: 7993,
+                },
+                total_token_usage: {
+                  input_tokens: 661504,
+                  cached_input_tokens: 2048,
+                  output_tokens: 153,
+                  reasoning_output_tokens: 64,
+                  total_tokens: 663721,
+                },
+                model_context_window: 258400,
+              },
+            },
+          }),
+        ].join('\n'),
+        'utf8',
+      );
+
+      provider.client = createBacklogClient([
+        {
+          method: 'item/started',
+          params: {
+            threadId,
+            turnId,
+            item: { type: 'agentMessage', id: 'msg-final', text: '', phase: 'final_answer' },
+          },
+        },
+        {
+          method: 'item/agentMessage/delta',
+          params: {
+            threadId,
+            turnId,
+            itemId: 'msg-final',
+            delta: 'final answer',
+          },
+        },
+        {
+          method: 'item/completed',
+          params: {
+            threadId,
+            turnId,
+            item: { type: 'agentMessage', id: 'msg-final', text: 'final answer', phase: 'final_answer' },
+          },
+        },
+        {
+          method: 'turn/completed',
+          params: {
+            threadId,
+            turn: { id: turnId },
+          },
+        },
+      ]);
+
+      const result = await provider.collectTurnText({
+        threadId,
+        turnId,
+        onDelta: () => {},
+        signal: new AbortController().signal,
+      }) as CollectTurnTextResult;
+
+      assert.equal(result.text, 'final answer');
+      assert.deepEqual(result.lastUsage, {
+        input_tokens: 6708,
+        output_tokens: 51,
+        cache_read_input_tokens: 1234,
+      });
+      assert.deepEqual(result.usage, {
+        input_tokens: 661504,
+        output_tokens: 153,
+        cache_read_input_tokens: 2048,
+      });
+      assert.equal(result.contextWindow, 258400);
+    } finally {
+      if (oldCodexHome == null) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = oldCodexHome;
+      }
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
   });
 });
