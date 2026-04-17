@@ -64,7 +64,25 @@ export type OnToolEvent = (toolId: string, toolName: string, status: 'running' |
 
 export interface ConversationResult {
   responseText: string;
+  /**
+   * Cumulative token usage for the entire turn (sum of all API calls the SDK made,
+   * including tool-use round-trips). Suitable for daily total accounting.
+   */
   tokenUsage: TokenUsage | null;
+  /**
+   * Token usage of the LAST API call within this turn — i.e. the final prompt size
+   * that went to the model. This is the correct denominator for "current context
+   * window footprint" (ctx footer). When unavailable, consumers should fall back to
+   * {@link tokenUsage} with the understanding that it over-counts under tool-use.
+   */
+  lastTurnUsage?: TokenUsage | null;
+  /**
+   * Backend-reported context window size for the model that served this turn.
+   * Currently provided only by Codex backend (`token_count.model_context_window`);
+   * Claude backend omits this and callers should fall back to the static registry.
+   * When present, this value is the authoritative denominator for ctx footer.
+   */
+  contextWindow?: number | null;
   hasError: boolean;
   errorCode?: 'timeout' | 'abort' | 'busy' | 'error';
   errorMessage: string;
@@ -245,6 +263,8 @@ async function consumeStream(
   /** Monotonically accumulated text for streaming preview — never resets on tool_use. */
   let previewText = '';
   let tokenUsage: TokenUsage | null = null;
+  let lastTurnUsage: TokenUsage | null = null;
+  let contextWindow: number | null = null;
   let hasError = false;
   let errorMessage = '';
   const seenToolResultIds = new Set<string>();
@@ -386,6 +406,13 @@ async function consumeStream(
             try {
               const resultData = JSON.parse(event.data);
               if (resultData.usage) tokenUsage = resultData.usage;
+              // last_usage = 本 turn 最后一次 API 调用的 usage（单次 prompt 规模）。
+              // 来源: Claude backend = SDK assistant message.usage；Codex backend = token_count.last_token_usage。
+              if (resultData.last_usage) lastTurnUsage = resultData.last_usage;
+              // context_window = 后端直报的模型窗口（目前仅 Codex backend 提供，来自 model_context_window）。
+              if (typeof resultData.context_window === 'number' && resultData.context_window > 0) {
+                contextWindow = resultData.context_window;
+              }
               if (resultData.is_error) hasError = true;
               if (resultData.session_id) {
                 capturedSdkSessionId = resultData.session_id;
@@ -433,6 +460,8 @@ async function consumeStream(
     return {
       responseText,
       tokenUsage,
+      lastTurnUsage,
+      contextWindow,
       hasError,
       errorMessage,
       permissionRequests,

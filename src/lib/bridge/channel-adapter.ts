@@ -113,9 +113,19 @@ export abstract class BaseChannelAdapter {
   /**
    * Called when streaming ends. Adapter should finalize the streaming card
    * (close streaming mode, add footer, etc.).
+   *
+   * `extras` carries optional, adapter-specific footer enrichments (e.g. a
+   * pre-rendered context-usage indicator). Adapters may ignore any unknown
+   * key — callers MUST NOT rely on extras being honoured.
+   *
    * Returns true if a card was finalized (caller should skip normal delivery).
    */
-  onStreamEnd?(_chatId: string, _status: 'completed' | 'interrupted' | 'error', _responseText: string): Promise<boolean>;
+  onStreamEnd?(
+    _chatId: string,
+    _status: 'completed' | 'interrupted' | 'error',
+    _responseText: string,
+    _extras?: { ctx?: string },
+  ): Promise<boolean>;
 
   /**
    * Notify the adapter that an inbound message was appended to the pending queue

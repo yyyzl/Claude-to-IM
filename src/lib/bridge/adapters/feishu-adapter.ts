@@ -772,6 +772,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     chatId: string,
     status: 'completed' | 'interrupted' | 'error',
     responseText: string,
+    extras?: { ctx?: string },
   ): Promise<boolean> {
     // Wait for in-flight card creation to complete before finalizing
     const pending = this.cardCreatePromises.get(chatId);
@@ -812,10 +813,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
       };
       const elapsedMs = Date.now() - state.startTime;
       const elapsed = formatElapsed(elapsedMs);
-      const footer = {
+      const footer: { status: string; elapsed: string; ctx?: string } = {
         status: statusLabels[status] || status,
         elapsed,
       };
+      if (extras?.ctx) footer.ctx = extras.ctx;
 
       // Pass empty tools array — tool progress is only useful during streaming;
       // the final card should show clean text + footer only.
@@ -972,8 +974,13 @@ export class FeishuAdapter extends BaseChannelAdapter {
     this.updateToolProgress(chatId, tools);
   }
 
-  async onStreamEnd(chatId: string, status: 'completed' | 'interrupted' | 'error', responseText: string): Promise<boolean> {
-    return this.finalizeCard(chatId, status, responseText);
+  async onStreamEnd(
+    chatId: string,
+    status: 'completed' | 'interrupted' | 'error',
+    responseText: string,
+    extras?: { ctx?: string },
+  ): Promise<boolean> {
+    return this.finalizeCard(chatId, status, responseText, extras);
   }
 
   // ── Workflow progress card ────────────────────────────────────

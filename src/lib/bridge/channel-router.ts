@@ -28,8 +28,10 @@ function hasBackendChanged(binding: ChannelBinding | null, currentBackend: strin
 /**
  * Start a new session for an IM chat and re-bind the channel to it.
  *
- * 默认会继承当前绑定的 workingDirectory/model/mode（如果存在），
- * 这样用户可以“清空上下文”但不丢配置。
+ * 默认会继承当前绑定的 workingDirectory/mode（如果存在），
+ * 这样用户可以“清空上下文”但不丢目录与模式配置。
+ * model 不再继承旧 binding / session，/new 总是回到当前 backend 的默认模型，
+ * 避免用户切换模型后仍被历史聊天状态污染。
  */
 export function startNewSession(
   address: ChannelAddress,
@@ -39,7 +41,6 @@ export function startNewSession(
 
   const existing = store.getChannelBinding(address.channelType, address.chatId);
   const currentBackend = getCurrentBackend();
-  const backendChanged = hasBackendChanged(existing, currentBackend);
 
   const effectiveCwd = opts.workingDirectory
     || existing?.workingDirectory
@@ -54,19 +55,7 @@ export function startNewSession(
   const backendDefaultModel = currentBackend === 'codex'
     ? (store.getSetting('bridge_codex_model_id') || store.getSetting('bridge_codex_model_hint') || '')
     : (store.getSetting('bridge_default_model') || '');
-  // 优先从上一个 session 读取 model（Codex 解析后会通过 status 事件回写到
-  // session.model，是真正的模型名）；但如果 binding 上有用户刚刚手动切换的 model，
-  // 应优先继承 binding，避免 /new 回退到旧 session 里的陈旧值。
-  const prevSession = (!backendChanged && existing)
-    ? store.getSession(existing.codepilotSessionId)
-    : null;
-  const inheritedModel = backendChanged
-    ? ''
-    : (existing?.model || prevSession?.model || '');
-  const effectiveModel = opts.model
-    || inheritedModel
-    || backendDefaultModel
-    || '';
+  const effectiveModel = opts.model || backendDefaultModel || '';
   const effectiveMode = opts.mode
     || existing?.mode
     || 'code';

@@ -49,6 +49,11 @@ import {
 } from './internal/usage-summary.js';
 import { parseUsageQueryRange, renderUsageReportHtml } from './internal/usage-command.js';
 import {
+  DEFAULT_CONTEXT_WINDOW,
+  formatCtxFooter,
+  resolveContextWindow,
+} from './internal/model-context-window.js';
+import {
   validateWorkingDirectory,
   validateSessionId,
   isDangerousInput,
@@ -1349,6 +1354,40 @@ async function handleMessage(
       }
     }
 
+    // Best-effort: compute ctx footer (context window usage indicator).
+    // 任何失败都退化为 undefined — 绝不影响卡片渲染主流程。
+    //
+    // 口径选择 (分子): **优先** result.lastTurnUsage（本 turn 最后一次 API 调用的 prompt size），
+    // 而不是 result.tokenUsage（整个 turn N 次 API 调用的累计）。
+    // 原因: 一个 turn 内 SDK 可能做多轮 tool-use round-trip，累计 input_tokens 会远超
+    // 真实窗口（实测 1.2M+），导致 footer 显示 `ctx 600%` 这种荒谬数字。
+    //
+    // 窗口 (分母): **优先** result.contextWindow（后端自报的 model_context_window，
+    // 目前仅 Codex backend 提供），兜底到 resolveContextWindow(model) 的静态注册表，
+    // 最终兜底 DEFAULT_CONTEXT_WINDOW。
+    //
+    // 模型名: `binding.model` 在进入 turn 时常为 hint/alias（例如 'default' / 'sonnet'）。
+    // conversation-engine 收到 SDK statusData.model 后会把真实模型同步写回 store
+    // （见 updateSessionModel + updateChannelBinding 调用）。
+    // 因此必须从 store 重新读取最新 session，才能拿到真实模型并据此解析 window。
+    let ctxFooter: string | undefined;
+    const usageForCtx = result.lastTurnUsage ?? result.tokenUsage;
+    if (usageForCtx) {
+      try {
+        const freshSession = store.getSession(binding.codepilotSessionId);
+        const effectiveModel = freshSession?.model || binding.model;
+        const window = result.contextWindow
+          ?? resolveContextWindow(effectiveModel)
+          ?? DEFAULT_CONTEXT_WINDOW;
+        ctxFooter = formatCtxFooter(usageForCtx, window) ?? undefined;
+      } catch (err) {
+        console.warn(
+          '[bridge-manager] Failed to compute ctx footer:',
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+
     // Finalize streaming card if adapter supports it.
     // onStreamEnd awaits any in-flight card creation and returns true if a card
     // was actually finalized (meaning content is already visible to the user).
@@ -1356,7 +1395,12 @@ async function handleMessage(
     if (hasStreamingCards && adapter.onStreamEnd) {
       try {
         const status = result.hasError ? 'error' : 'completed';
-        cardFinalized = await adapter.onStreamEnd(msg.address.chatId, status, result.responseText);
+        cardFinalized = await adapter.onStreamEnd(
+          msg.address.chatId,
+          status,
+          result.responseText,
+          ctxFooter ? { ctx: ctxFooter } : undefined,
+        );
       } catch (err) {
         console.warn('[bridge-manager] Card finalize failed:', err instanceof Error ? err.message : err);
       }

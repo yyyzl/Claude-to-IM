@@ -227,7 +227,7 @@ describe('channel-router', () => {
     assert.equal(allBindings.length, 3);
   });
 
-  it('startNewSession() inherits binding config and clears sdkSessionId', () => {
+  it('startNewSession() keeps cwd/mode, resets model to current backend default, and clears sdkSessionId', () => {
     const address = { channelType: "telegram", chatId: "123", displayName: "Test User" };
     const first = router.resolve(address);
 
@@ -237,7 +237,7 @@ describe('channel-router', () => {
     const second = router.startNewSession(address);
     assert.notEqual(first.codepilotSessionId, second.codepilotSessionId);
     assert.equal(second.workingDirectory, '/custom/path');
-    assert.equal(second.model, 'claude-3.5');
+    assert.equal(second.model, 'claude-3');
     assert.equal(second.mode, 'plan');
     assert.equal(second.sdkSessionId, '');
   });
@@ -251,6 +251,31 @@ describe('channel-router', () => {
     assert.equal(second.workingDirectory, '/override');
     assert.equal(second.sdkSessionId, '');
   });
+
+  it('startNewSession() ignores previous session model and uses current backend default', () => {
+    const address = { channelType: 'telegram', chatId: '321' };
+    const first = router.resolve(address);
+    const firstSession = store.sessions.get(first.codepilotSessionId);
+    assert.ok(firstSession);
+    firstSession!.model = 'claude-legacy';
+
+    router.updateBinding(first.id, { model: 'claude-legacy', sdkSessionId: 'sdk_old' });
+
+    const second = router.startNewSession(address);
+    assert.equal(second.model, 'claude-3');
+    assert.equal(store.sessions.get(second.codepilotSessionId)?.model, 'claude-3');
+  });
+
+  it('startNewSession() still allows explicit model override', () => {
+    const address = { channelType: 'telegram', chatId: '654' };
+    const first = router.resolve(address);
+    router.updateBinding(first.id, { model: 'claude-legacy', sdkSessionId: 'sdk_old' });
+
+    const second = router.startNewSession(address, { model: 'claude-override' });
+    assert.equal(second.model, 'claude-override');
+    assert.equal(store.sessions.get(second.codepilotSessionId)?.model, 'claude-override');
+  });
+
   it('updateBinding() updates binding properties', () => {
     const binding = router.createBinding({ channelType: 'telegram', chatId: '1' });
     router.updateBinding(binding.id, { mode: 'plan' });

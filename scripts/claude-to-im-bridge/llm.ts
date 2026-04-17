@@ -91,6 +91,10 @@ export class ClaudeCodeLLMProvider implements LLMProvider {
         let capturedSdkSessionId: string | null = null;
         let streamedText = "";
         let assistantTextSnapshot = "";
+        // 最近一次 assistant message 的 usage = "当前 turn 最后一次 API 调用的 prompt size"。
+        // 与 SDK ResultMessage.usage（整个 turn N 次 API 调用的累计和）区分开来，
+        // 下游 ctx footer 需要的是前者（"离满还有多远"的真实度量）。
+        let lastAssistantUsage: any = null;
 
         // Clean up env vars that interfere with SDK child process:
         // CLAUDECODE: prevents "nested session" detection when bridge runs inside Claude Code
@@ -183,6 +187,14 @@ export class ClaudeCodeLLMProvider implements LLMProvider {
               assistantTextSnapshot = assistantText;
             }
 
+            // Capture the usage of the most recent assistant message.
+            // SDK emits one assistant message per API call; within a single turn the SDK
+            // may make multiple API calls (tool-use round-trips). We keep overwriting so
+            // the last value wins — that is the "current context window footprint".
+            if (msg?.type === "assistant" && msg?.message?.usage) {
+              lastAssistantUsage = msg.message.usage;
+            }
+
             // ── Forward tool events for /status live context display ──
             // Pattern 1: SDK yields assistant messages containing tool_use content blocks
             if (msg?.type === "assistant" && Array.isArray(msg?.message?.content)) {
@@ -241,6 +253,7 @@ export class ClaudeCodeLLMProvider implements LLMProvider {
               }
               emit(controller, "result", {
                 usage: resultMsg.usage || null,
+                last_usage: lastAssistantUsage || null,
                 is_error: false,
                 session_id: capturedSdkSessionId,
               });
@@ -251,6 +264,7 @@ export class ClaudeCodeLLMProvider implements LLMProvider {
               emit(controller, "error", errText);
               emit(controller, "result", {
                 usage: resultMsg.usage || null,
+                last_usage: lastAssistantUsage || null,
                 is_error: true,
                 session_id: capturedSdkSessionId,
               });
@@ -261,7 +275,7 @@ export class ClaudeCodeLLMProvider implements LLMProvider {
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           emit(controller, "error", msg);
-          emit(controller, "result", { usage: null, is_error: true, session_id: capturedSdkSessionId });
+          emit(controller, "result", { usage: null, last_usage: null, is_error: true, session_id: capturedSdkSessionId });
         } finally {
           if (keepAliveTimer) clearInterval(keepAliveTimer);
           try { (q as any).close?.(); } catch { /* ignore */ }

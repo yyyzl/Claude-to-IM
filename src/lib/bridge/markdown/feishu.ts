@@ -135,7 +135,7 @@ export function buildStreamingContent(text: string, tools: ToolCallInfo[]): stri
 export function buildFinalCardJson(
   text: string,
   tools: ToolCallInfo[],
-  footer: { status: string; elapsed: string } | null,
+  footer: { status: string; elapsed: string; ctx?: string } | null,
 ): string {
   const elements: Array<Record<string, unknown>> = [];
 
@@ -160,6 +160,7 @@ export function buildFinalCardJson(
     const parts: string[] = [];
     if (footer.status) parts.push(footer.status);
     if (footer.elapsed) parts.push(footer.elapsed);
+    if (footer.ctx) parts.push(footer.ctx);
     if (parts.length > 0) {
       elements.push({ tag: 'hr' });
       elements.push({

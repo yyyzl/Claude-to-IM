@@ -136,6 +136,67 @@ function tryParseJsonLikeString(value: unknown): unknown | null {
   }
 }
 
+/**
+ * 专门解析 Codex app-server 的 `token_count`-style notification payload。
+ *
+ * 比 {@link findTokenUsageInAny} 更精确：
+ * - **显式按 key 名识别** `last_token_usage` / `total_token_usage` / `model_context_window`，
+ *   不再依赖 BFS 的遍历顺序"中彩"
+ * - 一次遍历同时捞出三样：本轮最后一次 API 调用的 usage、turn 累计 usage、模型窗口
+ *
+ * 语义参考 (Codex rollout 格式)：
+ * ```json
+ * { "info": {
+ *     "last_token_usage":  { "input_tokens": 6708,  ... },
+ *     "total_token_usage": { "input_tokens": 12529, ... },
+ *     "model_context_window": 258400
+ * }}
+ * ```
+ * 下游 ctx footer 需要的是 `last_token_usage.input_tokens`；
+ * `total_token_usage` 保留给 daily summary（累计统计）；
+ * `model_context_window` 作为 Codex 真实窗口直通分母。
+ */
+function extractCodexUsagePair(value: unknown): {
+  last: TokenUsage | null;
+  total: TokenUsage | null;
+  contextWindow: number | null;
+} {
+  const out: { last: TokenUsage | null; total: TokenUsage | null; contextWindow: number | null } = {
+    last: null,
+    total: null,
+    contextWindow: null,
+  };
+  if (!value || typeof value !== "object") return out;
+
+  const queue: unknown[] = [value];
+  let scanned = 0;
+  while (queue.length > 0 && scanned < 200) {
+    const cur = queue.shift();
+    scanned += 1;
+    if (!cur || typeof cur !== "object") continue;
+    if (Array.isArray(cur)) {
+      for (const item of cur) queue.push(item);
+      continue;
+    }
+    const obj = cur as Record<string, unknown>;
+    for (const [k, v] of Object.entries(obj)) {
+      if (k === "last_token_usage") {
+        const u = normalizeTokenUsage(v);
+        if (u) out.last = u;   // 不断覆盖 — 一个 turn 内可能多次 token_count，保留最后一次
+      } else if (k === "total_token_usage") {
+        const u = normalizeTokenUsage(v);
+        if (u) out.total = u;
+      } else if (k === "model_context_window") {
+        if (typeof v === "number" && Number.isFinite(v) && v > 0) {
+          out.contextWindow = v;
+        }
+      }
+      if (v && typeof v === "object") queue.push(v);
+    }
+  }
+  return out;
+}
+
 function findTokenUsageInAny(value: unknown): TokenUsage | null {
   // direct
   const direct = normalizeTokenUsage(value);
@@ -467,7 +528,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
                 cwd: params.workingDirectory,
               });
 
-              const { text, usage, emittedFinalText } = await this.collectTurnText({
+              const { text, usage, lastUsage, contextWindow, emittedFinalText } = await this.collectTurnText({
                 threadId: freshThreadId,
                 turnId,
                 onDelta: (delta) => emit(controller, "text", delta),
@@ -479,13 +540,19 @@ export class CodexAppServerLLMProvider implements LLMProvider {
                 emit(controller, "text", text);
               }
 
-              emit(controller, "result", { usage, is_error: false, session_id: freshThreadId });
+              emit(controller, "result", {
+                usage,
+                last_usage: lastUsage,
+                context_window: contextWindow,
+                is_error: false,
+                session_id: freshThreadId,
+              });
               return;
             }
             throw e;
           }
 
-          const { text, usage, emittedFinalText } = await this.collectTurnText({
+          const { text, usage, lastUsage, contextWindow, emittedFinalText } = await this.collectTurnText({
             threadId,
             turnId,
             onDelta: (delta) => emit(controller, "text", delta),
@@ -498,12 +565,24 @@ export class CodexAppServerLLMProvider implements LLMProvider {
             emit(controller, "text", text);
           }
 
-          emit(controller, "result", { usage, is_error: false, session_id: threadId });
+          emit(controller, "result", {
+            usage,
+            last_usage: lastUsage,
+            context_window: contextWindow,
+            is_error: false,
+            session_id: threadId,
+          });
         } catch (err) {
           const isAbort = err instanceof Error && err.name === "AbortError";
           const msg = isAbort ? "Task stopped by user" : toErrorMessage(err);
           emit(controller, "error", msg);
-          emit(controller, "result", { usage: null, is_error: true, session_id: null });
+          emit(controller, "result", {
+            usage: null,
+            last_usage: null,
+            context_window: null,
+            is_error: true,
+            session_id: null,
+          });
         } finally {
           if (keepAliveTimer) clearInterval(keepAliveTimer);
           controller.close();
@@ -655,7 +734,13 @@ export class CodexAppServerLLMProvider implements LLMProvider {
     /** Callback for tool call lifecycle events (start / complete / error). */
     onToolEvent?: (toolId: string, toolName: string, status: 'running' | 'complete' | 'error') => void;
     signal: AbortSignal;
-  }): Promise<{ text: string; usage: TokenUsage | null; emittedFinalText: boolean }> {
+  }): Promise<{
+    text: string;
+    usage: TokenUsage | null;
+    lastUsage: TokenUsage | null;
+    contextWindow: number | null;
+    emittedFinalText: boolean;
+  }> {
     const timeoutMs = this.turnTimeoutMs;
     const deadlineMs = timeoutMs > 0 ? Date.now() + timeoutMs : Number.POSITIVE_INFINITY;
     const idleTimeoutMs = this.turnIdleTimeoutMs;
@@ -666,6 +751,8 @@ export class CodexAppServerLLMProvider implements LLMProvider {
     let emittedFinalText = false;
     let turnCompleted = false;
     let usage: TokenUsage | null = null;
+    let lastUsage: TokenUsage | null = null;        // 本 turn 最后一次 token_count.last_token_usage
+    let contextWindow: number | null = null;        // Codex 自报 model_context_window
     let lastRelevantEventMs = Date.now();
     /** De-dup set for streaming tool notifications (commandExecution, mcpToolCall)
      *  that fire per-delta rather than once per tool invocation. */
@@ -696,8 +783,16 @@ export class CodexAppServerLLMProvider implements LLMProvider {
       const method = msg.method || "";
       const params = (msg.params || {}) as Record<string, unknown>;
 
-      // Best-effort: capture usage from any notification payload (通常在 turn/completed 附近出现)。
-      if (!usage) {
+      // 显式识别 Codex token_count payload (last_token_usage / total_token_usage / model_context_window)。
+      // 比通用 BFS 稳定得多 — 不再依赖对象键插入顺序。
+      const pair = extractCodexUsagePair(params);
+      if (pair.last) lastUsage = pair.last;                      // 单次：覆盖为最新
+      if (pair.total) usage = pair.total;                        // 累计：覆盖为最新（一个 turn 内多次 token_count 时保留最终值）
+      if (pair.contextWindow != null) contextWindow = pair.contextWindow;
+
+      // 兜底：非 token_count 的 notification（如 turn.completed 里的 usage 字段），
+      // 仍用旧的 BFS 深搜，避免老 Codex 版本 / 未知 payload 的用量完全丢失。
+      if (!usage && !lastUsage) {
         const maybe = findTokenUsageInAny(params);
         if (maybe) usage = maybe;
       }
@@ -862,7 +957,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
             text = lastAgentMessage.trim();
           }
 
-          return { text, usage, emittedFinalText };
+          return { text, usage, lastUsage, contextWindow, emittedFinalText };
         }
 
         // “无事件”超时：只统计本 turn 的相关通知（其它 turn 的噪声不算进展）。用于尽快发现卡死/网络阻塞。

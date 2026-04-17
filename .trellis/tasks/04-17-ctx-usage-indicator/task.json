@@ -1,0 +1,71 @@
+{
+  "title": "Context Usage Indicator for IM Bridge",
+  "description": "在飞书桥接卡片 footer 自动渲染一行 ctx 使用占比（Codex + Claude Code），覆盖多群多项目多 session 场景，零上下文污染。",
+  "status": "impl-done",
+  "dev_type": "feature",
+  "scope": "bridge",
+  "priority": "P2",
+  "creator": "user",
+  "assignee": "name=yyyzl",
+  "createdAt": "2026-04-17",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": null,
+  "worktree_path": null,
+  "current_phase": 0,
+  "next_action": [
+    {
+      "phase": 1,
+      "action": "draft-prd"
+    },
+    {
+      "phase": 2,
+      "action": "write-plan"
+    },
+    {
+      "phase": 3,
+      "action": "implement"
+    },
+    {
+      "phase": 4,
+      "action": "verify-and-commit"
+    }
+  ],
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "meta": {
+    "research_memo": "research/ctx-usage-indicator.md",
+    "key_decisions": {
+      "display_format": "A1 plain text: ctx {pct}% ({input_k}k/{window_k}k)",
+      "codex_probe": "tail rollout JSONL for latest token_count event",
+      "claude_code_probe": "transcript JSONL usage field (or SDK usage if applicable)",
+      "session_lifecycle": "P1 clear-on-new + P2 mtime-validate fallback",
+      "auto_compaction_strategy": "naturally immune, no special handling in MVP"
+    },
+    "open_questions": [],
+    "resolved_questions": {
+      "cc_ingest_path": "SDK result.tokenUsage — 复用 bridge-manager.ts 现有写入点",
+      "context_window_registry": "新建 src/lib/bridge/internal/model-context-window.ts（prefix 匹配 + 200k 默认）",
+      "feishu_footer_slot": "扩展 buildFinalCardJson 的 footer 参数，加 ctx?: string，复用现有 hr + notation 灰字区",
+      "gemini_scope": "不纳入 — 本项目统一走 CC SDK，Codex 是 prompt persona，无多后端分支",
+      "realized_insight": "初版 research 高估复杂度（Codex rollout 解析），实际本项目所有后端 token 都来自 CC SDK，改动仅 ~150 行"
+    },
+    "impl_summary": {
+      "new_files": [
+        "src/lib/bridge/internal/model-context-window.ts",
+        "src/__tests__/unit/bridge-model-context-window.test.ts"
+      ],
+      "modified_files": [
+        "src/lib/bridge/markdown/feishu.ts",
+        "src/lib/bridge/channel-adapter.ts",
+        "src/lib/bridge/adapters/feishu-adapter.ts",
+        "src/lib/bridge/bridge-manager.ts"
+      ],
+      "tests": "431/431 pass (19 new for ctx indicator)",
+      "typecheck": "green"
+    }
+  }
+}
