@@ -1,4 +1,7 @@
 {
+  "env": {
+    "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": "1"
+  },
   "hooks": {
     "SessionStart": [
       {
@@ -11,7 +14,7 @@
           },
           {
             "type": "command",
-            "command": "python3 .claude/hooks/fusion-session-start.py",
+            "command": "python .claude/hooks/fusion-session-start.py",
             "timeout": 5
           }
         ]
@@ -26,7 +29,7 @@
           },
           {
             "type": "command",
-            "command": "python3 .claude/hooks/fusion-session-start.py",
+            "command": "python .claude/hooks/fusion-session-start.py",
             "timeout": 5
           }
         ]
@@ -41,7 +44,7 @@
           },
           {
             "type": "command",
-            "command": "python3 .claude/hooks/fusion-session-start.py",
+            "command": "python .claude/hooks/fusion-session-start.py",
             "timeout": 5
           }
         ]
@@ -69,26 +72,25 @@
         ]
       }
     ],
-    "SubagentStop": [
-      {
-        "matcher": "check",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python .claude/hooks/ralph-loop.py",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
     "PreCompact": [
       {
         "matcher": "",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .claude/hooks/fusion-pre-compact.py",
+            "command": "python .claude/hooks/fusion-pre-compact.py",
             "timeout": 3
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/inject-workflow-state.py",
+            "timeout": 5
           }
         ]
       }
