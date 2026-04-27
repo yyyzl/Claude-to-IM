@@ -2356,7 +2356,7 @@ function inferReasoningEffortForStatus(
   const fromCliConfig = extractModelReasoningEffortFromCliConfig(store.getSetting('bridge_codex_cli_config'));
   if (fromCliConfig) return fromCliConfig;
 
-  // 2) 次优：bridge_codex_model_hint（常见：`gpt-5.2 xhigh`）
+  // 2) 次优：bridge_codex_model_hint（常见：`gpt-5.5 xhigh`）
   const hint = store.getSetting('bridge_codex_model_hint');
   if (hint) {
     const fromHint = parseReasoningEffortToken(hint);

@@ -29,8 +29,8 @@ bridge_llm_backend=codex
 bridge_default_work_dir=G:\\RustProject\\push-2-talk
 
 # 强烈建议：锁死一个你网关/账号明确支持的模型，避免自动选到新版本导致 502
-bridge_codex_model_id=gpt-5.2
-# 或：bridge_codex_model_hint=gpt-5.2 xhigh
+bridge_codex_model_id=gpt-5.5
+# 或：bridge_codex_model_hint=gpt-5.5 xhigh
 
 bridge_codex_sandbox_mode=danger-full-access
 bridge_codex_approval_policy=never
@@ -194,7 +194,7 @@ powershell -ExecutionPolicy Bypass -File scripts/bridge.ps1 watchdog
 
 排查/解决：
 
-1. 先锁死模型：`bridge_codex_model_id=gpt-5.2`
+1. 先锁死模型：`bridge_codex_model_id=gpt-5.5`
 2. 再看网关是否对更高版本模型支持不完整（例如某些 `*-codex` 新模型）
 
 ### 4.2 先用 `codex debug` 把“上游可用性”跑通

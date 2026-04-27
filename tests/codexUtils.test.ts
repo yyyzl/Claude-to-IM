@@ -19,30 +19,39 @@ test("buildTurnSandboxPolicy: workspace-write", () => {
 
 test("selectCodexModel: explicitId 优先", () => {
   const models = [
-    { id: "gpt-5.2-codex", isDefault: true },
-    { id: "gpt-5.2-codex-xhigh" },
+    { id: "gpt-5.5-codex", isDefault: true },
+    { id: "gpt-5.5-codex-xhigh" },
   ];
-  const selected = selectCodexModel(models, { explicitId: "gpt-5.2-codex-xhigh", hint: "gpt-5.2" });
-  assert.equal(selected?.id, "gpt-5.2-codex-xhigh");
+  const selected = selectCodexModel(models, { explicitId: "gpt-5.5-codex-xhigh", hint: "gpt-5.5" });
+  assert.equal(selected?.id, "gpt-5.5-codex-xhigh");
 });
 
 test("selectCodexModel: hint 倾向 xhigh", () => {
   const models = [
-    { id: "gpt-5.2-codex", isDefault: true },
-    { id: "gpt-5.2-codex-xhigh" },
-    { id: "gpt-5.1-codex" },
+    { id: "gpt-5.5-codex", isDefault: true },
+    { id: "gpt-5.5-codex-xhigh" },
+    { id: "gpt-5.3-codex-xhigh" },
   ];
-  const selected = selectCodexModel(models, { hint: "gpt-5.2 xhigh" });
-  assert.equal(selected?.id, "gpt-5.2-codex-xhigh");
+  const selected = selectCodexModel(models, { hint: "gpt-5.5 xhigh" });
+  assert.equal(selected?.id, "gpt-5.5-codex-xhigh");
 });
 
-test("selectCodexModel: hint 倾向 gpt-5.2", () => {
+test("selectCodexModel: hint 倾向 gpt-5.5", () => {
   const models = [
-    { id: "gpt-5.2-codex", isDefault: true },
-    { id: "gpt-5.1-codex" },
+    { id: "gpt-5.5-codex", isDefault: true },
+    { id: "gpt-5.3-codex-xhigh" },
   ];
-  const selected = selectCodexModel(models, { hint: "gpt-5.2" });
-  assert.equal(selected?.id, "gpt-5.2-codex");
+  const selected = selectCodexModel(models, { hint: "gpt-5.5" });
+  assert.equal(selected?.id, "gpt-5.5-codex");
+});
+
+test("selectCodexModel: 无 hint 时倾向更新的 Codex 模型", () => {
+  const models = [
+    { id: "gpt-5.3-codex", isDefault: true },
+    { id: "gpt-5.5-codex" },
+  ];
+  const selected = selectCodexModel(models);
+  assert.equal(selected?.id, "gpt-5.5-codex");
 });
 
 test("resolveCodexBinary: userSpecified 优先", () => {

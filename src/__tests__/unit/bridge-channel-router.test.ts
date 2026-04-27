@@ -36,8 +36,8 @@ function createMockStore(): BridgeStore & {
       if (key === 'bridge_llm_backend') return currentBackend;
       if (key === 'bridge_default_work_dir') return '/tmp/test';
       if (key === 'bridge_default_model') return 'claude-3';
-      if (key === 'bridge_codex_model_id') return 'gpt-5.4';
-      if (key === 'bridge_codex_model_hint') return 'gpt-5.4';
+      if (key === 'bridge_codex_model_id') return 'gpt-5.5';
+      if (key === 'bridge_codex_model_hint') return 'gpt-5.5';
       if (key === 'bridge_default_provider_id') return '';
       return null;
     },

@@ -372,7 +372,7 @@ async function main() {
         modelId: store.getSetting("bridge_codex_model_id") || undefined,
         modelHint: store.getSetting("bridge_codex_model_hint")
           || store.getSetting("bridge_default_model")
-          || "gpt-5.2 xhigh",
+          || "gpt-5.5 xhigh",
         sandboxMode: store.getSetting("bridge_codex_sandbox_mode") || "danger-full-access",
         approvalPolicy: store.getSetting("bridge_codex_approval_policy") || "never",
         turnTimeoutMs: parseIntSetting(store.getSetting("bridge_codex_turn_timeout_ms")),
