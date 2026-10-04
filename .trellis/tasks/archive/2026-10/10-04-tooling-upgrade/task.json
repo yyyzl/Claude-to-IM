@@ -12,15 +12,15 @@
   "assignee": "yyyzl",
   "createdAt": "2026-10-04",
   "completedAt": "2026-10-04",
-  "branch": null,
+  "branch": "main",
   "base_branch": "main",
   "worktree_path": null,
-  "commit": null,
+  "commit": "80c27d4e8d99074bd161b2bbf8b0e8d31143d80c",
   "pr_url": null,
   "subtasks": [],
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Implementation and independent quality gate complete. Root handles commit/push/archive/final index; see research/final-verification.md.",
+  "notes": "Tooling update and quality gate committed; task archived after commit. Final push/index evidence is local in .fusion/final-delivery.json.",
   "meta": {}
 }
