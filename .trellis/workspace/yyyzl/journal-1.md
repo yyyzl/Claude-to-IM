@@ -1726,3 +1726,40 @@ Three major features: (1) CLI rewrite with spec-review/code-review/review-fix su
 ### Next Steps
 
 - 重启桥接并重新发送/model，验证实际飞书选择与账号Fast服务；本次未自动重启
+
+
+## Session 35: 优先可靠性修复与飞书图片回传
+<!-- trellis-session: v=2 fp=72302685d58e29db -->
+
+**Date**: 2026-10-05
+**Task**: 优先可靠性修复与飞书图片回传
+**Branch**: `codex/audit-priority-fixes`
+
+### Summary
+
+修复补发阻塞、补丁恢复误判和当前聊天历史会话找回；接通Codex原生生成图片到飞书的可靠图文投递。两项工作均通过独立审查，完成本次父子任务归档。
+
+### Main Changes
+
+- 补发脱离渠道控制循环，停止/换绑可取消；sessions返回当前聊天历史与完整绑定ID
+- 补丁执行前保存基线和应用结果，恢复保留原始成败并检测冲突
+- 当前回合生成图自动回传，图片key/uuid/送达进度持久化，支持补发并避免日志媒体回显
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ad3fb66` | fix: 修复补发阻塞、会话找回与补丁恢复 |
+| `2dbfcc5` | feat: 自动回传 Codex 生成图片到飞书 |
+
+### Testing
+
+- [OK] 完整748/748单元测试通过；typecheck/build/diffcheck通过；GitNexus变更范围符合预期
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 按需将新构建用于实际桥接并验证真实账号与飞书权限；本次未重启服务或调用生产接口
