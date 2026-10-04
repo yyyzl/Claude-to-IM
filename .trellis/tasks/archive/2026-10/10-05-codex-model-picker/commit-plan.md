@@ -57,3 +57,5 @@
 - 功能提交完成后依据 Trellis 进行任务归档及会话记录；工作流生成的归档、日志提交在功能提交之后。
 - 已完成最终643/643单元测试、typecheck、build、scope=all变更检查及独立全范围审查。业务文件已冻结，真实服务验证另行说明。
 - 确认要求来自 `.trellis/workflow.md` Phase 3.4：“Present the plan once, ask for one-shot confirmation”。
+
+执行记录：功能提交 `d5db4ed` 已创建。用户随后明确要求最终合入并推送 `origin/main`，以该最新要求为准；不使用强推。
