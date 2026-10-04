@@ -150,6 +150,18 @@ export class WorkflowStore {
 
   // ── Spec / Plan (versioned) ──────────────────────────────────
 
+  /** 返回同一个版本号及其内容，供补丁恢复固定输入和输出版本。 */
+  async loadDocumentVersion(
+    runId: string,
+    target: 'spec' | 'plan',
+  ): Promise<{ version: number; content: string | null }> {
+    const version = await this.findLatestVersion(runId, target);
+    const content = target === 'spec'
+      ? await this.loadSpec(runId, version)
+      : await this.loadPlan(runId, version);
+    return { version, content };
+  }
+
   /**
    * Save spec content. Auto-increments version if not specified.
    * Naming: spec-v1.md, spec-v2.md, etc.

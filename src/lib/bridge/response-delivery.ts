@@ -98,11 +98,11 @@ export async function deliverResponse(adapter: BaseChannelAdapter, address: Chan
   return attempt(adapter, store, record, options);
 }
 
-export async function retryResponseDelivery(adapter: BaseChannelAdapter, address: ChannelAddress, id?: string): Promise<SendResult> {
+export async function retryResponseDelivery(adapter: BaseChannelAdapter, address: ChannelAddress, id?: string, options: Pick<Options, 'isCurrent'> = {}): Promise<SendResult> {
   const store = getBridgeContext().store;
   const record = list(store, address).find(record => id ? record.id === id : record.status !== 'delivered');
   if (!record) return { ok: false, error: '没有可补发的回答，或该记录不属于当前聊天/用户' };
-  return attempt(adapter, store, snapshot(record));
+  return attempt(adapter, store, snapshot(record), options);
 }
 
 export function getResponseDeliveryStatus(address: ChannelAddress): string {

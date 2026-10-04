@@ -281,6 +281,7 @@ test('/retry 补发失败的回答，不再次执行模型', { timeout: 1500 }, 
     assert.ok(f.sent.some(out => out.text.includes('待补发')));
     fail = false;
     await manager._testOnly.handleMessage(f.adapter, f.message('/retry'));
+    await until(() => f.sent.some(out => out.text.includes('saved answer')));
     assert.equal(f.turns.length, 1);
     assert.ok(f.sent.some(out => out.text.includes('saved answer')));
   } finally { await f.cleanup(); }

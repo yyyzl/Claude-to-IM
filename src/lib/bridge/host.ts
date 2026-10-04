@@ -76,6 +76,14 @@ export interface BridgeSession {
   provider_id?: string;
 }
 
+/** 当前聊天曾绑定的会话；归属必须来自实际绑定记录，不能从会话名称推断。 */
+export interface ChannelSessionHistoryEntry {
+  sessionId: string;
+  title: string;
+  workingDirectory: string;
+  updatedAt: string;
+}
+
 /** Minimal message object returned by the store. */
 export interface BridgeMessage {
   role: string;
@@ -174,6 +182,8 @@ export interface BridgeStore {
   upsertChannelBinding(data: UpsertChannelBindingInput): ChannelBinding;
   updateChannelBinding(id: string, updates: Partial<ChannelBinding>): void;
   listChannelBindings(channelType?: ChannelType): ChannelBinding[];
+  /** 可选历史能力；宿主负责在绑定创建、切换及更新时维护，并返回独立副本。 */
+  listChannelSessionHistory?(channelType: string, chatId: string): ChannelSessionHistoryEntry[];
 
   // ── Sessions ──
   getSession(id: string): BridgeSession | null;

@@ -11,7 +11,8 @@
  * Key design decisions:
  * - **Crash-safe resume**: each step persists its output before advancing; the meta
  *   checkpoint is written LAST so a crash always replays at most one step.
- * - **Write ordering**: raw output -> ledger -> spec/plan -> checkpoint event -> meta.
+ * - **Patch write ordering**: baseline -> raw -> application record -> fixed document
+ *   versions -> final ledger -> checkpoint event -> meta.
  * - **Event-driven**: all transitions emit typed events, persisted to an append-only
  *   ndjson log for observability and replay.
  * - **Abort support**: external callers can pause a running workflow via `pause()`,
@@ -32,6 +33,11 @@ import { IssueMatcher } from './issue-matcher.js';
 import { PatchApplier } from './patch-applier.js';
 import { DecisionValidator } from './decision-validator.js';
 import { ReportGenerator } from './report-generator.js';
+import {
+  PatchRecoveryError, createPatchBaseline, loadPatchRecovery,
+  savePatchApplication, commitPatchApplication,
+} from './patch-recovery.js';
+import type { PatchBaseline, PatchApplication } from './patch-recovery.js';
 import {
   TimeoutError,
   AbortError,
@@ -559,6 +565,41 @@ export class WorkflowEngine {
       // ════════════════════════════════════════════════════════════
       // Step C: claude_decision
       // ════════════════════════════════════════════════════════════
+      let patchBaseline: PatchBaseline | null = null;
+      if (step === 'claude_decision' && profile.behavior.applyPatches) {
+        try {
+          const recovery = await loadPatchRecovery(this.store, runId, round);
+          patchBaseline = recovery.baseline;
+          if (recovery.application && patchBaseline) {
+            // 已完成的决定优先于重匹配、模型调用和任何账本变更。
+            const committed = await commitPatchApplication(this.store, patchBaseline, recovery.application, this.abortController?.signal);
+            if (!committed) {
+              await this.saveCheckpoint(runId, round, 'claude_decision');
+              return;
+            }
+            for (const target of ['spec', 'plan'] as const) {
+              const result = recovery.application.documents[target];
+              if (result) await this.emit(runId, round, `${target}_updated`, {
+                applied_sections: result.appliedSections, failed_sections: result.failedSections,
+              });
+            }
+            await this.emit(runId, round, 'claude_decision_completed', recovery.application.completion);
+            if (this.abortController?.signal.aborted) {
+              await this.saveCheckpoint(runId, round, 'claude_decision');
+              return;
+            }
+            await this.store.updateMeta(runId, { current_step: 'post_decision' });
+            step = 'post_decision';
+            meta.current_step = step;
+          }
+        } catch (err) {
+          if (!(err instanceof PatchRecoveryError)) throw err;
+          await this.pauseForHuman(runId, round, {
+            reason: 'deadlock_detected', action: 'pause_for_human', details: err.message,
+          });
+          return;
+        }
+      }
       if (step === 'claude_decision') {
         // P2-1/P2-2: If Claude has failed consecutively, skip Claude decision step
         // entirely (Codex-only degradation). Codex findings become the final output.
@@ -588,7 +629,8 @@ export class WorkflowEngine {
           codexOutput = await this.reloadCodexOutput(runId, round);
         }
         if (!matchResult) {
-          ledger = (await this.store.loadLedger(runId)) ?? { run_id: runId, issues: [] };
+          ledger = patchBaseline ? structuredClone(patchBaseline.ledger)
+            : (await this.store.loadLedger(runId)) ?? { run_id: runId, issues: [] };
           matchResult = this.issueMatcher.processFindings(
             codexOutput.findings ?? [],
             ledger,
@@ -596,7 +638,20 @@ export class WorkflowEngine {
           );
           await this.store.saveLedger(runId, ledger);
         } else {
-          ledger = (await this.store.loadLedger(runId)) ?? { run_id: runId, issues: [] };
+          ledger = patchBaseline ? structuredClone(patchBaseline.ledger)
+            : (await this.store.loadLedger(runId)) ?? { run_id: runId, issues: [] };
+        }
+
+        if (profile.behavior.applyPatches && !patchBaseline) {
+          try {
+            patchBaseline = await createPatchBaseline(this.store, runId, round, ledger);
+          } catch (err) {
+            if (!(err instanceof PatchRecoveryError)) throw err;
+            await this.pauseForHuman(runId, round, {
+              reason: 'deadlock_detected', action: 'pause_for_human', details: err.message,
+            });
+            return;
+          }
         }
 
         let claudeRaw = await this.store.loadRoundArtifact(runId, round, 'claude-raw.md');
@@ -888,8 +943,11 @@ export class WorkflowEngine {
         // When profile.behavior.applyPatches is false (e.g. code-review),
         // skip all patch extraction, application, and resolves_issues logic.
         let hasPatchFailure = false;
+        const patchDocuments: PatchApplication['documents'] = {};
 
         if (profile.behavior.applyPatches) {
+          const baseline = patchBaseline;
+          if (!baseline) throw new Error('补丁应用缺少已验证的输入基线');
           // Guard: Claude claims patch exists but extraction failed → treat as patch failure
           // Prevents false-positive resolves when markers don't match or extraction breaks
           if (claudeOutput?.spec_updated && !patches.specPatch) {
@@ -908,14 +966,10 @@ export class WorkflowEngine {
           }
 
           if (patches.specPatch) {
-            const currentSpec = await this.store.loadSpec(runId);
-            if (currentSpec) {
+            const currentSpec = await this.store.loadSpec(runId, baseline.spec.version);
+            if (currentSpec !== null) {
               const result = this.patchApplier.apply(currentSpec, patches.specPatch);
-              await this.store.saveSpec(runId, result.merged);
-              await this.emit(runId, round, 'spec_updated', {
-                applied_sections: result.appliedSections,
-                failed_sections: result.failedSections,
-              });
+              patchDocuments.spec = { ...result, version: baseline.spec.version + 1 };
               if (result.failedSections.length > 0) {
                 hasPatchFailure = true;
                 await this.emit(runId, round, 'patch_apply_failed', {
@@ -928,14 +982,10 @@ export class WorkflowEngine {
 
           // Apply plan patch
           if (patches.planPatch) {
-            const currentPlan = await this.store.loadPlan(runId);
-            if (currentPlan) {
+            const currentPlan = await this.store.loadPlan(runId, baseline.plan.version);
+            if (currentPlan !== null) {
               const result = this.patchApplier.apply(currentPlan, patches.planPatch);
-              await this.store.savePlan(runId, result.merged);
-              await this.emit(runId, round, 'plan_updated', {
-                applied_sections: result.appliedSections,
-                failed_sections: result.failedSections,
-              });
+              patchDocuments.plan = { ...result, version: baseline.plan.version + 1 };
               if (result.failedSections.length > 0) {
                 hasPatchFailure = true;
                 await this.emit(runId, round, 'patch_apply_failed', {
@@ -1017,9 +1067,6 @@ export class WorkflowEngine {
           }
         }
 
-        // Persist updated ledger (crash-safe ordering: ledger -> spec/plan -> meta)
-        await this.store.saveLedger(runId, ledger);
-
         // Compute decision statistics for the event payload
         const decisionStats = {
           accepted: 0,
@@ -1038,12 +1085,46 @@ export class WorkflowEngine {
           }
         }
 
-        await this.emit(runId, round, 'claude_decision_completed', {
+        const completion = {
           round,
           ...decisionStats,
           spec_updated: !!patches.specPatch,
           plan_updated: !!patches.planPatch,
-        });
+        };
+        if (patchBaseline) {
+          try {
+            const application = await savePatchApplication(this.store, patchBaseline, claudeRaw, {
+              documents: patchDocuments, hasPatchFailure, ledger, completion,
+            });
+            // 模型执行期间产物也可能被人工修改；首次提交和恢复使用同一套证据校验。
+            await loadPatchRecovery(this.store, runId, round);
+            const committed = await commitPatchApplication(this.store, patchBaseline, application, this.abortController?.signal);
+            if (!committed) {
+              await this.saveCheckpoint(runId, round, 'claude_decision');
+              return;
+            }
+            for (const target of ['spec', 'plan'] as const) {
+              const result = application.documents[target];
+              if (result) await this.emit(runId, round, `${target}_updated`, {
+                applied_sections: result.appliedSections, failed_sections: result.failedSections,
+              });
+            }
+          } catch (err) {
+            if (!(err instanceof PatchRecoveryError)) throw err;
+            await this.pauseForHuman(runId, round, {
+              reason: 'deadlock_detected', action: 'pause_for_human', details: err.message,
+            });
+            return;
+          }
+        } else {
+          await this.store.saveLedger(runId, ledger);
+        }
+
+        await this.emit(runId, round, 'claude_decision_completed', completion);
+        if (patchBaseline && this.abortController?.signal.aborted) {
+          await this.saveCheckpoint(runId, round, 'claude_decision');
+          return;
+        }
 
         // Advance to next step
         step = 'post_decision';
@@ -1055,6 +1136,10 @@ export class WorkflowEngine {
       // Step D: post_decision
       // ════════════════════════════════════════════════════════════
       if (step === 'post_decision') {
+        if (profile.behavior.applyPatches && this.abortController?.signal.aborted) {
+          await this.saveCheckpoint(runId, round, 'post_decision');
+          return;
+        }
         // Reload transient state if resuming into this step
         if (!codexOutput) {
           codexOutput = await this.reloadCodexOutput(runId, round);

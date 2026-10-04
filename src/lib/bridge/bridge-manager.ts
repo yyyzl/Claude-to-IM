@@ -27,7 +27,7 @@ import * as router from './channel-router.js';
 import * as engine from './conversation-engine.js';
 import * as broker from './permission-broker.js';
 import { clearUserInputRequests, forwardUserInputRequest, handleUserInputResponse, handleUserInputText } from './user-input-broker.js';
-import { deliver } from './delivery-layer.js';
+import { deliver, deliverSingle } from './delivery-layer.js';
 import { deliverResponse, retryResponseDelivery, getResponseDeliveryStatus } from './response-delivery.js';
 import { abortable, settleWithin } from './internal/abort.js';
 import { getBridgeContext } from './context.js';
@@ -221,6 +221,8 @@ interface BridgeManagerState {
   chatGenerations: Map<string, number>;
   queuedTurns: Set<QueuedTurn>;
   taskPromises: Set<Promise<void>>;
+  /** 补发独立于模型/UI 任务，取消与停机仍使用同一代际和排空机制。 */
+  retryTasks: Set<TurnContext>;
   runEpoch: number;
   stopping: Promise<void> | null;
   admissionGate: ChatAdmissionGate;
@@ -249,6 +251,7 @@ function getState(): BridgeManagerState {
       chatGenerations: new Map(),
       queuedTurns: new Set(),
       taskPromises: new Set(),
+      retryTasks: new Set(),
       runEpoch: 0,
       stopping: null,
       admissionGate: new ChatAdmissionGate(),
@@ -285,6 +288,7 @@ function getState(): BridgeManagerState {
   g[GLOBAL_KEY].uiOwners ??= new Map();
   g[GLOBAL_KEY].queuedTurns ??= new Set();
   g[GLOBAL_KEY].taskPromises ??= new Set();
+  g[GLOBAL_KEY].retryTasks ??= new Set();
   g[GLOBAL_KEY].runEpoch ??= 0;
   g[GLOBAL_KEY].stopping ??= null;
   g[GLOBAL_KEY].admissionGate ??= new ChatAdmissionGate();
@@ -418,6 +422,12 @@ function cancelChat(adapter: BaseChannelAdapter, address: ChannelAddress): { run
   state.modelSelection?.invalidate(address);
   const key = getChatTaskKey(address);
   state.chatGenerations.set(key, (state.chatGenerations.get(key) ?? 0) + 1);
+  let retrying = false;
+  for (const retry of state.retryTasks) {
+    if (retry.chatKey !== key) continue;
+    retrying = true;
+    retry.abort.abort();
+  }
   let dropped = clearPendingAppends(adapter, key);
   const collecting = state.inputDebounceBuffers.get(key);
   if (collecting) {
@@ -452,7 +462,36 @@ function cancelChat(adapter: BaseChannelAdapter, address: ChannelAddress): { run
       endUi();
     }
   }
-  return { running: Boolean(active), dropped };
+  return { running: Boolean(active) || retrying, dropped };
+}
+
+/** 消费循环只登记补发；网络和持久化等待纳入独立、可取消的后台任务。 */
+function startResponseRetry(adapter: BaseChannelAdapter, msg: InboundMessage, id?: string): void {
+  const state = getState();
+  const context = captureTurn(msg.address);
+  state.retryTasks.add(context);
+  const task = Promise.resolve().then(async () => {
+    let feedback: string;
+    try {
+      const result = await retryResponseDelivery(adapter, msg.address, id, { isCurrent: () => ownsTurn(context) });
+      feedback = result.ok ? '回答已送达。' : `回答重投失败：${result.error || '未知错误'}。`;
+    } catch (error) {
+      // attempt 会返回投递/flush 错误；列表读取等意外异常也必须给当前聊天反馈。
+      feedback = `回答重投失败：${error instanceof Error ? error.message : '未知错误'}。`;
+    }
+    if (!ownsTurn(context)) return;
+    await deliverSingle(adapter, {
+      address: msg.address,
+      text: feedback,
+      parseMode: 'plain', replyToMessageId: msg.messageId,
+    }, undefined, () => ownsTurn(context));
+  }).catch(error => {
+    console.error('[bridge-manager] 回答补发结果通知失败:', error);
+  }).finally(() => {
+    state.retryTasks.delete(context);
+    state.taskPromises.delete(task);
+  });
+  state.taskPromises.add(task);
 }
 
 function scheduleMessages(adapter: BaseChannelAdapter, messages: InboundMessage[], context = captureTurn(messages[0].address)): void {
@@ -899,6 +938,7 @@ export async function stop(): Promise<void> {
       if (adapter) cancelChat(adapter, address);
     }
     for (const abort of state.activeTasks.values()) abort.abort();
+    for (const retry of state.retryTasks) retry.abort.abort();
     const drained = await settleWithin(Promise.allSettled([...state.taskPromises]), 5000);
     if (!drained) console.warn('[bridge-manager] 本地停止等待超时，仍有任务清理未完成；旧回调已隔离。');
     await Promise.all([...state.adapters.entries()].map(async ([type, adapter]) => {
@@ -1880,15 +1920,31 @@ async function handleCommand(
     }
 
     case '/sessions': {
-      const bindings = router.listBindings(adapter.channelType);
-      if (bindings.length === 0) {
+      if (args && !/^[1-9]\d*$/.test(args)) { response = '用法：/sessions [页码]'; break; }
+      const current = store.getChannelBinding(msg.address.channelType, msg.address.chatId);
+      const history = store.listChannelSessionHistory?.(msg.address.channelType, msg.address.chatId)
+        ?? (current ? [{ sessionId: current.codepilotSessionId, title: '当前会话', workingDirectory: current.workingDirectory, updatedAt: current.updatedAt }] : []);
+      const entries = [...new Map(history.filter(row => store.getSession(row.sessionId)).map(row => [row.sessionId, row])).values()]
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || Number(b.sessionId === current?.codepilotSessionId) - Number(a.sessionId === current?.codepilotSessionId));
+      if (entries.length === 0) {
         response = 'No sessions found.';
       } else {
-        const lines = ['<b>Sessions:</b>', ''];
-        for (const b of bindings.slice(0, 10)) {
-          const active = b.active ? 'active' : 'inactive';
-          lines.push(`<code>${b.codepilotSessionId.slice(0, 8)}...</code> [${active}] ${escapeHtml(b.workingDirectory || '~')}`);
+        const pageSize = 5;
+        const pages = Math.ceil(entries.length / pageSize);
+        const page = Number(args || '1');
+        if (!Number.isSafeInteger(page) || page > pages) { response = `页码超出范围，共 ${pages} 页。`; break; }
+        const lines = [`<b>当前聊天的会话（${page}/${pages} 页，共 ${entries.length} 个）</b>`, '复制完整 /bind 命令可切回该会话。', ''];
+        for (const row of entries.slice((page - 1) * pageSize, page * pageSize)) {
+          lines.push(
+            `${row.sessionId === current?.codepilotSessionId ? '[当前] ' : ''}${escapeHtml(row.title.slice(0, 80) || '未命名会话')}`,
+            `<code>/bind ${escapeHtml(row.sessionId)}</code>`,
+            `目录：${escapeHtml((row.workingDirectory || '~').slice(0, 300))}`,
+            `更新：${escapeHtml(row.updatedAt || '未知')}`, '',
+          );
         }
+        if (page > 1) lines.push(`上一页：<code>/sessions ${page - 1}</code>`);
+        if (page < pages) lines.push(`下一页：<code>/sessions ${page + 1}</code>`);
+        if (!store.listChannelSessionHistory) lines.push('宿主不支持历史列表，仅显示当前会话。');
         response = lines.join('\n');
       }
       break;
@@ -1903,9 +1959,13 @@ async function handleCommand(
     }
 
     case '/retry': {
-      if (getActiveTaskForChat(msg.address)) { response = '当前任务尚未结束，请稍后重投回答。'; break; }
-      const result = await retryResponseDelivery(adapter, msg.address, args || undefined);
-      response = result.ok ? '回答已送达。' : `回答重投失败：${escapeHtml(result.error || '未知错误')}。`;
+      const state = getState();
+      const epoch = state.runEpoch;
+      await state.admissionGate.run(msg.address, () => {
+        if (!state.running || state.runEpoch !== epoch) return;
+        if (getActiveTaskForChat(msg.address)) { response = '当前任务尚未结束，请稍后重投回答。'; return; }
+        startResponseRetry(adapter, msg, args || undefined);
+      });
       break;
     }
 

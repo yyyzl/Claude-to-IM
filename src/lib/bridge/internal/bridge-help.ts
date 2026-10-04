@@ -10,7 +10,7 @@ export function buildBridgeCommandHelp(): string {
     '/model &lt;model-id&gt; [effort] - 文字设置；/model default 跟随 Codex 默认',
     'Codex 配置仅在当前聊天生效，/new 和重启后保留；忙碌时请等待或先 /stop。Fast 用量更高。',
     '/status - Show current status',
-    '/sessions - List recent sessions',
+    '/sessions [页码] - 查看当前聊天历史，复制完整 /bind 命令切回',
     '/stop - 取消当前任务及所有等待消息',
     '/retry [id] - 重投发送失败的回答（不重新调用模型）',
     '/git - Auto commit all changes',

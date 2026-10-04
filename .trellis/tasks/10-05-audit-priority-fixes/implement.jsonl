@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/reliability-contracts.md", "reason": "会话归属、投递取消与恢复一致性"}
+{"file": ".trellis/spec/backend/testing-guidelines.md", "reason": "隔离测试及回归要求"}
+{"file": ".trellis/spec/backend/module-boundaries.md", "reason": "保持manager/router/store及workflow分层"}
+{"file": ".trellis/tasks/10-05-audit-priority-fixes/research/workflow.md", "reason": "补丁恢复基线与影响分析"}
+{"file": ".trellis/tasks/10-05-audit-priority-fixes/research/bridge.md", "reason": "补发隔离与会话历史影响分析"}

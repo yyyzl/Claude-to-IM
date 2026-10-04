@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { BridgeApiProvider, ResponseDeliveryRecord } from "../../src/lib/bridge/host.js";
+import type { BridgeApiProvider, ChannelSessionHistoryEntry, ResponseDeliveryRecord } from "../../src/lib/bridge/host.js";
 import type { ChannelBinding } from "../../src/lib/bridge/types.js";
 export type { ChannelBinding } from "../../src/lib/bridge/types.js";
 
@@ -75,6 +75,7 @@ type PersistedData = {
   messages: Record<string, BridgeMessage[]>;
   channelOffsets: Record<string, string>;
   responseDeliveries?: Record<string, ResponseDeliveryRecord>;
+  channelSessionHistory?: Record<string, ChannelSessionHistoryEntry[]>;
 };
 
 const DEDUP_TTL_MS = 24 * 60 * 60 * 1000;
@@ -96,6 +97,7 @@ export class JsonFileBridgeStore {
 
   private sessions = new Map<string, BridgeSession>();
   private bindings = new Map<string, ChannelBinding>(); // key: `${channelType}:${chatId}`
+  private channelSessionHistory = new Map<string, Map<string, ChannelSessionHistoryEntry>>();
   private messages = new Map<string, BridgeMessage[]>();
   private permissionLinks = new Map<string, PermissionLinkRecord>(); // key: permissionRequestId
   private channelOffsets = new Map<string, string>();
@@ -159,6 +161,8 @@ export class JsonFileBridgeStore {
           updatedAt: now,
         };
 
+    if (prev) this.rememberChannelSession(prev);
+    this.rememberChannelSession(binding);
     this.bindings.set(key, binding);
     this.scheduleSave();
     return binding;
@@ -168,7 +172,10 @@ export class JsonFileBridgeStore {
     this.assertWritable();
     for (const [key, b] of this.bindings) {
       if (b.id !== id) continue;
-      this.bindings.set(key, { ...b, ...updates, updatedAt: new Date().toISOString() });
+      const binding = { ...b, ...updates, updatedAt: new Date().toISOString() };
+      this.rememberChannelSession(b);
+      this.rememberChannelSession(binding);
+      this.bindings.set(key, binding);
       this.scheduleSave();
       return;
     }
@@ -177,6 +184,27 @@ export class JsonFileBridgeStore {
   listChannelBindings(channelType?: ChannelType): ChannelBinding[] {
     const all = Array.from(this.bindings.values());
     return channelType ? all.filter((b) => b.channelType === channelType) : all;
+  }
+
+  private rememberChannelSession(binding: ChannelBinding): void {
+    const session = this.sessions.get(binding.codepilotSessionId);
+    if (!session) return;
+    const key = `${binding.channelType}:${binding.chatId}`;
+    let history = this.channelSessionHistory.get(key);
+    if (!history) { history = new Map(); this.channelSessionHistory.set(key, history); }
+    history.set(session.id, {
+      sessionId: session.id,
+      title: session.name || '未命名会话',
+      workingDirectory: binding.workingDirectory || session.working_directory,
+      updatedAt: binding.updatedAt || binding.createdAt || '',
+    });
+  }
+
+  listChannelSessionHistory(channelType: string, chatId: string): ChannelSessionHistoryEntry[] {
+    return [...(this.channelSessionHistory.get(`${channelType}:${chatId}`)?.values() ?? [])]
+      .filter(row => this.sessions.has(row.sessionId))
+      .map(row => ({ ...row }))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
   // ── Sessions ───────────────────────────────────────────────
@@ -417,6 +445,10 @@ export class JsonFileBridgeStore {
     this.messages = new Map(Object.entries(parsed.messages));
     this.channelOffsets = new Map(Object.entries(parsed.channelOffsets));
     this.responseDeliveries = new Map(Object.entries(parsed.responseDeliveries ?? {}));
+    this.channelSessionHistory = new Map(Object.entries(parsed.channelSessionHistory ?? {})
+      .map(([key, rows]) => [key, new Map(rows.map(row => [row.sessionId, row]))]));
+    // 旧文件仅有当前绑定可证明聊天归属；不导入其余孤立会话。
+    for (const binding of this.bindings.values()) this.rememberChannelSession(binding);
     this.lastGoodRaw = raw;
   }
 
@@ -461,6 +493,7 @@ export class JsonFileBridgeStore {
       messages: Object.fromEntries(this.messages),
       channelOffsets: Object.fromEntries(this.channelOffsets),
       responseDeliveries: Object.fromEntries(this.responseDeliveries),
+      channelSessionHistory: Object.fromEntries([...this.channelSessionHistory].map(([key, rows]) => [key, [...rows.values()]])),
     } satisfies PersistedData, null, 2);
     try {
       await fs.promises.mkdir(path.dirname(this.dataPath), { recursive: true });
@@ -504,6 +537,12 @@ function parsePersistedData(raw: string): PersistedData {
     if (!value || typeof value.id !== 'string' || key !== `${value.channelType}:${value.chatId}` || typeof value.codepilotSessionId !== 'string') throw new Error('Invalid stored binding');
   }
   if (Object.values(record.channelOffsets as Record<string, unknown>).some(v => typeof v !== 'string')) throw new Error('Invalid offsets');
+  if (record.channelSessionHistory !== undefined && (!record.channelSessionHistory || typeof record.channelSessionHistory !== 'object' || Array.isArray(record.channelSessionHistory))) throw new Error('Invalid channel session history');
+  for (const rows of Object.values((record.channelSessionHistory ?? {}) as Record<string, ChannelSessionHistoryEntry[]>)) {
+    if (!Array.isArray(rows) || rows.some(row => !row || typeof row.sessionId !== 'string'
+      || typeof row.title !== 'string' || typeof row.workingDirectory !== 'string' || typeof row.updatedAt !== 'string')
+      || new Set(rows.map(row => row.sessionId)).size !== rows.length) throw new Error('Invalid channel session history');
+  }
   if (record.responseDeliveries !== undefined && (!record.responseDeliveries || typeof record.responseDeliveries !== 'object' || Array.isArray(record.responseDeliveries))) throw new Error('Invalid response deliveries');
   for (const [id, value] of Object.entries((record.responseDeliveries ?? {}) as Record<string, ResponseDeliveryRecord>)) {
     if (!value || value.id !== id || typeof value.sessionId !== 'string' || typeof value.responseText !== 'string'

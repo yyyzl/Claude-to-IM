@@ -1,0 +1,1303 @@
+{
+  "summary": {
+    "changed_count": 93,
+    "affected_count": 49,
+    "changed_files": 26,
+    "risk_level": "critical"
+  },
+  "changed_symbols": [
+    {
+      "id": "Section:docs/reliability-fixes.zh-CN.md:L1:可靠性修复与使用说明",
+      "name": "可靠性修复与使用说明",
+      "type": "Section",
+      "filePath": "docs/reliability-fixes.zh-CN.md",
+      "change_type": "touched"
+    },
+    {
+      "id": "Section:docs/reliability-fixes.zh-CN.md:L5:会话与停止",
+      "name": "会话与停止",
+      "type": "Section",
+      "filePath": "docs/reliability-fixes.zh-CN.md",
+      "change_type": "touched"
+    },
+    {
+      "id": "Section:docs/reliability-fixes.zh-CN.md:L12:找回当前聊天的旧会话",
+      "name": "找回当前聊天的旧会话",
+      "type": "Section",
+      "filePath": "docs/reliability-fixes.zh-CN.md",
+      "change_type": "touched"
+    },
+    {
+      "id": "Section:docs/reliability-fixes.zh-CN.md:L18:回答发送失败时",
+      "name": "回答发送失败时",
+      "type": "Section",
+      "filePath": "docs/reliability-fixes.zh-CN.md",
+      "change_type": "touched"
+    },
+    {
+      "id": "Section:docs/reliability-fixes.zh-CN.md:L51:工作流恢复与修复候选",
+      "name": "工作流恢复与修复候选",
+      "type": "Section",
+      "filePath": "docs/reliability-fixes.zh-CN.md",
+      "change_type": "touched"
+    },
+    {
+      "id": "Section:docs/reliability-fixes.zh-CN.md:L71:运行边界",
+      "name": "运行边界",
+      "type": "Section",
+      "filePath": "docs/reliability-fixes.zh-CN.md",
+      "change_type": "touched"
+    },
+    {
+      "id": "TypeAlias:scripts/claude-to-im-bridge/store.ts:PersistedData",
+      "name": "PersistedData",
+      "type": "TypeAlias",
+      "filePath": "scripts/claude-to-im-bridge/store.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:scripts/claude-to-im-bridge/store.ts:PersistedData.channelSessionHistory",
+      "name": "channelSessionHistory",
+      "type": "Property",
+      "filePath": "scripts/claude-to-im-bridge/store.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Class:scripts/claude-to-im-bridge/store.ts:JsonFileBridgeStore",
+      "name": "JsonFileBridgeStore",
+      "type": "Class",
+      "filePath": "scripts/claude-to-im-bridge/store.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:scripts/claude-to-im-bridge/store.ts:JsonFileBridgeStore.channelSessionHistory",
+      "name": "channelSessionHistory",
+      "type": "Property",
+      "filePath": "scripts/claude-to-im-bridge/store.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Method:scripts/claude-to-im-bridge/store.ts:JsonFileBridgeStore.upsertChannelBinding#1",
+      "name": "upsertChannelBinding",
+      "type": "Method",
+      "filePath": "scripts/claude-to-im-bridge/store.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Method:scripts/claude-to-im-bridge/store.ts:JsonFileBridgeStore.updateChannelBinding#2",
+      "name": "updateChannelBinding",
+      "type": "Method",
+      "filePath": "scripts/claude-to-im-bridge/store.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:scripts/claude-to-im-bridge/store.ts:JsonFileBridgeStore.updateChannelBinding.updatedAt@174:42",
+      "name": "updatedAt",
+      "type": "Property",
+      "filePath": "scripts/claude-to-im-bridge/store.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Method:scripts/claude-to-im-bridge/store.ts:JsonFileBridgeStore.rememberChannelSession#1",
+      "name": "rememberChannelSession",
+      "type": "Method",
+      "filePath": "scripts/claude-to-im-bridge/store.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Method:scripts/claude-to-im-bridge/store.ts:JsonFileBridgeStore.listChannelSessionHistory#2",
+      "name": "listChannelSessionHistory",
+      "type": "Method",
+      "filePath": "scripts/claude-to-im-bridge/store.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Method:scripts/claude-to-im-bridge/store.ts:JsonFileBridgeStore.load#0",
+      "name": "load",
+      "type": "Method",
+      "filePath": "scripts/claude-to-im-bridge/store.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Method:scripts/claude-to-im-bridge/store.ts:JsonFileBridgeStore.save#0",
+      "name": "save",
+      "type": "Method",
+      "filePath": "scripts/claude-to-im-bridge/store.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:scripts/claude-to-im-bridge/store.ts:parsePersistedData",
+      "name": "parsePersistedData",
+      "type": "Function",
+      "filePath": "scripts/claude-to-im-bridge/store.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Interface:src/lib/bridge/bridge-manager.ts:BridgeManagerState",
+      "name": "BridgeManagerState",
+      "type": "Interface",
+      "filePath": "src/lib/bridge/bridge-manager.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/bridge-manager.ts:BridgeManagerState.retryTasks",
+      "name": "retryTasks",
+      "type": "Property",
+      "filePath": "src/lib/bridge/bridge-manager.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/bridge-manager.ts:getState",
+      "name": "getState",
+      "type": "Function",
+      "filePath": "src/lib/bridge/bridge-manager.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/bridge-manager.ts:cancelChat",
+      "name": "cancelChat",
+      "type": "Function",
+      "filePath": "src/lib/bridge/bridge-manager.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/bridge-manager.ts:cancelChat.dropped@464:49",
+      "name": "dropped",
+      "type": "Property",
+      "filePath": "src/lib/bridge/bridge-manager.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/bridge-manager.ts:cancelChat.running@464:11",
+      "name": "running",
+      "type": "Property",
+      "filePath": "src/lib/bridge/bridge-manager.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/bridge-manager.ts:startResponseRetry",
+      "name": "startResponseRetry",
+      "type": "Function",
+      "filePath": "src/lib/bridge/bridge-manager.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/bridge-manager.ts:startResponseRetry.fn@472:38.isCurrent@475:77",
+      "name": "isCurrent",
+      "type": "Function",
+      "filePath": "src/lib/bridge/bridge-manager.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/bridge-manager.ts:startResponseRetry.task@472:2",
+      "name": "task",
+      "type": "Function",
+      "filePath": "src/lib/bridge/bridge-manager.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/bridge-manager.ts:stop",
+      "name": "stop",
+      "type": "Function",
+      "filePath": "src/lib/bridge/bridge-manager.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/bridge-manager.ts:handleCommand",
+      "name": "handleCommand",
+      "type": "Function",
+      "filePath": "src/lib/bridge/bridge-manager.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Interface:src/lib/bridge/host.ts:ChannelSessionHistoryEntry",
+      "name": "ChannelSessionHistoryEntry",
+      "type": "Interface",
+      "filePath": "src/lib/bridge/host.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/host.ts:ChannelSessionHistoryEntry.sessionId",
+      "name": "sessionId",
+      "type": "Property",
+      "filePath": "src/lib/bridge/host.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/host.ts:ChannelSessionHistoryEntry.title",
+      "name": "title",
+      "type": "Property",
+      "filePath": "src/lib/bridge/host.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/host.ts:ChannelSessionHistoryEntry.workingDirectory",
+      "name": "workingDirectory",
+      "type": "Property",
+      "filePath": "src/lib/bridge/host.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/host.ts:ChannelSessionHistoryEntry.updatedAt",
+      "name": "updatedAt",
+      "type": "Property",
+      "filePath": "src/lib/bridge/host.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Interface:src/lib/bridge/host.ts:BridgeStore",
+      "name": "BridgeStore",
+      "type": "Interface",
+      "filePath": "src/lib/bridge/host.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Method:src/lib/bridge/host.ts:BridgeStore.listChannelSessionHistory#2",
+      "name": "listChannelSessionHistory",
+      "type": "Method",
+      "filePath": "src/lib/bridge/host.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/internal/bridge-help.ts:buildBridgeCommandHelp",
+      "name": "buildBridgeCommandHelp",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/bridge-help.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/response-delivery.ts:retryResponseDelivery",
+      "name": "retryResponseDelivery",
+      "type": "Function",
+      "filePath": "src/lib/bridge/response-delivery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "TypeAlias:src/lib/workflow/patch-recovery.ts:Target",
+      "name": "Target",
+      "type": "TypeAlias",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Interface:src/lib/workflow/patch-recovery.ts:Artifact",
+      "name": "Artifact",
+      "type": "Interface",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:Artifact.schema",
+      "name": "schema",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:Artifact.runId",
+      "name": "runId",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:Artifact.round",
+      "name": "round",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Interface:src/lib/workflow/patch-recovery.ts:PatchBaseline",
+      "name": "PatchBaseline",
+      "type": "Interface",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:PatchBaseline.spec",
+      "name": "spec",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:PatchBaseline.plan",
+      "name": "plan",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:PatchBaseline.ledger",
+      "name": "ledger",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Interface:src/lib/workflow/patch-recovery.ts:PatchApplication",
+      "name": "PatchApplication",
+      "type": "Interface",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:PatchApplication.baselineHash",
+      "name": "baselineHash",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:PatchApplication.rawHash",
+      "name": "rawHash",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:PatchApplication.documents",
+      "name": "documents",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:PatchApplication.hasPatchFailure",
+      "name": "hasPatchFailure",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:PatchApplication.ledger",
+      "name": "ledger",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:PatchApplication.completion",
+      "name": "completion",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Class:src/lib/workflow/patch-recovery.ts:PatchRecoveryError",
+      "name": "PatchRecoveryError",
+      "type": "Class",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Const:src/lib/workflow/patch-recovery.ts:ledgerSchema",
+      "name": "ledgerSchema",
+      "type": "Const",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Const:src/lib/workflow/patch-recovery.ts:artifactFields",
+      "name": "artifactFields",
+      "type": "Const",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:artifactFields.ledger",
+      "name": "ledger",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:artifactFields.round",
+      "name": "round",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:artifactFields.runId",
+      "name": "runId",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:artifactFields.schema",
+      "name": "schema",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Const:src/lib/workflow/patch-recovery.ts:documentRefSchema",
+      "name": "documentRefSchema",
+      "type": "Const",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Const:src/lib/workflow/patch-recovery.ts:baselineSchema",
+      "name": "baselineSchema",
+      "type": "Const",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Const:src/lib/workflow/patch-recovery.ts:patchResultSchema",
+      "name": "patchResultSchema",
+      "type": "Const",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Const:src/lib/workflow/patch-recovery.ts:applicationSchema",
+      "name": "applicationSchema",
+      "type": "Const",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/workflow/patch-recovery.ts:hash",
+      "name": "hash",
+      "type": "Function",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/workflow/patch-recovery.ts:encode",
+      "name": "encode",
+      "type": "Function",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/workflow/patch-recovery.ts:decode",
+      "name": "decode",
+      "type": "Function",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/workflow/patch-recovery.ts:createPatchBaseline",
+      "name": "createPatchBaseline",
+      "type": "Function",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:createPatchBaseline.round@81:22",
+      "name": "round",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:createPatchBaseline.runId@81:15",
+      "name": "runId",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:createPatchBaseline.schema@81:4",
+      "name": "schema",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:createPatchBaseline.spec@82:4",
+      "name": "spec",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:createPatchBaseline.plan@83:4",
+      "name": "plan",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:createPatchBaseline.ledger@84:4",
+      "name": "ledger",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/workflow/patch-recovery.ts:loadPatchRecovery",
+      "name": "loadPatchRecovery",
+      "type": "Function",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:loadPatchRecovery.application@101:29",
+      "name": "application",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:loadPatchRecovery.baseline@101:13",
+      "name": "baseline",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:loadPatchRecovery.application@129:21",
+      "name": "application",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:loadPatchRecovery.baseline@129:11",
+      "name": "baseline",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/workflow/patch-recovery.ts:savePatchApplication",
+      "name": "savePatchApplication",
+      "type": "Function",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:savePatchApplication.round@138:38",
+      "name": "round",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:savePatchApplication.runId@138:15",
+      "name": "runId",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:savePatchApplication.schema@138:4",
+      "name": "schema",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:savePatchApplication.baselineHash@139:4",
+      "name": "baselineHash",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/patch-recovery.ts:savePatchApplication.rawHash@139:50",
+      "name": "rawHash",
+      "type": "Property",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/workflow/patch-recovery.ts:commitPatchApplication",
+      "name": "commitPatchApplication",
+      "type": "Function",
+      "filePath": "src/lib/workflow/patch-recovery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Class:src/lib/workflow/workflow-engine.ts:WorkflowEngine",
+      "name": "WorkflowEngine",
+      "type": "Class",
+      "filePath": "src/lib/workflow/workflow-engine.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Method:src/lib/workflow/workflow-engine.ts:WorkflowEngine.runLoop#3",
+      "name": "runLoop",
+      "type": "Method",
+      "filePath": "src/lib/workflow/workflow-engine.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Class:src/lib/workflow/workflow-store.ts:WorkflowStore",
+      "name": "WorkflowStore",
+      "type": "Class",
+      "filePath": "src/lib/workflow/workflow-store.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Method:src/lib/workflow/workflow-store.ts:WorkflowStore.loadDocumentVersion#2",
+      "name": "loadDocumentVersion",
+      "type": "Method",
+      "filePath": "src/lib/workflow/workflow-store.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/workflow-store.ts:WorkflowStore.loadDocumentVersion.content@161:22",
+      "name": "content",
+      "type": "Property",
+      "filePath": "src/lib/workflow/workflow-store.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/workflow/workflow-store.ts:WorkflowStore.loadDocumentVersion.version@161:13",
+      "name": "version",
+      "type": "Property",
+      "filePath": "src/lib/workflow/workflow-store.ts",
+      "change_type": "touched"
+    }
+  ],
+  "affected_processes": [
+    {
+      "id": "proc_3_handlemessage",
+      "name": "HandleMessage → ChatAdmissionGate",
+      "process_type": "cross_community",
+      "step_count": 8,
+      "changed_steps": [
+        {
+          "symbol": "getState",
+          "step": 7
+        }
+      ]
+    },
+    {
+      "id": "proc_36_addmessage",
+      "name": "AddMessage → AtomicWrite",
+      "process_type": "cross_community",
+      "step_count": 5,
+      "changed_steps": [
+        {
+          "symbol": "save",
+          "step": 4
+        }
+      ]
+    },
+    {
+      "id": "proc_53_startresponseretry",
+      "name": "StartResponseRetry → Durable",
+      "process_type": "cross_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "startResponseRetry",
+          "step": 1
+        },
+        {
+          "symbol": "retryResponseDelivery",
+          "step": 2
+        }
+      ]
+    },
+    {
+      "id": "proc_54_stop",
+      "name": "Stop → AcknowledgeUpdate",
+      "process_type": "cross_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "stop",
+          "step": 1
+        },
+        {
+          "symbol": "cancelChat",
+          "step": 2
+        }
+      ]
+    },
+    {
+      "id": "proc_66_handleresume",
+      "name": "HandleResume → WorkflowStore",
+      "process_type": "cross_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "WorkflowStore",
+          "step": 4
+        }
+      ]
+    },
+    {
+      "id": "proc_94_stop",
+      "name": "Stop → OnStreamEnd",
+      "process_type": "cross_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "stop",
+          "step": 1
+        },
+        {
+          "symbol": "cancelChat",
+          "step": 2
+        }
+      ]
+    },
+    {
+      "id": "proc_106_retryresponsedeliver",
+      "name": "RetryResponseDelivery → InsertAuditLog",
+      "process_type": "cross_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "retryResponseDelivery",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_107_retryresponsedeliver",
+      "name": "RetryResponseDelivery → InsertOutboundRef",
+      "process_type": "cross_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "retryResponseDelivery",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_108_retryresponsedeliver",
+      "name": "RetryResponseDelivery → InsertAuditLog",
+      "process_type": "cross_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "retryResponseDelivery",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_109_retryresponsedeliver",
+      "name": "RetryResponseDelivery → InsertOutboundRef",
+      "process_type": "cross_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "retryResponseDelivery",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_111_savepatchapplication",
+      "name": "SavePatchApplication → Hash",
+      "process_type": "intra_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "savePatchApplication",
+          "step": 1
+        },
+        {
+          "symbol": "encode",
+          "step": 2
+        },
+        {
+          "symbol": "hash",
+          "step": 3
+        }
+      ]
+    },
+    {
+      "id": "proc_112_savepatchapplication",
+      "name": "SavePatchApplication → AtomicWriteFile",
+      "process_type": "cross_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "savePatchApplication",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_135_patch",
+      "name": "Patch → ChatAdmissionGate",
+      "process_type": "cross_community",
+      "step_count": 7,
+      "changed_steps": [
+        {
+          "symbol": "getState",
+          "step": 6
+        }
+      ]
+    },
+    {
+      "id": "proc_160_createsession",
+      "name": "CreateSession → AtomicWrite",
+      "process_type": "cross_community",
+      "step_count": 5,
+      "changed_steps": [
+        {
+          "symbol": "save",
+          "step": 4
+        }
+      ]
+    },
+    {
+      "id": "proc_171_startresponseretry",
+      "name": "StartResponseRetry → HasBackendChanged",
+      "process_type": "cross_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "startResponseRetry",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_185_retryresponsedeliver",
+      "name": "RetryResponseDelivery → Records",
+      "process_type": "intra_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "retryResponseDelivery",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_191_onprogress",
+      "name": "OnProgress → ChatAdmissionGate",
+      "process_type": "cross_community",
+      "step_count": 5,
+      "changed_steps": [
+        {
+          "symbol": "getState",
+          "step": 4
+        }
+      ]
+    },
+    {
+      "id": "proc_193_startresponseretry",
+      "name": "StartResponseRetry → GetBridgeContext",
+      "process_type": "cross_community",
+      "step_count": 6,
+      "changed_steps": [
+        {
+          "symbol": "startResponseRetry",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_202_createpatchbaseline",
+      "name": "CreatePatchBaseline → IsNotFoundError",
+      "process_type": "cross_community",
+      "step_count": 5,
+      "changed_steps": [
+        {
+          "symbol": "createPatchBaseline",
+          "step": 1
+        },
+        {
+          "symbol": "loadDocumentVersion",
+          "step": 2
+        }
+      ]
+    },
+    {
+      "id": "proc_208_saveresponsedelivery",
+      "name": "SaveResponseDelivery → AtomicWrite",
+      "process_type": "cross_community",
+      "step_count": 5,
+      "changed_steps": [
+        {
+          "symbol": "save",
+          "step": 4
+        }
+      ]
+    },
+    {
+      "id": "proc_217_startresponseretry",
+      "name": "StartResponseRetry → GetChatTaskKey",
+      "process_type": "intra_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "startResponseRetry",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_220_stop",
+      "name": "Stop → ChatAdmissionGate",
+      "process_type": "intra_community",
+      "step_count": 5,
+      "changed_steps": [
+        {
+          "symbol": "stop",
+          "step": 1
+        },
+        {
+          "symbol": "cancelChat",
+          "step": 2
+        },
+        {
+          "symbol": "getState",
+          "step": 4
+        }
+      ]
+    },
+    {
+      "id": "proc_234_updatechannelbinding",
+      "name": "UpdateChannelBinding → AtomicWrite",
+      "process_type": "cross_community",
+      "step_count": 5,
+      "changed_steps": [
+        {
+          "symbol": "save",
+          "step": 4
+        },
+        {
+          "symbol": "updateChannelBinding",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_241_handlecommand",
+      "name": "HandleCommand → HasBackendChanged",
+      "process_type": "cross_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "handleCommand",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_242_stop",
+      "name": "Stop → GetChatTaskKey",
+      "process_type": "intra_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "stop",
+          "step": 1
+        },
+        {
+          "symbol": "cancelChat",
+          "step": 2
+        }
+      ]
+    },
+    {
+      "id": "proc_243_updatechannelbinding",
+      "name": "UpdateChannelBinding → AssertWritable",
+      "process_type": "intra_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "updateChannelBinding",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_245_onruntimestatuschang",
+      "name": "OnRuntimeStatusChange → ChatAdmissionGate",
+      "process_type": "cross_community",
+      "step_count": 5,
+      "changed_steps": [
+        {
+          "symbol": "getState",
+          "step": 4
+        }
+      ]
+    },
+    {
+      "id": "proc_255_commitpatchapplicati",
+      "name": "CommitPatchApplication → IsNotFoundError",
+      "process_type": "intra_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "commitPatchApplication",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_258_updatesdksessionid",
+      "name": "UpdateSdkSessionId → AtomicWrite",
+      "process_type": "cross_community",
+      "step_count": 5,
+      "changed_steps": [
+        {
+          "symbol": "save",
+          "step": 4
+        }
+      ]
+    },
+    {
+      "id": "proc_264_enqueueregularmessag",
+      "name": "EnqueueRegularMessage → ChatAdmissionGate",
+      "process_type": "intra_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "getState",
+          "step": 3
+        }
+      ]
+    },
+    {
+      "id": "proc_271_createpatchbaseline",
+      "name": "CreatePatchBaseline → RunDir",
+      "process_type": "cross_community",
+      "step_count": 5,
+      "changed_steps": [
+        {
+          "symbol": "createPatchBaseline",
+          "step": 1
+        },
+        {
+          "symbol": "loadDocumentVersion",
+          "step": 2
+        }
+      ]
+    },
+    {
+      "id": "proc_275_updatesessionmodel",
+      "name": "UpdateSessionModel → AtomicWrite",
+      "process_type": "cross_community",
+      "step_count": 5,
+      "changed_steps": [
+        {
+          "symbol": "save",
+          "step": 4
+        }
+      ]
+    },
+    {
+      "id": "proc_280_schedulemessages",
+      "name": "ScheduleMessages → ChatAdmissionGate",
+      "process_type": "intra_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "getState",
+          "step": 3
+        }
+      ]
+    },
+    {
+      "id": "proc_289_updatesessionprovide",
+      "name": "UpdateSessionProviderId → AtomicWrite",
+      "process_type": "cross_community",
+      "step_count": 5,
+      "changed_steps": [
+        {
+          "symbol": "save",
+          "step": 4
+        }
+      ]
+    },
+    {
+      "id": "proc_292_startresponseretry",
+      "name": "StartResponseRetry → ChatAdmissionGate",
+      "process_type": "intra_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "startResponseRetry",
+          "step": 1
+        },
+        {
+          "symbol": "getState",
+          "step": 3
+        }
+      ]
+    },
+    {
+      "id": "proc_294_handlecommand",
+      "name": "HandleCommand → GetBridgeContext",
+      "process_type": "cross_community",
+      "step_count": 5,
+      "changed_steps": [
+        {
+          "symbol": "handleCommand",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_297_upsertchannelbinding",
+      "name": "UpsertChannelBinding → AtomicWrite",
+      "process_type": "cross_community",
+      "step_count": 5,
+      "changed_steps": [
+        {
+          "symbol": "save",
+          "step": 4
+        },
+        {
+          "symbol": "upsertChannelBinding",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_298_upsertchannelbinding",
+      "name": "UpsertChannelBinding → AssertWritable",
+      "process_type": "intra_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "upsertChannelBinding",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_299_tryautostart",
+      "name": "TryAutoStart → ChatAdmissionGate",
+      "process_type": "cross_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "getState",
+          "step": 3
+        }
+      ]
+    },
+    {
+      "id": "proc_300_runloop",
+      "name": "RunLoop → UpdateInteractionMessage",
+      "process_type": "cross_community",
+      "step_count": 6,
+      "changed_steps": [
+        {
+          "symbol": "runLoop",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_302_commitpatchapplicati",
+      "name": "CommitPatchApplication → RunDir",
+      "process_type": "intra_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "commitPatchApplication",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_304_processwithsessionlo",
+      "name": "ProcessWithSessionLock → ChatAdmissionGate",
+      "process_type": "intra_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "getState",
+          "step": 2
+        }
+      ]
+    },
+    {
+      "id": "proc_307_loadpatchrecovery",
+      "name": "LoadPatchRecovery → RunDir",
+      "process_type": "intra_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "loadPatchRecovery",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_308_runloop",
+      "name": "RunLoop → IsNotFoundError",
+      "process_type": "cross_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "runLoop",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_309_runadapterloop",
+      "name": "RunAdapterLoop → ChatAdmissionGate",
+      "process_type": "intra_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "getState",
+          "step": 2
+        }
+      ]
+    },
+    {
+      "id": "proc_312_savepatchapplication",
+      "name": "SavePatchApplication → RunDir",
+      "process_type": "cross_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "savePatchApplication",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_314_startresponseretry",
+      "name": "StartResponseRetry → UpdateInteractionMessage",
+      "process_type": "cross_community",
+      "step_count": 5,
+      "changed_steps": [
+        {
+          "symbol": "startResponseRetry",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_325_loadpatchrecovery",
+      "name": "LoadPatchRecovery → IsNotFoundError",
+      "process_type": "intra_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "loadPatchRecovery",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_336_runloop",
+      "name": "RunLoop → RunDir",
+      "process_type": "cross_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "runLoop",
+          "step": 1
+        }
+      ]
+    }
+  ]
+}

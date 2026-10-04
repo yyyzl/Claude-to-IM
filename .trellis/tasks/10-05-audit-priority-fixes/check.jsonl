@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/reliability-contracts.md", "reason": "检查三项修复的可靠性边界"}
+{"file": ".trellis/spec/backend/testing-guidelines.md", "reason": "验证模拟隔离和故障覆盖"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "整体验收"}
+{"file": ".trellis/tasks/10-05-audit-priority-fixes/research/workflow.md", "reason": "恢复断点及旧数据边界核对"}
+{"file": ".trellis/tasks/10-05-audit-priority-fixes/research/bridge.md", "reason": "控制消息与归属验证矩阵"}
