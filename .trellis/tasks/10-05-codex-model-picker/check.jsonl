@@ -1,0 +1,8 @@
+{"reason":"完成标准和质量检查","file":".trellis/spec/backend/quality-guidelines.md"}
+{"reason":"回归验证与超时约束","file":".trellis/spec/backend/testing-guidelines.md"}
+{"reason":"防止manager或宿主职责扩散","file":".trellis/spec/backend/module-boundaries.md"}
+{"reason":"跨层共享类型和边界验证","file":".trellis/spec/backend/type-safety.md"}
+{"reason":"旧卡、new/bind/stop竞态与持久保存","file":".trellis/spec/backend/reliability-contracts.md"}
+{"reason":"相关流程及风险证据","file":".trellis/tasks/10-05-codex-model-picker/research/integration.md"}
+{"reason":"Fast退出及元数据能力检查","file":".trellis/tasks/10-05-codex-model-picker/research/codex-protocol.md"}
+{"file": ".trellis/spec/backend/codex-model-selection.md", "reason": "核对跨层配置与失效回调回归"}

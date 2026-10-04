@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { read, setup } from './codex-test-transport.js';
 
-test('目录读取失败后重新建连接，下一次握手可正常完成', async () => {
+test('目录读取失败保留握手连接，下一次仅重试目录', async () => {
   const { client, provider } = setup();
   const request = client.request.bind(client); let failed = false;
   client.request = async (method, params) => {
@@ -11,10 +11,10 @@ test('目录读取失败后重新建连接，下一次握手可正常完成', as
   };
   const first = await read(provider.streamChat({ prompt: 'hello', sessionId: 's' }));
   assert.match(first.find(e => e.type === 'error')?.data ?? '', /temporary catalog error/);
-  assert.equal(client.isRunning(), false);
+  assert.equal(client.isRunning(), true);
   const second = await read(provider.streamChat({ prompt: 'hello', sessionId: 's' }));
   assert.equal(second.some(e => e.type === 'error'), false);
-  assert.equal(client.calls.filter(c => c.method === 'initialize').length, 2);
+  assert.equal(client.calls.filter(c => c.method === 'initialize').length, 1);
 });
 
 test('断开时收到迟到服务端请求的回复错误会被捕获', async () => {
@@ -39,7 +39,7 @@ test('握手、恢复、会话模型、目录effort、权限与图片真实传�
   assert.equal(turn.model, 'model-next'); assert.equal(turn.effort, 'ultra');
   assert.equal(turn.approvalPolicy, 'on-request'); assert.deepEqual(turn.sandboxPolicy, { type: 'workspaceWrite' });
   assert.deepEqual((turn.input as unknown[])[1], { type: 'image', url: 'data:image/png;base64,YQ==' });
-  assert.equal(JSON.parse(events.find(e => e.type === 'status')!.data).model, 'model-next');
+  assert.equal(JSON.parse(events.find(e => e.type === 'status' && JSON.parse(e.data).model)!.data).model, 'model-next');
 });
 
 test('failed终态不会被报告成功，未知模型不会静默替换', async () => {

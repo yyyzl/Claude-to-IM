@@ -119,6 +119,9 @@ export async function processMessage(
 ): Promise<ConversationResult> {
   const { store, llm } = getBridgeContext();
   const sessionId = binding.codepilotSessionId;
+  const isCodex = (store.getSetting('bridge_llm_backend') || binding.backend || '').trim().toLowerCase() === 'codex';
+  const codexPreferences = isCodex && binding.codexModelPreferences
+    ? { ...binding.codexModelPreferences } : undefined;
 
   // Acquire session lock
   const lockId = crypto.randomBytes(8).toString('hex');
@@ -187,7 +190,7 @@ export async function processMessage(
     }
 
     // Effective model
-    const effectiveModel = binding.model || session?.model || store.getSetting('default_model') || undefined;
+    const effectiveModel = codexPreferences?.model ?? (binding.model || session?.model || store.getSetting('default_model') || undefined);
 
     // Permission mode from binding mode
     let permissionMode: string;
@@ -232,7 +235,8 @@ export async function processMessage(
         sessionId,
         sdkSessionId: binding.sdkSessionId || undefined,
         model: effectiveModel,
-        reasoningEffort: binding.reasoningEffort,
+        reasoningEffort: codexPreferences ? codexPreferences.reasoningEffort ?? undefined : binding.reasoningEffort,
+        codexModelPreferences: codexPreferences,
         systemPrompt: session?.system_prompt || undefined,
         workingDirectory: binding.workingDirectory || session?.working_directory || undefined,
         abortController,
@@ -416,9 +420,16 @@ async function consumeStream(
               }
               if (statusData.model) {
                 store.updateSessionModel(sessionId, statusData.model);
-                // 同步更新 binding 的 model，避免 /new 继承时显示旧的 hint 字符串
+                // Codex 仅记录运行结果，不能把“跟随默认”或显式选择改写为实际型号。
                 if (binding.id && interactions?.isCurrent?.() !== false) {
-                  store.updateChannelBinding(binding.id, { model: statusData.model, ...(typeof statusData.reasoning_effort === 'string' ? { reasoningEffort: statusData.reasoning_effort } : {}) });
+                  const isCodex = (store.getSetting('bridge_llm_backend') || binding.backend || '').trim().toLowerCase() === 'codex';
+                  store.updateChannelBinding(binding.id, isCodex ? {
+                    lastModelRuntime: {
+                      model: statusData.model,
+                      ...(typeof statusData.reasoning_effort === 'string' ? { reasoningEffort: statusData.reasoning_effort } : {}),
+                      ...(typeof statusData.service_tier === 'string' ? { serviceTier: statusData.service_tier } : {}),
+                    },
+                  } : { model: statusData.model, ...(typeof statusData.reasoning_effort === 'string' ? { reasoningEffort: statusData.reasoning_effort } : {}) });
                 }
               }
             } catch { /* skip */ }

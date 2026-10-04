@@ -12,6 +12,7 @@ import type {
   OutboundMessage,
   PreviewCapabilities,
   SendResult,
+  ModelSelectionView,
 } from './types.js';
 import type { UserInputRequest } from './host.js';
 
@@ -114,6 +115,18 @@ export abstract class BaseChannelAdapter {
     _address: ChannelAddress,
     _request: UserInputRequest,
     _replyToMessageId?: string,
+  ): Promise<SendResult>;
+
+  sendModelSelection?(
+    _address: ChannelAddress,
+    _view: ModelSelectionView,
+    _replyToMessageId?: string,
+  ): Promise<SendResult>;
+
+  updateModelSelection?(
+    _address: ChannelAddress,
+    _messageId: string,
+    _view: ModelSelectionView,
   ): Promise<SendResult>;
 
   /** 原交互消息的终态；更新失败不改变已经确定的权限结果。 */

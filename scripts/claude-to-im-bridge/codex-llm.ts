@@ -2,17 +2,18 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { LLMProvider, StreamChatParams, TokenUsage, UserInputQuestion } from '../../src/lib/bridge/host.js';
+import type { CodexModelPreferences, ModelCatalog } from '../../src/lib/bridge/types.js';
 import type { InMemoryPermissionGateway } from './permissions.ts';
 import { JsonRpcAppServerClient, redactSensitive } from './codex-jsonrpc.ts';
 import type { JsonRpcMessage } from './codex-jsonrpc.ts';
-import { buildTurnSandboxPolicy, resolveCodexBinary, selectCodexEffort, selectCodexModel } from './codex-utils.ts';
+import { buildTurnSandboxPolicy, parseCodexModelPage, resolveCodexBinary, selectCodexEffort, selectCodexModel } from './codex-utils.ts';
 import type { CodexModelListItem } from './codex-utils.ts';
 
 type CodexTransport = Pick<JsonRpcAppServerClient, 'request' | 'notify' | 'respond' | 'respondError' | 'onServerRequest' | 'onNotification' | 'onDisconnect' | 'drainBacklog' | 'stop' | 'isRunning'>;
 type SendEvent = (type: string, data: unknown) => void;
 type ActiveTurn = { emit: SendEvent; abort: AbortController; turnId?: string; onStatus?: (status: string) => void };
 type TurnPolicy = { sandbox: string; approvalPolicy: string };
-type ModelSelection = { model: CodexModelListItem; effort?: string };
+type ModelSelection = { model: CodexModelListItem; effort?: string; serviceTierForTurn?: string };
 type TurnResult = { text: string; usage: TokenUsage | null; lastUsage: TokenUsage | null; contextWindow: number | null; contextTokens: number | null; emittedFinalText: boolean };
 
 export interface CodexAppServerLLMProviderOptions {
@@ -73,6 +74,9 @@ export class CodexAppServerLLMProvider implements LLMProvider {
   private readonly options: CodexAppServerLLMProviderOptions;
   private initialized = false;
   private initPromise: Promise<void> | null = null;
+  private catalogPromise: Promise<void> | null = null;
+  private catalogUpdatedAt = 0;
+  private connectionEpoch = 0;
   private models: CodexModelListItem[] = [];
   private activeTurns = new Map<string, ActiveTurn>();
   private serverRequests = new Map<string | number, { permissionId: string; resolved: boolean }>();
@@ -94,7 +98,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
       this.client = new JsonRpcAppServerClient({ command, cwd: options.projectRoot, debug: options.debug });
     }
     this.client.onDisconnect(() => {
-      this.initialized = false; this.initPromise = null;
+      this.resetConnectionState();
       for (const pending of this.serverRequests.values()) {
         pending.resolved = true;
         this.permissions.resolvePendingPermission(pending.permissionId, { behavior: 'deny', message: 'Codex 连接已断开' });
@@ -115,14 +119,33 @@ export class CodexAppServerLLMProvider implements LLMProvider {
 
   stop(): void {
     for (const active of this.activeTurns.values()) active.abort.abort();
+    this.resetConnectionState();
     this.client.stop();
-    this.initialized = false;
-    this.initPromise = null;
-    this.models = [];
     this.previousUsage.clear();
   }
 
+  /** 目录与握手分开管理：刷新失败不能断开其他聊天正在使用的连接。 */
+  async getModelCatalog(options: { refresh?: boolean } = {}): Promise<ModelCatalog> {
+    const epoch = this.connectionEpoch;
+    await this.ensureInitialized();
+    this.assertConnectionEpoch(epoch);
+    await this.refreshModelCatalog(options.refresh === true);
+    this.assertConnectionEpoch(epoch);
+    return {
+      models: this.models.filter(model => !model.hidden).map(model => ({
+        id: model.id, model: model.model, displayName: model.displayName, isDefault: model.isDefault,
+        defaultReasoningEffort: model.defaultReasoningEffort,
+        supportedReasoningEfforts: model.supportedReasoningEfforts.map(effort => ({ ...effort })),
+        serviceTiers: model.serviceTiers.map(tier => ({ ...tier })),
+        defaultServiceTier: model.defaultServiceTier,
+      })),
+    };
+  }
+
   streamChat(params: StreamChatParams): ReadableStream<string> {
+    // 外部对象之后的变更不能把本轮模型、强度和速度拆成不同版本。
+    params = { ...params, codexModelPreferences: params.codexModelPreferences ? { ...params.codexModelPreferences } : undefined };
+    const epoch = this.connectionEpoch;
     const abort = new AbortController();
     const externalSignal = params.abortController?.signal;
     const onAbort = () => abort.abort(externalSignal?.reason);
@@ -135,32 +158,38 @@ export class CodexAppServerLLMProvider implements LLMProvider {
           if (!cancelled) controller.enqueue(`data: ${JSON.stringify({ type, data: typeof data === 'string' ? data : JSON.stringify(data) })}\n`);
         };
         let threadId: string | undefined;
+        let active: ActiveTurn | undefined;
         let keepAlive: NodeJS.Timeout | undefined;
         try {
           if (abort.signal.aborted) throw abortError();
           const keepAliveMs = this.options.keepAliveMs ?? 15_000;
           if (keepAliveMs > 0) keepAlive = setInterval(() => send('keep_alive', ''), keepAliveMs);
-          await this.ensureInitialized();
+          await this.getModelCatalog({ refresh: Boolean(params.codexModelPreferences) });
+          this.assertConnectionEpoch(epoch);
           if (abort.signal.aborted) throw abortError();
-          const selection = this.selectModel(params.model, params.reasoningEffort);
+          const selection = this.selectModel(params.model, params.reasoningEffort, params.codexModelPreferences);
           const policy = this.turnPolicy(params.permissionMode);
           const input = this.buildInput(params, selection.model);
           if (params.sdkSessionId?.trim()) {
             threadId = params.sdkSessionId.trim();
             await this.client.request('thread/resume', {
-              threadId, excludeTurns: true, model: selection.model.model || selection.model.id,
+              threadId, excludeTurns: true, model: selection.model.model,
               cwd: params.workingDirectory || this.options.projectRoot, ...policy,
             }, 30_000);
           } else {
             threadId = await this.startThread(params, selection, policy);
           }
-          send('status', { session_id: threadId, model: selection.model.model || selection.model.id, reasoning_effort: selection.effort });
+          this.assertConnectionEpoch(epoch);
+          // 线程已建立，但配置是否被接受要等 turn/start，不能提前报告为实际使用。
+          send('status', { session_id: threadId });
           if (abort.signal.aborted) throw abortError();
-          const active: ActiveTurn = { emit: send, abort, onStatus: params.onRuntimeStatusChange };
+          active = { emit: send, abort, onStatus: params.onRuntimeStatusChange };
           this.activeTurns.set(threadId, active);
           params.onRuntimeStatusChange?.('running');
           const turnId = await this.startTurn({ threadId, input, params, selection, policy });
           active.turnId = turnId;
+          this.assertConnectionEpoch(epoch);
+          if (!abort.signal.aborted) send('status', { session_id: threadId, model: selection.model.model, reasoning_effort: selection.effort, service_tier: selection.serviceTierForTurn });
           const result = await this.collectTurnText({
             threadId, turnId, signal: abort.signal, onDelta: delta => send('text', delta), onProgress: text => send('progress', text),
             onToolEvent: (id, name, status, item) => {
@@ -177,7 +206,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
           if (keepAlive) clearInterval(keepAlive);
           abort.abort();
           externalSignal?.removeEventListener('abort', onAbort);
-          if (threadId) this.activeTurns.delete(threadId);
+          if (threadId && active && this.activeTurns.get(threadId) === active) this.activeTurns.delete(threadId);
           params.onRuntimeStatusChange?.('idle');
           if (!cancelled) controller.close();
         }
@@ -186,8 +215,27 @@ export class CodexAppServerLLMProvider implements LLMProvider {
     });
   }
 
-  private selectModel(explicit?: string, effort?: string): ModelSelection {
-    const selection = explicit?.trim() && explicit.trim() !== 'default' ? explicit : this.options.modelId || this.options.modelHint;
+  private selectModel(explicit?: string, effort?: string, preferences?: CodexModelPreferences): ModelSelection {
+    if (preferences) {
+      const model = preferences.model === 'default'
+        ? this.models.find(model => !model.hidden && model.isDefault)
+        : this.models.find(model => !model.hidden && model.id === preferences.model);
+      if (preferences.model === 'default' && !model) throw new Error('Codex 模型目录未指定默认模型；请在 /model 中明确选择型号。');
+      if (!model) throw new Error(`Codex 模型目录中没有 ${preferences.model}；请重新打开 /model 选择。`);
+      const selectedEffort = preferences.reasoningEffort ?? model.defaultReasoningEffort;
+      if (!model.supportedReasoningEfforts.some(option => option.reasoningEffort === selectedEffort)) {
+        throw new Error(`模型 ${model.model} 不支持思考强度 ${selectedEffort}；请重新打开 /model 选择。`);
+      }
+      if (preferences.speed !== 'normal' && preferences.speed !== 'fast') throw new Error('Codex 速度设置无效；请重新打开 /model 选择。');
+      let serviceTierForTurn = 'default';
+      if (preferences.speed === 'fast') {
+        const fastTier = model.serviceTiers.find(tier => tier.id === 'fast');
+        if (!fastTier) throw new Error(`模型 ${model.model} 当前没有 Fast 能力；请重新打开 /model 选择。`);
+        serviceTierForTurn = fastTier.id;
+      }
+      return { model, effort: selectedEffort, serviceTierForTurn };
+    }
+    const selection = explicit?.trim() || this.options.modelId || this.options.modelHint;
     const model = selectCodexModel(this.models, { explicitId: selection });
     if (!model) throw new Error('Codex model/list 返回空目录；请检查本机登录、网络或运行时配置。');
     return { model, effort: selectCodexEffort(model, selection, effort || this.configuredEffort) };
@@ -208,7 +256,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
     const input: Record<string, unknown>[] = [{ type: 'text', text: prompt, text_elements: [] }];
     for (const file of params.files ?? []) {
       if (!/^image\/(png|jpeg|webp|gif)$/.test(file.type)) throw new Error(`Codex 暂不支持附件类型 ${file.type}（${file.name}）`);
-      if (model.inputModalities && !model.inputModalities.includes('image')) throw new Error(`模型 ${model.model || model.id} 不支持图片输入`);
+      if (model.inputModalities && !model.inputModalities.includes('image')) throw new Error(`模型 ${model.model} 不支持图片输入`);
       if (!file.data && !file.filePath) throw new Error(`图片 ${file.name} 没有可用内容`);
       input.push(file.data ? { type: 'image', url: `data:${file.type};base64,${file.data}` } : { type: 'localImage', path: path.resolve(file.filePath!) });
     }
@@ -218,35 +266,71 @@ export class CodexAppServerLLMProvider implements LLMProvider {
   private async ensureInitialized(): Promise<void> {
     if (this.initialized && this.client.isRunning()) return;
     if (this.initPromise) return this.initPromise;
-    this.initPromise = (async () => {
+    const epoch = this.connectionEpoch;
+    const pending = (async () => {
       await this.client.request('initialize', { clientInfo: { name: 'claude-to-im', version: '1.0.0' }, capabilities: { experimentalApi: true } }, 30_000);
+      this.assertConnectionEpoch(epoch);
       this.client.notify('initialized');
+      this.initialized = true;
+    })();
+    this.initPromise = pending;
+    try { await pending; } catch (error) {
+      if (epoch === this.connectionEpoch) {
+        this.resetConnectionState();
+        this.client.stop();
+      }
+      throw error;
+    } finally { if (this.initPromise === pending) this.initPromise = null; }
+  }
+
+  private resetConnectionState(): void {
+    this.connectionEpoch += 1;
+    this.initialized = false;
+    this.initPromise = null;
+    this.catalogPromise = null;
+    this.catalogUpdatedAt = 0;
+    this.models = [];
+  }
+
+  private assertConnectionEpoch(epoch: number): void {
+    if (epoch !== this.connectionEpoch) throw new Error('Codex 连接已结束，请重试。');
+  }
+
+  private async refreshModelCatalog(force: boolean): Promise<void> {
+    if (this.catalogPromise) return this.catalogPromise;
+    if (!force && this.models.length && Date.now() - this.catalogUpdatedAt < 1_000) return;
+    const epoch = this.connectionEpoch;
+    const pending = (async () => {
       const models: CodexModelListItem[] = [];
+      const ids = new Set<string>();
       let cursor: string | null = null;
       const cursors = new Set<string>();
       do {
-        const response = record(await this.client.request('model/list', { limit: 100, includeHidden: false, ...(cursor ? { cursor } : {}) }, 30_000));
-        for (const value of Array.isArray(response.data) ? response.data : []) {
-          const item = record(value);
-          if (typeof item.id === 'string') models.push(item as unknown as CodexModelListItem);
+        const response = parseCodexModelPage(await this.client.request('model/list', { limit: 100, includeHidden: false, ...(cursor ? { cursor } : {}) }, 30_000));
+        this.assertConnectionEpoch(epoch);
+        for (const model of response.models) {
+          if (ids.has(model.id)) throw new Error(`Codex 模型目录包含重复 ID ${model.id}`);
+          ids.add(model.id);
+          models.push(model);
         }
-        cursor = pickString(response.nextCursor);
+        cursor = response.nextCursor;
         if (cursor && cursors.has(cursor)) throw new Error('Codex 模型目录返回重复分页游标');
         if (cursor) cursors.add(cursor);
+        if (cursors.size > 100 || models.length > 10_000) throw new Error('Codex 模型目录超过合理分页范围');
       } while (cursor);
+      const visible = models.filter(model => !model.hidden);
+      if (!visible.length) throw new Error('Codex model/list 返回空目录；请检查本机登录、网络或运行时配置。');
+      if (visible.filter(model => model.isDefault).length > 1) throw new Error('Codex 模型目录包含多个默认模型');
       this.models = models;
-      this.initialized = true;
+      this.catalogUpdatedAt = Date.now();
     })();
-    try { await this.initPromise; } catch (error) {
-      // 初始化成功后目录失败也必须重新建连接，服务端不接受重复 initialize。
-      this.client.stop(); this.initialized = false; this.models = [];
-      throw error;
-    } finally { this.initPromise = null; }
+    this.catalogPromise = pending;
+    try { await pending; } finally { if (this.catalogPromise === pending) this.catalogPromise = null; }
   }
 
   private async startThread(params: StreamChatParams, selection: ModelSelection, policy: TurnPolicy): Promise<string> {
     const response = record(await this.client.request('thread/start', {
-      model: selection.model.model || selection.model.id, cwd: params.workingDirectory || this.options.projectRoot, ...policy,
+      model: selection.model.model, cwd: params.workingDirectory || this.options.projectRoot, ...policy,
       ...(params.systemPrompt ? { baseInstructions: params.systemPrompt } : {}),
     }, 30_000));
     const id = pickString(record(response.thread).id);
@@ -256,8 +340,9 @@ export class CodexAppServerLLMProvider implements LLMProvider {
 
   private async startTurn(opts: { threadId: string; input: Record<string, unknown>[]; params: StreamChatParams; selection: ModelSelection; policy: TurnPolicy }): Promise<string> {
     const response = record(await this.client.request('turn/start', {
-      threadId: opts.threadId, input: opts.input, model: opts.selection.model.model || opts.selection.model.id,
+      threadId: opts.threadId, input: opts.input, model: opts.selection.model.model,
       effort: opts.selection.effort, cwd: opts.params.workingDirectory || this.options.projectRoot,
+      ...(opts.selection.serviceTierForTurn ? { serviceTierForTurn: opts.selection.serviceTierForTurn } : {}),
       approvalPolicy: opts.policy.approvalPolicy, sandboxPolicy: buildTurnSandboxPolicy(opts.policy.sandbox),
     }, 30_000));
     const id = pickString(record(response.turn).id);

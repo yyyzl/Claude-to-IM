@@ -36,6 +36,7 @@
 - 改测试或补回归：读 [测试规范](./testing-guidelines.md)
 - 做收尾检查或补规范：读 [质量规范](./quality-guidelines.md)
 - 改会话取消、投递、存储恢复或自动修复：读 [可靠性合同](./reliability-contracts.md)
+- 改 Codex 模型选择、速度或配置卡片：读 [模型选择合同](./codex-model-selection.md)
 
 涉及跨层链路时，再读：
 

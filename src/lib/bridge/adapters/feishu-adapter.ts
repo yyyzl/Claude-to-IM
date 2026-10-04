@@ -23,6 +23,8 @@ import type {
   OutboundMessage,
   SendResult,
   ChannelAddress,
+  ModelSelectionResponse,
+  ModelSelectionView,
 } from '../types.js';
 import type { UserInputRequest } from '../host.js';
 import type { FileAttachment } from '../types.js';
@@ -39,6 +41,8 @@ import {
   buildFinalCardJson,
   buildPermissionButtonCard,
   buildUserInputCard,
+  buildModelSelectionCard,
+  MODEL_DEFAULT_EFFORT_OPTION,
   formatElapsed,
   splitFeishuMarkdown,
   feishuPayloadBytes,
@@ -102,6 +106,29 @@ function assertFeishuSuccess(response: { code?: number; msg?: string }): void {
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown> : null;
+}
+
+/** 这里只校验回调形状；目录、归属、revision 和期限由核心草稿统一校验。 */
+function parseModelSelectionResponse(value: Record<string, unknown>, rawForm: unknown): ModelSelectionResponse | null {
+  const requestId = pickString(value.model_selection_request_id);
+  const revision = value.model_selection_revision;
+  const action = value.model_selection_action;
+  if (!requestId || requestId.length > 128 || typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0) return null;
+  if (action !== 'next' && action !== 'back' && action !== 'refresh' && action !== 'previous_page' && action !== 'next_page' && action !== 'apply' && action !== 'cancel') return null;
+  const response: ModelSelectionResponse = { requestId, revision, action };
+  const form = asRecord(rawForm);
+  if (action === 'next') {
+    const model = pickString(form?.model);
+    if (!model || Buffer.byteLength(model, 'utf8') > MAX_CARD_BYTES) return null;
+    response.model = model;
+  } else if (action === 'apply') {
+    const effort = pickString(form?.reasoning_effort);
+    const speed = form?.speed;
+    if (!effort || Buffer.byteLength(effort, 'utf8') > MAX_CARD_BYTES || (speed !== 'normal' && speed !== 'fast')) return null;
+    response.reasoningEffort = effort === MODEL_DEFAULT_EFFORT_OPTION ? '' : effort;
+    response.speed = speed;
+  }
+  return response;
 }
 
 function parsePositiveInt(raw: string | null): number | null {
@@ -517,9 +544,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
   // ── Card Action Handler ─────────────────────────────────────
 
   /**
-   * Handle card.action.trigger events (button clicks on permission cards).
-   * Converts button clicks to synthetic InboundMessage with callbackData.
-   * Must return within 3 seconds (Feishu timeout), so uses a 2.5s race.
+   * 飞书要求快速响应；这里只解析并入队，目录刷新和持久化由核心处理。
    */
   private async handleCardAction(data: unknown): Promise<unknown> {
     const event = asRecord(data);
@@ -540,7 +565,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
       text: '', timestamp: Date.now(), callbackMessageId: messageId,
     };
     const requestId = pickString(value?.user_input_request_id);
-    if (requestId) {
+    if (value && 'model_selection_request_id' in value) {
+      const response = parseModelSelectionResponse(value, action?.form_value);
+      if (!response) return { toast: { type: 'error', content: '模型设置表单无效，请重新打开 /model。' } };
+      callbackMsg.modelSelectionResponse = response;
+    } else if (requestId) {
       const fields = asRecord(value?.fields);
       const form = asRecord(action?.form_value);
       if (!fields || !form || Object.keys(fields).length === 0 || Object.keys(fields).length > 50) {
@@ -994,6 +1023,36 @@ export class FeishuAdapter extends BaseChannelAdapter {
         : await this.restClient.im.message.create({ params: { receive_id_type: 'chat_id' }, data: { receive_id: address.chatId, msg_type: 'interactive', content } });
       assertFeishuSuccess(response);
       return response.data?.message_id ? { ok: true, messageId: response.data.message_id } : { ok: false, error: '问答卡片发送后缺少消息 ID' };
+    } catch (err) {
+      return { ok: false, error: toErrorMessage(err) };
+    }
+  }
+
+  async sendModelSelection(address: ChannelAddress, view: ModelSelectionView, replyToMessageId?: string): Promise<SendResult> {
+    if (!this.restClient) return { ok: false, error: 'Feishu client not initialized' };
+    try {
+      const content = buildModelSelectionCard(view);
+      const data = { msg_type: 'interactive', content, ...(!replyToMessageId ? { receive_id: address.chatId } : {}) };
+      if (Buffer.byteLength(JSON.stringify(data), 'utf8') > MAX_CARD_BYTES) return { ok: false, httpStatus: 413, error: '模型目录内容过长，暂时无法显示卡片；可用 /model <目录 ID> 选择。' };
+      const response = replyToMessageId
+        ? await this.restClient.im.message.reply({ path: { message_id: replyToMessageId }, data })
+        : await this.restClient.im.message.create({ params: { receive_id_type: 'chat_id' }, data: { ...data, receive_id: address.chatId } });
+      assertFeishuSuccess(response);
+      const messageId = pickString(response.data?.message_id);
+      return messageId ? { ok: true, messageId } : { ok: false, error: '模型卡片发送后缺少消息 ID' };
+    } catch (err) {
+      return { ok: false, error: toErrorMessage(err) };
+    }
+  }
+
+  async updateModelSelection(_address: ChannelAddress, messageId: string, view: ModelSelectionView): Promise<SendResult> {
+    if (!this.restClient) return { ok: false, error: 'Feishu client not initialized' };
+    if (!pickString(messageId)) return { ok: false, error: '模型卡片更新缺少消息 ID' };
+    try {
+      const data = { content: buildModelSelectionCard(view) };
+      if (Buffer.byteLength(JSON.stringify(data), 'utf8') > MAX_CARD_BYTES) return { ok: false, httpStatus: 413, error: '模型目录内容过长，暂时无法显示卡片；可用 /model <目录 ID> 选择。' };
+      assertFeishuSuccess(await this.restClient.im.message.patch({ path: { message_id: messageId }, data }));
+      return { ok: true, messageId };
     } catch (err) {
       return { ok: false, error: toErrorMessage(err) };
     }

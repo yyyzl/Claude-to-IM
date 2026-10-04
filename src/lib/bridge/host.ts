@@ -6,7 +6,7 @@
  * interfaces to use the bridge.
  */
 
-import type { ChannelBinding, ChannelType } from './types.js';
+import type { ChannelBinding, ChannelType, CodexModelPreferences, ModelCatalog } from './types.js';
 
 // ── Bridge-local types (replacing @/types imports) ────────────
 
@@ -152,6 +152,7 @@ export interface UpsertChannelBindingInput {
   model: string;
   mode?: string;
   backend?: string;
+  codexModelPreferences?: CodexModelPreferences;
 }
 
 /**
@@ -232,6 +233,8 @@ export interface StreamChatParams {
   sdkSessionId?: string;
   model?: string;
   reasoningEffort?: string;
+  /** 显式聊天偏好快照；Codex 必须用目录复验并覆盖旧 model/effort hint。 */
+  codexModelPreferences?: CodexModelPreferences;
   systemPrompt?: string;
   workingDirectory?: string;
   abortController?: AbortController;
@@ -243,6 +246,8 @@ export interface StreamChatParams {
 }
 
 export interface LLMProvider {
+  /** Codex 模型目录；实现须返回完整、已验证的快照。 */
+  getModelCatalog?(options?: { refresh?: boolean }): Promise<ModelCatalog>;
   /**
    * Start a streaming chat with the LLM.
    * Returns a ReadableStream of SSE-formatted strings.

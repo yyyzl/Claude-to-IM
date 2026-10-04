@@ -50,6 +50,8 @@ export interface InboundMessage {
   callbackMessageId?: string;
   /** 问答卡片提交；callbackMessageId 必须指向原始卡片。 */
   userInputResponse?: import('./host.js').UserInputResponse;
+  /** 独立于模型问答的配置卡提交，来源仍使用 address/callbackMessageId。 */
+  modelSelectionResponse?: ModelSelectionResponse;
   /** Platform-specific raw update object (for adapter-specific handling) */
   raw?: unknown;
   /** Adapter-specific update ID for deferred offset acknowledgement */
@@ -92,6 +94,55 @@ export interface SendResult {
 
 // ── Bindings ───────────────────────────────────────────────────
 
+/** 当前聊天的显式 Codex 偏好；default/null 均保持跟随语义。 */
+export interface CodexModelPreferences {
+  model: string;
+  reasoningEffort: string | null;
+  speed: 'normal' | 'fast';
+}
+
+export interface ModelCatalogEntry {
+  id: string;
+  /** Codex 协议实际型号；目录 ID 与型号可能不同。 */
+  model: string;
+  displayName: string;
+  isDefault: boolean;
+  defaultReasoningEffort: string;
+  supportedReasoningEfforts: Array<{ reasoningEffort: string; description: string }>;
+  serviceTiers: Array<{ id: string; name: string; description: string }>;
+  defaultServiceTier: string | null;
+}
+
+export interface ModelCatalog {
+  models: ModelCatalogEntry[];
+}
+
+export interface ModelSelectionResponse {
+  requestId: string;
+  revision: number;
+  action: 'next' | 'back' | 'refresh' | 'previous_page' | 'next_page' | 'apply' | 'cancel';
+  model?: string;
+  reasoningEffort?: string;
+  speed?: string;
+}
+
+/** 呈现所需的完整视图；原生平台仅负责渲染，不推断配置或归属。 */
+export interface ModelSelectionView {
+  requestId: string;
+  revision: number;
+  step: 'model' | 'settings' | 'applied' | 'cancelled' | 'expired';
+  summary: string;
+  notice?: string;
+  models: ModelCatalogEntry[];
+  page: number;
+  pageCount: number;
+  selectedModel: string;
+  selectedModelEntry?: ModelCatalogEntry;
+  /** 空字符串是表单中的“跟随模型默认”。 */
+  reasoningEffort: string;
+  speed: 'normal' | 'fast';
+}
+
 /** Links an IM chat to a CodePilot session */
 export interface ChannelBinding {
   id: string;
@@ -107,6 +158,9 @@ export interface ChannelBinding {
   model: string;
   /** 后端目录验证后的思考强度；切换模型时重新验证。 */
   reasoningEffort?: string;
+  codexModelPreferences?: CodexModelPreferences;
+  /** 仅用于状态展示，不作为后续请求偏好。 */
+  lastModelRuntime?: { model: string; reasoningEffort?: string; serviceTier?: string };
   /** Chat mode */
   mode: 'code' | 'plan' | 'ask';
   /** LLM backend used when this binding was last created/updated (e.g. 'claude' | 'codex') */

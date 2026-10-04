@@ -187,15 +187,17 @@ describe('bridge-manager ctx footer', () => {
     assert.match(streamEndCalls[0].extras?.ctx ?? '', /50%/);
   });
 
-  it('/model stores the exact model and effort, /status shows it without guessing model names', async () => {
+  it('/model validates and saves chat preferences, /status shows the selection', async () => {
     const store = createStore();
-    initBridgeContext({ store, llm: { streamChat: () => { throw new Error('命令不得调用模型'); } }, permissions: { resolvePendingPermission: () => false }, lifecycle: {} });
+    initBridgeContext({ store, llm: {
+      getModelCatalog: async () => ({ models: [{ id: 'model-next', model: 'model-next', displayName: 'Next', isDefault: true, defaultReasoningEffort: 'ultra', supportedReasoningEfforts: [{ reasoningEffort: 'ultra', description: '' }], serviceTiers: [], defaultServiceTier: null }] }),
+      streamChat: () => { throw new Error('命令不得调用模型'); },
+    }, permissions: { resolvePendingPermission: () => false }, lifecycle: {} });
     const { adapter, sent } = createAdapter();
     const { _testOnly } = await import('../../lib/bridge/bridge-manager');
     const base = { messageId: 'command', address: { channelType: 'feishu', chatId: 'chat-model', userId: 'user' }, timestamp: Date.now() };
     await _testOnly.handleMessage(adapter, { ...base, text: '/model model-next ultra' });
-    assert.equal(store.getChannelBinding('feishu', 'chat-model')?.model, 'model-next');
-    assert.equal(store.getChannelBinding('feishu', 'chat-model')?.reasoningEffort, 'ultra');
+    assert.deepEqual(store.getChannelBinding('feishu', 'chat-model')?.codexModelPreferences, { model: 'model-next', reasoningEffort: 'ultra', speed: 'normal' });
     await _testOnly.handleMessage(adapter, { ...base, text: '/status' });
     assert.match(sent.at(-1)?.text ?? '', /ultra/);
   });

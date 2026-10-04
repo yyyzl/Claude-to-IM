@@ -31,6 +31,7 @@ import { deliver } from './delivery-layer.js';
 import { deliverResponse, retryResponseDelivery, getResponseDeliveryStatus } from './response-delivery.js';
 import { abortable, settleWithin } from './internal/abort.js';
 import { getBridgeContext } from './context.js';
+import { ChatAdmissionGate, ModelSelectionCoordinator, describeModelPreferences } from './internal/model-selection.js';
 import { escapeHtml } from './adapters/telegram-utils.js';
 import {
   processWithSessionLock as processWithSessionLockInternal,
@@ -222,6 +223,8 @@ interface BridgeManagerState {
   taskPromises: Set<Promise<void>>;
   runEpoch: number;
   stopping: Promise<void> | null;
+  admissionGate: ChatAdmissionGate;
+  modelSelection?: ModelSelectionCoordinator;
 }
 
 function getState(): BridgeManagerState {
@@ -248,6 +251,7 @@ function getState(): BridgeManagerState {
       taskPromises: new Set(),
       runEpoch: 0,
       stopping: null,
+      admissionGate: new ChatAdmissionGate(),
     };
   }
   // Backfill sessionLocks for states created before this field existed
@@ -283,7 +287,32 @@ function getState(): BridgeManagerState {
   g[GLOBAL_KEY].taskPromises ??= new Set();
   g[GLOBAL_KEY].runEpoch ??= 0;
   g[GLOBAL_KEY].stopping ??= null;
+  g[GLOBAL_KEY].admissionGate ??= new ChatAdmissionGate();
   return g[GLOBAL_KEY];
+}
+
+function getModelSelection(): ModelSelectionCoordinator {
+  const state = getState();
+  const { store, llm } = getBridgeContext();
+  state.modelSelection ??= new ModelSelectionCoordinator({
+    store, llm, gate: state.admissionGate,
+    capture: address => {
+      const binding = router.resolve(address);
+      return { bindingId: binding.id, sessionId: binding.codepilotSessionId,
+        generation: state.chatGenerations.get(getChatTaskKey(address)) ?? 0, epoch: state.runEpoch };
+    },
+    isCurrent: (address, owner) => {
+      const binding = store.getChannelBinding(address.channelType, address.chatId);
+      return binding?.id === owner.bindingId && binding.codepilotSessionId === owner.sessionId
+        && owner.epoch === state.runEpoch && owner.generation === (state.chatGenerations.get(getChatTaskKey(address)) ?? 0);
+    },
+    isBusy: address => {
+      const binding = store.getChannelBinding(address.channelType, address.chatId);
+      return Boolean(getActiveTaskForChat(address) || countWaitingMessages(address)
+        || (binding && (state.activeTasks.has(binding.codepilotSessionId) || state.sessionLocks.has(binding.codepilotSessionId))));
+    },
+  });
+  return state.modelSelection;
 }
 
 /**
@@ -386,6 +415,7 @@ function ownsTurn(context: TurnContext): boolean {
 /** 一次取消覆盖 collecting、append、queued、running；旧代际不再操作新 UI。 */
 function cancelChat(adapter: BaseChannelAdapter, address: ChannelAddress): { running: boolean; dropped: number } {
   const state = getState();
+  state.modelSelection?.invalidate(address);
   const key = getChatTaskKey(address);
   state.chatGenerations.set(key, (state.chatGenerations.get(key) ?? 0) + 1);
   let dropped = clearPendingAppends(adapter, key);
@@ -849,6 +879,7 @@ export async function stop(): Promise<void> {
   const { lifecycle } = getBridgeContext();
   state.running = false;
   state.runEpoch++;
+  state.modelSelection?.invalidate();
   const stopping = (async () => {
     for (const abort of state.loopAborts.values()) abort.abort();
     state.loopAborts.clear();
@@ -965,13 +996,21 @@ function runAdapterLoop(adapter: BaseChannelAdapter): void {
         if (
           msg.callbackData ||
           msg.userInputResponse ||
+          msg.modelSelectionResponse ||
           isControlCommand(msg.text.trim()) ||
           isNumericPermissionShortcut(adapter.channelType, msg.text.trim(), msg.address.chatId)
         ) {
-          await handleMessage(adapter, msg);
+          if (msg.modelSelectionResponse || /^\/model(?:@\S+)?(?:\s|$)/i.test(msg.text.trim())) {
+            // 目录网络请求不阻塞后续 stop/new；归属由协调器在 await 后复验。
+            const task = handleMessage(adapter, msg).catch(err => console.error('[bridge-manager] 模型选择失败:', err))
+              .finally(() => state.taskPromises.delete(task));
+            state.taskPromises.add(task);
+          } else await handleMessage(adapter, msg);
         } else {
           // 普通消息：可选 debounce 合并（避免”连发两句”触发两次完整请求）
-          enqueueRegularMessage(adapter, msg);
+          await state.admissionGate.run(msg.address, () => {
+            if (!abort.signal.aborted && state.runEpoch === runEpoch && state.running) enqueueRegularMessage(adapter, msg);
+          });
         }
       } catch (err) {
         if (abort.signal.aborted) break;
@@ -1031,6 +1070,17 @@ async function handleMessage(
     }
   };
   const ack = opts?.ack || defaultAck;
+
+  if (msg.modelSelectionResponse) {
+    try {
+      if ((store.getSetting('bridge_llm_backend') || '').toLowerCase() !== 'codex') throw new Error('当前桥接不是 Codex，模型卡已失效。');
+      const feedback = await getModelSelection().respond(adapter, msg);
+      if (feedback) await deliver(adapter, { address: msg.address, text: feedback, parseMode: 'plain' });
+    } catch (error) {
+      await deliver(adapter, { address: msg.address, text: error instanceof Error ? error.message : '模型卡操作失败。', parseMode: 'plain' });
+    } finally { ack(); }
+    return;
+  }
 
   if (msg.userInputResponse || /^\/answer(?:\s|$)/.test(msg.text.trim())) {
     const handled = msg.userInputResponse
@@ -1232,13 +1282,19 @@ async function handleMessage(
   if (!text && !hasAttachments) { ack(); return; }
 
   // Regular message — route to conversation engine
-  const context = opts?.context ?? captureTurn(msg.address);
-  if (!ownsTurn(context)) { ack(); return; }
-  // 会话归属在入队时固定；恢复 ID 必须取前一回合完成后的值。
-  const binding = {
-    ...context.binding,
-    sdkSessionId: store.getChannelBinding(context.binding.channelType, context.binding.chatId)?.sdkSessionId ?? '',
-  };
+  const admitted = await getState().admissionGate.run(msg.address, () => {
+    const context = opts?.context ?? captureTurn(msg.address);
+    if (!ownsTurn(context)) return null;
+    const binding = {
+      ...context.binding,
+      codexModelPreferences: context.binding.codexModelPreferences ? { ...context.binding.codexModelPreferences } : undefined,
+      sdkSessionId: store.getChannelBinding(context.binding.channelType, context.binding.chatId)?.sdkSessionId ?? '',
+    };
+    registerActiveTask(msg.address, binding.codepilotSessionId, context.abort);
+    return { context, binding };
+  });
+  if (!admitted) { ack(); return; }
+  const { context, binding } = admitted;
   const isCurrent = () => ownsTurn(context) && getState().uiOwners.get(context.chatKey) === context.abort;
 
   // Notify adapter that message processing is starting (e.g., typing indicator)
@@ -1246,7 +1302,6 @@ async function handleMessage(
 
   // Create an AbortController so /stop can cancel this task externally
   const taskAbort = context.abort;
-  registerActiveTask(msg.address, binding.codepilotSessionId, taskAbort);
 
   // ── Streaming preview setup ──────────────────────────────────
   let previewState: StreamingPreviewState | null = null;
@@ -1603,16 +1658,14 @@ async function handleCommand(
       }
 
       // If there is a running task for this chat, stop it before switching sessions.
-      const { running: stopped } = cancelChat(adapter, msg.address);
-
-      const binding = router.startNewSession(msg.address, workDir ? { workingDirectory: workDir } : {});
+      const { stopped, binding } = await getState().admissionGate.run(msg.address, () => {
+        const { running } = cancelChat(adapter, msg.address);
+        return { stopped: running, binding: router.startNewSession(msg.address, workDir ? { workingDirectory: workDir } : {}) };
+      });
 
       const session = store.getSession(binding.codepilotSessionId);
       const effectiveModel = (session?.model || binding.model || 'default').trim() || 'default';
       const backend = (store.getSetting('bridge_llm_backend') || '').trim().toLowerCase();
-      const thinking = backend === 'codex'
-        ? (binding.reasoningEffort || '由模型目录决定')
-        : null;
 
       const st = getState();
       const activeChatTask = getActiveTaskForChat(msg.address);
@@ -1635,8 +1688,8 @@ async function handleCommand(
         `Session: <code>${binding.codepilotSessionId.slice(0, 8)}...</code>`,
         `CWD: <code>${escapeHtml(binding.workingDirectory || '~')}</code>`,
         `Mode: <b>${binding.mode}</b>`,
-        `Model: <code>${escapeHtml(effectiveModel)}</code>`,
-        ...(thinking ? [`Thinking: <code>${escapeHtml(thinking)}</code>`] : []),
+        ...(backend !== 'codex' ? [`Model: <code>${escapeHtml(effectiveModel)}</code>`] : []),
+        ...(backend === 'codex' ? [escapeHtml(describeModelPreferences(binding))] : []),
         `Backend: <code>${escapeHtml(backend || 'default')}</code>`,
         `Task: ${activeChatTask?.abort.signal.aborted ? '<b>cancelling</b>' : isRunningTask ? '<b>running</b>' : '<b>idle</b>'}${runningForMs != null ? ` (<code>${formatTimeoutMs(runningForMs)}</code>)` : ''}`,
         `Session lock: ${hasSessionLock ? '<b>busy</b>' : '<b>free</b>'}`,
@@ -1658,11 +1711,14 @@ async function handleCommand(
         break;
       }
       if (!store.getSession(args)) { response = 'Session not found.'; break; }
-      const { running: stopped } = cancelChat(adapter, msg.address);
-      const binding = router.bindToSession(msg.address, args);
+      const { stopped, binding } = await getState().admissionGate.run(msg.address, () => {
+        const { running } = cancelChat(adapter, msg.address);
+        return { stopped: running, binding: router.bindToSession(msg.address, args) };
+      });
       if (binding) {
         response = [
           `Bound to session <code>${args.slice(0, 8)}...</code>`,
+          ...((store.getSetting('bridge_llm_backend') || '').toLowerCase() === 'codex' ? [escapeHtml(describeModelPreferences(binding))] : []),
           stopped ? '<i>已请求中断旧任务，并隔离其后续回调。</i>' : '',
         ].filter(Boolean).join('\n');
       } else {
@@ -1700,6 +1756,24 @@ async function handleCommand(
 
     case '/model': {
       const binding = router.resolve(msg.address);
+      if ((store.getSetting('bridge_llm_backend') || '').trim().toLowerCase() === 'codex') {
+        try {
+          const selection = getModelSelection();
+          if (!args) {
+            if (adapter.sendModelSelection && adapter.updateModelSelection) {
+              await selection.open(adapter, msg, binding);
+              return;
+            }
+            response = escapeHtml(await selection.textView(binding));
+          } else {
+            const [model, effort, extra] = args.trim().split(/\s+/);
+            if (extra || !/^[a-zA-Z0-9._:/-]+$/.test(model) || (effort && !/^[a-zA-Z0-9_-]+$/.test(effort))) {
+              response = '用法：/model &lt;model-id&gt; [effort]';
+            } else response = escapeHtml(await selection.setText(msg.address, model, effort));
+          }
+        } catch (error) { response = escapeHtml(error instanceof Error ? error.message : '模型目录请求失败。'); }
+        break;
+      }
       if (!args) {
         response = `当前模型：<code>${escapeHtml(binding.model || 'default')}</code>\n思考强度：<code>${escapeHtml(binding.reasoningEffort || '由模型目录决定')}</code>\n用法：/model &lt;model-id&gt; [effort]；/model default 恢复默认。下次请求将校验模型目录，不会静默切换型号。`;
         break;
@@ -1724,9 +1798,6 @@ async function handleCommand(
       const session = store.getSession(binding.codepilotSessionId);
       const effectiveModel = (session?.model || binding.model || 'default').trim() || 'default';
       const backend = (store.getSetting('bridge_llm_backend') || '').trim().toLowerCase();
-      const thinking = backend === 'codex'
-        ? (binding.reasoningEffort || '由模型目录决定')
-        : null;
 
       const st = getState();
       const activeChatTask = getActiveTaskForChat(msg.address);
@@ -1772,8 +1843,8 @@ async function handleCommand(
           : []),
         `CWD: <code>${escapeHtml(binding.workingDirectory || '~')}</code>`,
         `Mode: <b>${binding.mode}</b>`,
-        `Model: <code>${escapeHtml(effectiveModel)}</code>`,
-        ...(thinking ? [`Thinking: <code>${escapeHtml(thinking)}</code>`] : []),
+        ...(backend !== 'codex' ? [`Model: <code>${escapeHtml(effectiveModel)}</code>`] : []),
+        ...(backend === 'codex' ? [escapeHtml(describeModelPreferences(binding))] : []),
         `Backend: <code>${escapeHtml(backend || 'default')}</code>`,
         `Task: ${activeChatTask?.abort.signal.aborted ? '<b>cancelling</b>' : isRunningTask ? '<b>running</b>' : '<b>idle</b>'}${runningForMs != null ? ` (<code>${formatTimeoutMs(runningForMs)}</code>)` : ''}`,
         `Session lock: ${hasSessionLock ? '<b>busy</b>' : '<b>free</b>'}`,
@@ -1824,7 +1895,7 @@ async function handleCommand(
     }
 
     case '/stop': {
-      const cancelled = cancelChat(adapter, msg.address);
+      const cancelled = await getState().admissionGate.run(msg.address, () => cancelChat(adapter, msg.address));
       response = cancelled.running
         ? `已请求停止当前任务，正在清理本地执行。${cancelled.dropped ? ` 已取消 ${cancelled.dropped} 条等待消息。` : ''}`
         : cancelled.dropped ? `已取消 ${cancelled.dropped} 条等待消息。` : 'No task is currently running.';

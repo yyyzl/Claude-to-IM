@@ -1,4 +1,4 @@
-import type { ToolCallInfo } from '../types.js';
+import type { ModelSelectionResponse, ModelSelectionView, ToolCallInfo } from '../types.js';
 import type { UserInputRequest } from '../host.js';
 
 /**
@@ -442,5 +442,81 @@ export function buildUserInputCard(request: UserInputRequest): string {
     schema: '2.0', config: { wide_screen_mode: true },
     header: { title: { tag: 'plain_text', content: '需要你的选择' }, template: 'blue' },
     body: { elements: [{ tag: 'form', name: 'answers', elements }] },
+  });
+}
+
+/** 飞书选项必须有非空 value，核心仍使用空字符串表示跟随模型默认。 */
+export const MODEL_DEFAULT_EFFORT_OPTION = '__model_default__';
+
+/** 两步原生表单；只展示核心提供的目录页，最终提交前不改变聊天偏好。 */
+export function buildModelSelectionCard(view: ModelSelectionView): string {
+  const plain = (content: string) => ({ tag: 'plain_text', content });
+  const shortLabel = (label: string) => Array.from(label).slice(0, 100).join('');
+  const button = (action: ModelSelectionResponse['action'], label: string, submit = false) => ({
+    tag: 'button', name: `model_${action}`, type: submit ? 'primary' : 'default', text: plain(label),
+    ...(submit ? { form_action_type: 'submit' } : {}),
+    behaviors: [{ type: 'callback', value: {
+      model_selection_request_id: view.requestId,
+      model_selection_revision: view.revision,
+      model_selection_action: action,
+    } }],
+  });
+  const select = (name: string, label: string, options: Array<{ value: string; label: string }>, selected: string) => ({
+    tag: 'select_static', name, required: true, width: 'fill',
+    placeholder: plain(label),
+    options: options.map(option => ({ value: option.value, text: plain(shortLabel(option.label)) })),
+    ...(options.some(option => option.value === selected) ? { initial_option: selected } : {}),
+  });
+  const elements: Array<Record<string, unknown>> = [
+    { tag: 'markdown', content: view.summary },
+    { tag: 'markdown', content: '当前聊天生效，/new 后保留；应用后从下一轮开始使用。', text_size: 'notation' },
+  ];
+  if (view.notice) elements.push({ tag: 'markdown', content: view.notice });
+  if (view.step === 'model') {
+    const models = [...view.models];
+    // 翻页时仍保留当前已选项，不能把页外选择悄悄变成“跟随默认”。
+    if (view.selectedModel !== 'default' && view.selectedModelEntry && !models.some(model => model.id === view.selectedModel)) {
+      models.unshift(view.selectedModelEntry);
+    }
+    const options = [{ value: 'default', label: '跟随目录默认模型' }];
+    for (const model of models) {
+      if (!options.some(option => option.value === model.id)) options.push({ value: model.id, label: `${model.displayName} · ${model.model}${model.isDefault ? '（目录默认）' : ''}` });
+    }
+    elements.push({ tag: 'markdown', content: `**第一步：选择模型** · 第 ${view.page + 1} / ${view.pageCount} 页` });
+    elements.push({ tag: 'form', name: 'model_selection', elements: [
+      select('model', '请选择模型', options, view.selectedModel), button('next', '下一步：强度与速度', true),
+    ] });
+    if (view.page > 0) elements.push(button('previous_page', '上一页'));
+    if (view.page + 1 < view.pageCount) elements.push(button('next_page', '下一页'));
+    elements.push(button('refresh', '刷新模型目录'), button('cancel', '取消'));
+  } else if (view.step === 'settings') {
+    const model = view.selectedModelEntry;
+    if (!model) throw new Error('所选模型不在目录中，请刷新后重新选择。');
+    const efforts = [{ value: MODEL_DEFAULT_EFFORT_OPTION, label: `跟随模型默认（${model.defaultReasoningEffort}）` }];
+    for (const effort of model.supportedReasoningEfforts) {
+      if (!efforts.some(option => option.value === effort.reasoningEffort)) efforts.push({ value: effort.reasoningEffort, label: `${effort.reasoningEffort}${effort.description ? ` · ${effort.description}` : ''}` });
+    }
+    const speeds = [{ value: 'normal', label: '正常' }];
+    if (model.serviceTiers.some(tier => tier.id === 'fast')) speeds.push({ value: 'fast', label: 'Fast（更高用量）' });
+    const selectedEffort = view.reasoningEffort || MODEL_DEFAULT_EFFORT_OPTION;
+    if (!efforts.some(option => option.value === selectedEffort) || !speeds.some(option => option.value === view.speed)) {
+      elements.push({ tag: 'markdown', content: '之前的强度或速度不受此模型支持，请重新选择后再应用。' });
+    }
+    elements.push({ tag: 'markdown', content: `**第二步：强度与速度**\n模型：${model.model}${view.selectedModel === 'default' ? '（跟随目录默认）' : ''}` });
+    elements.push({ tag: 'form', name: 'model_settings', elements: [
+      { tag: 'markdown', content: '**思考强度**' },
+      select('reasoning_effort', '请选择思考强度', efforts, selectedEffort),
+      { tag: 'markdown', content: '**速度**' },
+      select('speed', '请选择速度', speeds, view.speed),
+      { tag: 'markdown', content: speeds.length > 1 ? 'Fast 会消耗更多用量；实际可用性由当前账号与服务端决定。' : '此模型的目录未提供 Fast，当前仅支持正常速度。', text_size: 'notation' },
+      button('apply', '应用到当前聊天', true),
+    ] });
+    elements.push(button('back', '返回选择模型'), button('cancel', '取消'));
+  }
+  const title = { model: 'Codex 模型设置', settings: 'Codex 模型设置', applied: '模型设置已应用', cancelled: '模型设置已取消', expired: '模型设置已过期' }[view.step];
+  return JSON.stringify({
+    schema: '2.0', config: { wide_screen_mode: true },
+    header: { title: plain(title), template: view.step === 'applied' ? 'green' : 'blue' },
+    body: { elements },
   });
 }

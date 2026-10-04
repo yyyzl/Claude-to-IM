@@ -2,27 +2,14 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { BridgeApiProvider, ResponseDeliveryRecord } from "../../src/lib/bridge/host.js";
+import type { ChannelBinding } from "../../src/lib/bridge/types.js";
+export type { ChannelBinding } from "../../src/lib/bridge/types.js";
 
 import { resolveBridgeSetting } from "./settings.ts";
 
 export type ChannelType = string;
 
 export type BridgeMode = "code" | "plan" | "ask";
-
-export interface ChannelBinding {
-  id: string;
-  channelType: ChannelType;
-  chatId: string;
-  codepilotSessionId: string;
-  sdkSessionId: string;
-  workingDirectory: string;
-  model: string;
-  mode: BridgeMode;
-  backend?: string;
-  active: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
 
 export interface BridgeSession {
   id: string;

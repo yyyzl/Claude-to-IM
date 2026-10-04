@@ -37,8 +37,7 @@ function hasBackendChanged(binding: ChannelBinding | null, currentBackend: strin
  *
  * 默认会继承当前绑定的 workingDirectory/mode（如果存在），
  * 这样用户可以“清空上下文”但不丢目录与模式配置。
- * model 不再继承旧 binding / session，/new 总是回到当前 backend 的默认模型，
- * 避免用户切换模型后仍被历史聊天状态污染。
+ * Codex 显式聊天偏好继承；无显式偏好时仍使用宿主默认。
  */
 export function startNewSession(
   address: ChannelAddress,
@@ -86,6 +85,7 @@ export function startNewSession(
     workingDirectory: effectiveCwd,
     model: effectiveModel,
     backend: currentBackend,
+    codexModelPreferences: existing?.codexModelPreferences,
   });
 
   // 关键：新会话必须清空 sdkSessionId，避免 SDK 恢复到旧上下文。
@@ -98,6 +98,8 @@ export function startNewSession(
     workingDirectory: effectiveCwd,
     model: effectiveModel,
     backend: currentBackend,
+    codexModelPreferences: existing?.codexModelPreferences,
+    lastModelRuntime: undefined,
   });
 
   return store.getChannelBinding(address.channelType, address.chatId) || binding;
@@ -201,6 +203,7 @@ export function bindToSession(
     workingDirectory: session.working_directory,
     model: session.model,
     backend: currentBackend,
+    codexModelPreferences: existing?.codexModelPreferences,
   });
 
   // 切换会话时也要清空 sdkSessionId，防止恢复到之前的 SDK 上下文。
@@ -212,6 +215,8 @@ export function bindToSession(
     workingDirectory: session.working_directory,
     model: session.model,
     backend: currentBackend,
+    codexModelPreferences: existing?.codexModelPreferences,
+    lastModelRuntime: undefined,
   });
 
   return store.getChannelBinding(address.channelType, address.chatId) || binding;

@@ -1,0 +1,9 @@
+{"reason":"核心与宿主目录归属","file":".trellis/spec/backend/directory-structure.md"}
+{"reason":"正式宿主契约和平台适配器边界","file":".trellis/spec/backend/module-boundaries.md"}
+{"reason":"模型目录和回调运行时校验","file":".trellis/spec/backend/type-safety.md"}
+{"reason":"锁定Codex协议及宿主集成","file":".trellis/spec/backend/integration-guidelines.md"}
+{"reason":"会话代次、取消、持久化和卡片归属","file":".trellis/spec/backend/reliability-contracts.md"}
+{"reason":"离线回归和最小mock规范","file":".trellis/spec/backend/testing-guidelines.md"}
+{"reason":"现有入口、图预查与跨层接线","file":".trellis/tasks/10-05-codex-model-picker/research/integration.md"}
+{"reason":"0.160.0模型速度能力与每轮显式档位","file":".trellis/tasks/10-05-codex-model-picker/research/codex-protocol.md"}
+{"file": ".trellis/spec/backend/codex-model-selection.md", "reason": "聊天偏好、模型目录和Fast参数合同"}
