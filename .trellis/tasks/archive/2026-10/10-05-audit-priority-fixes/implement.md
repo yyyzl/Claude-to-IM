@@ -9,9 +9,9 @@
 - [x] 主会话更新可靠性规范与用户文档；typecheck、build、最终整合单测701/701通过（后台总超时60秒）。
 - [x] `git diff --check` 与GitNexus staged完整检测通过；93符号、49流程、CRITICAL，全部在预期范围，无partial/truncated。
 - [x] 三项修复独立提交 `ad3fb66` 并正常推送 origin/main，核验远端 SHA 一致；GitNexus 已刷新（embeddings=0）。
-- [ ] 完成新增子任务 `10-05-feishu-image-output`，独立提交图片回传能力。
-- [ ] 归档子/父任务、记录会话并提交记账；刷新 GitNexus（`--index-only`，保留 embeddings）。
-- [ ] 正常推送最终 origin/main，核验本地/远端 HEAD 相同和工作区干净；报告具体变更与验证限制。
+- [x] 完成新增子任务 `10-05-feishu-image-output`，工作提交 `2dbfcc5`；独立check、748/748整合单测、typecheck/build与范围检测通过。
+
+工作已完成；后续由Trellis收尾脚本归档本次子/父任务、记录journal，再刷新GitNexus并快进推送main，发布结果以journal与远端Git引用为准。
 
 ## 验证矩阵
 
