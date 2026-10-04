@@ -1690,3 +1690,39 @@ Three major features: (1) CLI rewrite with spec-review/code-review/review-fix su
 ### Next Steps
 
 - 按用户最新要求快进main并推送origin/main；重启桥接后使用/model
+
+
+## Session 34: 修复 Codex Fast 档位误判
+<!-- trellis-session: v=2 fp=ef8fd858072c0e94 -->
+
+**Date**: 2026-10-05
+**Task**: 修复 Codex Fast 档位误判
+**Branch**: `codex/fast-capability-fix`
+
+### Summary
+
+按锁定Codex官方语义识别Fast名称并发送目录原始档位ID，修复全部模型被误判不支持Fast；交付目标origin/main。
+
+### Main Changes
+
+- 共享Fast能力解析器，卡片/保存/草稿/运行时统一；聊天speed=fast，实际请求使用priority等原始ID
+- 真实协议fixture替代错误id=fast假数据，完善目录不足提示和测试规范
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d527d60` | fix(codex): 按目录真实档位识别 Fast |
+
+### Testing
+
+- [OK] 最终648/648单测，typecheck/build及独立审查全部通过；真实账号与飞书渲染未验证
+- [OK] 修改前四符号影响分析和提交前staged范围检查完成；无生产请求或全局配置改动
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 重启桥接并重新发送/model，验证实际飞书选择与账号Fast服务；本次未自动重启

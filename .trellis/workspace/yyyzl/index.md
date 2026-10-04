@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 33
+- **Total Sessions**: 34
 - **Last Active**: 2026-10-05
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1692 | Active |
+| `journal-1.md` | ~1728 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 34 | 2026-10-05 | 修复 Codex Fast 档位误判 | `d527d60` | `codex/fast-capability-fix` |
 | 33 | 2026-10-05 | Codex 飞书模型配置卡片 | `d5db4ed` | `codex/model-picker` |
 | 32 | 2026-03-25 | 方向A: Prompt模板优化 + Bug修复 + 降级透明性 | `c55c15c`, `de6f3e8` |
 | 31 | 2026-03-24 | Code-Review Workflow Bugfix (9 bugs + 4 review fixes) | `82889b3` |
