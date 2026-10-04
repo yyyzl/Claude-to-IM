@@ -3,6 +3,7 @@ import type { BaseChannelAdapter } from '../channel-adapter.js';
 import type { BridgeStore, LLMProvider } from '../host.js';
 import type { ChannelAddress, ChannelBinding, CodexModelPreferences, InboundMessage, ModelCatalog, ModelCatalogEntry, ModelSelectionView } from '../types.js';
 import { abortable } from './abort.js';
+import { findFastServiceTier } from './model-capabilities.js';
 
 /** 应用、消息准入与切换会话共用此门；不能持有它等待模型回合结束。 */
 export class ChatAdmissionGate {
@@ -32,8 +33,8 @@ export function resolveModelPreference(catalog: ModelCatalog, preferences: Codex
   if (!entry.supportedReasoningEfforts.some(option => option.reasoningEffort === effort)) {
     throw new Error(`模型 ${entry.displayName} 不支持思考强度 ${effort}，请重新选择。`);
   }
-  if (preferences.speed === 'fast' && !entry.serviceTiers.some(tier => tier.id === 'fast')) {
-    throw new Error(`模型 ${entry.displayName} 未提供 Fast，请打开 /model 重新选择速度。`);
+  if (preferences.speed === 'fast' && !findFastServiceTier(entry)) {
+    throw new Error(`模型 ${entry.displayName} 的目录未提供 Fast 选项，可刷新 /model 或重新选择速度。`);
   }
   return entry;
 }
@@ -261,8 +262,8 @@ export class ModelSelectionCoordinator {
         if (draft.preferences.reasoningEffort && !selected.supportedReasoningEfforts.some(value => value.reasoningEffort === draft.preferences.reasoningEffort)) {
           draft.notice = '原强度已不可用，请重新选择；不会自动降低档位。';
         }
-        if (draft.preferences.speed === 'fast' && !selected.serviceTiers.some(tier => tier.id === 'fast')) {
-          draft.notice = '原 Fast 档位已不可用，请重新选择速度；不会自动切换正常。';
+        if (draft.preferences.speed === 'fast' && !findFastServiceTier(selected)) {
+          draft.notice = '当前目录未提供 Fast 选项，可刷新或重新选择速度；不会自动切换正常。';
         }
         draft.step = 'settings';
       } else if (response.action === 'back') { draft.step = 'model'; }

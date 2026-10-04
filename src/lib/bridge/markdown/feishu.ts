@@ -1,5 +1,6 @@
 import type { ModelSelectionResponse, ModelSelectionView, ToolCallInfo } from '../types.js';
 import type { UserInputRequest } from '../host.js';
+import { findFastServiceTier } from '../internal/model-capabilities.js';
 
 /**
  * Feishu-specific Markdown processing.
@@ -497,10 +498,10 @@ export function buildModelSelectionCard(view: ModelSelectionView): string {
       if (!efforts.some(option => option.value === effort.reasoningEffort)) efforts.push({ value: effort.reasoningEffort, label: `${effort.reasoningEffort}${effort.description ? ` · ${effort.description}` : ''}` });
     }
     const speeds = [{ value: 'normal', label: '正常' }];
-    if (model.serviceTiers.some(tier => tier.id === 'fast')) speeds.push({ value: 'fast', label: 'Fast（更高用量）' });
+    if (findFastServiceTier(model)) speeds.push({ value: 'fast', label: 'Fast（更高用量）' });
     const selectedEffort = view.reasoningEffort || MODEL_DEFAULT_EFFORT_OPTION;
     if (!efforts.some(option => option.value === selectedEffort) || !speeds.some(option => option.value === view.speed)) {
-      elements.push({ tag: 'markdown', content: '之前的强度或速度不受此模型支持，请重新选择后再应用。' });
+      elements.push({ tag: 'markdown', content: '之前的强度或速度不在当前目录选项中，请刷新或重新选择后应用。' });
     }
     elements.push({ tag: 'markdown', content: `**第二步：强度与速度**\n模型：${model.model}${view.selectedModel === 'default' ? '（跟随目录默认）' : ''}` });
     elements.push({ tag: 'form', name: 'model_settings', elements: [
@@ -508,7 +509,7 @@ export function buildModelSelectionCard(view: ModelSelectionView): string {
       select('reasoning_effort', '请选择思考强度', efforts, selectedEffort),
       { tag: 'markdown', content: '**速度**' },
       select('speed', '请选择速度', speeds, view.speed),
-      { tag: 'markdown', content: speeds.length > 1 ? 'Fast 会消耗更多用量；实际可用性由当前账号与服务端决定。' : '此模型的目录未提供 Fast，当前仅支持正常速度。', text_size: 'notation' },
+      { tag: 'markdown', content: speeds.length > 1 ? 'Fast 会消耗更多用量；实际可用性由当前账号与服务端决定。' : '此模型的目录未提供 Fast 选项，可刷新目录后重试。', text_size: 'notation' },
       button('apply', '应用到当前聊天', true),
     ] });
     elements.push(button('back', '返回选择模型'), button('cancel', '取消'));

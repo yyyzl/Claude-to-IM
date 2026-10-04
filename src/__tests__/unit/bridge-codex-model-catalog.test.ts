@@ -6,13 +6,15 @@ import { parseCodexModelPage } from '../../../scripts/claude-to-im-bridge/codex-
 import { InMemoryPermissionGateway } from '../../../scripts/claude-to-im-bridge/permissions.ts';
 import type { CodexModelPreferences } from '../../lib/bridge/types.js';
 import { FakeClient, read } from './codex-test-transport.js';
+import { buildModelSelectionCard } from '../../lib/bridge/markdown/feishu.js';
+import { resolveModelPreference } from '../../lib/bridge/internal/model-selection.js';
 
 function model(id = 'catalog-a', overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id, model: `runtime-${id}`, displayName: `Model ${id}`, isDefault: true, hidden: false,
     defaultReasoningEffort: 'high',
     supportedReasoningEfforts: [{ reasoningEffort: 'high', description: '高' }, { reasoningEffort: 'low', description: '低' }],
-    serviceTiers: [{ id: 'fast', name: 'Fast', description: '更快' }], defaultServiceTier: null,
+    serviceTiers: [{ id: 'priority', name: 'Fast', description: '更快' }], defaultServiceTier: null,
     inputModalities: ['text', 'image'], ...overrides,
   };
 }
@@ -87,7 +89,7 @@ test('完整读取分页、过滤隐藏项，返回目录不能反向修改内�
   catalog.models[0].serviceTiers.length = 0;
   catalog.models[0].supportedReasoningEfforts[0].reasoningEffort = 'bad';
   const unchanged = await provider.getModelCatalog();
-  assert.equal(unchanged.models[0].serviceTiers[0].id, 'fast');
+  assert.equal(unchanged.models[0].serviceTiers[0].id, 'priority');
   assert.equal(unchanged.models[0].supportedReasoningEfforts[0].reasoningEffort, 'high');
 });
 
@@ -262,10 +264,49 @@ test('恢复线程后的Fast切回正常必须每轮显式覆盖', async () => {
   const fastEvents = await read(provider.streamChat({ prompt: 'fast', sessionId: 's', codexModelPreferences: preferences({ speed: 'fast' }) }));
   await read(provider.streamChat({ prompt: 'normal', sessionId: 's', sdkSessionId: 'thread', codexModelPreferences: preferences() }));
   const turns = client.calls.filter(call => call.method === 'turn/start');
-  assert.deepEqual(turns.map(call => call.params.serviceTierForTurn), ['fast', 'default']);
+  assert.deepEqual(turns.map(call => call.params.serviceTierForTurn), ['priority', 'default']);
   assert.equal(client.calls.filter(call => call.method === 'thread/resume').length, 1);
-  assert.equal(JSON.parse(fastEvents.find(event => event.type === 'status' && JSON.parse(event.data).model)!.data).service_tier, 'fast');
+  assert.equal(JSON.parse(fastEvents.find(event => event.type === 'status' && JSON.parse(event.data).model)!.data).service_tier, 'priority');
   assert.equal(turns.some(call => 'serviceTier' in call.params), false);
+});
+
+test('priority目录贯通卡片、保存校验与实际回合参数，聊天偏好仍为fast', async () => {
+  const { client, provider } = setupCatalog();
+  const catalog = await provider.getModelCatalog();
+  const choice = preferences({ model: 'catalog-a', speed: 'fast' });
+  const selectedModelEntry = resolveModelPreference(catalog, choice);
+  assert.equal(selectedModelEntry.serviceTiers[0].id, 'priority');
+  const rendered = JSON.parse(buildModelSelectionCard({
+    requestId: 'integrated-choice', revision: 1, step: 'settings', summary: '', models: catalog.models,
+    page: 0, pageCount: 1, selectedModel: choice.model, selectedModelEntry, reasoningEffort: '', speed: choice.speed,
+  })) as { body: { elements: Array<{ elements?: Array<{ name?: string; options?: Array<{ value: string }> }> }> } };
+  const speeds = rendered.body.elements.flatMap(element => element.elements ?? []).find(element => element.name === 'speed');
+  assert.deepEqual(speeds?.options?.map(option => option.value), ['normal', 'fast']);
+  const events = await read(provider.streamChat({ prompt: 'fast', sessionId: 's', codexModelPreferences: choice }));
+  assert.equal(events.some(event => event.type === 'error'), false);
+  assert.equal(client.calls.find(call => call.method === 'turn/start')?.params.serviceTierForTurn, 'priority');
+  assert.equal(choice.speed, 'fast');
+});
+
+test('Fast按名称忽略大小写识别，并逐模型透传目录原始ID', async () => {
+  const { client, provider, source } = setupCatalog();
+  for (const tier of [
+    { id: 'priority', name: 'FAST', description: '' },
+    { id: 'accelerated-v2', name: 'fAsT', description: '' },
+  ]) {
+    source.read = async () => page(model('catalog-a', { serviceTiers: [tier] }));
+    const events = await read(provider.streamChat({ prompt: 'fast', sessionId: 's', codexModelPreferences: preferences({ speed: 'fast' }) }));
+    assert.equal(events.some(event => event.type === 'error'), false);
+    assert.equal(client.calls.filter(call => call.method === 'turn/start').at(-1)?.params.serviceTierForTurn, tier.id);
+  }
+});
+
+test('ID为fast但名称不是Fast的档位不能伪装Fast能力', async () => {
+  const { client, provider, source } = setupCatalog();
+  source.read = async () => page(model('catalog-a', { serviceTiers: [{ id: 'fast', name: 'Economy', description: '' }] }));
+  const events = await read(provider.streamChat({ prompt: 'fast', sessionId: 's', codexModelPreferences: preferences({ speed: 'fast' }) }));
+  assert.match(events.find(event => event.type === 'error')?.data ?? '', /目录未提供 Fast 选项/);
+  assert.equal(client.calls.some(call => call.method === 'turn/start'), false);
 });
 
 test('旧路径未配置速度时不伪造正常，显式default也不再回退宿主型号', async () => {
@@ -289,7 +330,7 @@ test('请求开始时固定偏好快照，目录await期间外部修改不影响
   const turn = client.calls.find(call => call.method === 'turn/start')!.params;
   assert.equal(turn.model, 'runtime-catalog-a');
   assert.equal(turn.effort, 'high');
-  assert.equal(turn.serviceTierForTurn, 'fast');
+  assert.equal(turn.serviceTierForTurn, 'priority');
 });
 
 test('保存后目录变化造成型号、强度或Fast失效时不启动新回合', async () => {

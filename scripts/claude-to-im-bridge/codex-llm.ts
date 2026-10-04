@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { LLMProvider, StreamChatParams, TokenUsage, UserInputQuestion } from '../../src/lib/bridge/host.js';
 import type { CodexModelPreferences, ModelCatalog } from '../../src/lib/bridge/types.js';
+import { findFastServiceTier } from '../../src/lib/bridge/internal/model-capabilities.js';
 import type { InMemoryPermissionGateway } from './permissions.ts';
 import { JsonRpcAppServerClient, redactSensitive } from './codex-jsonrpc.ts';
 import type { JsonRpcMessage } from './codex-jsonrpc.ts';
@@ -229,8 +230,8 @@ export class CodexAppServerLLMProvider implements LLMProvider {
       if (preferences.speed !== 'normal' && preferences.speed !== 'fast') throw new Error('Codex 速度设置无效；请重新打开 /model 选择。');
       let serviceTierForTurn = 'default';
       if (preferences.speed === 'fast') {
-        const fastTier = model.serviceTiers.find(tier => tier.id === 'fast');
-        if (!fastTier) throw new Error(`模型 ${model.model} 当前没有 Fast 能力；请重新打开 /model 选择。`);
+        const fastTier = findFastServiceTier(model);
+        if (!fastTier) throw new Error(`模型 ${model.model} 的目录未提供 Fast 选项，可刷新 /model 后重新选择。`);
         serviceTierForTurn = fastTier.id;
       }
       return { model, effort: selectedEffort, serviceTierForTurn };

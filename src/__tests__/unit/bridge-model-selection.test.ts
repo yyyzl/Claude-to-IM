@@ -15,7 +15,7 @@ import { processMessage } from '../../lib/bridge/conversation-engine.js';
 
 const address: ChannelAddress = { channelType: 'feishu', chatId: 'chat', userId: 'user' };
 const catalog: ModelCatalog = { models: [
-  { id: 'next', model: 'next-protocol', displayName: 'Next', isDefault: true, defaultReasoningEffort: 'medium', supportedReasoningEfforts: [{ reasoningEffort: 'medium', description: '' }, { reasoningEffort: 'high', description: '' }], serviceTiers: [{ id: 'fast', name: 'Fast', description: '' }], defaultServiceTier: null },
+  { id: 'next', model: 'next-protocol', displayName: 'Next', isDefault: true, defaultReasoningEffort: 'medium', supportedReasoningEfforts: [{ reasoningEffort: 'medium', description: '' }, { reasoningEffort: 'high', description: '' }], serviceTiers: [{ id: 'priority', name: 'Fast', description: '' }], defaultServiceTier: null },
   { id: 'small', model: 'small', displayName: 'Small', isDefault: false, defaultReasoningEffort: 'low', supportedReasoningEfforts: [{ reasoningEffort: 'low', description: '' }], serviceTiers: [], defaultServiceTier: null },
 ] };
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
@@ -114,6 +114,24 @@ describe('Codex 模型选择协调与持久偏好', () => {
     h.store.updateChannelBinding(h.binding.id, { codexModelPreferences: { model: 'next', reasoningEffort: null, speed: 'fast' } });
     await assert.rejects(h.selection.setText(address, 'small'), /未提供 Fast/);
     assert.equal(h.store.getChannelBinding('feishu', 'chat')?.codexModelPreferences?.model, 'next');
+  });
+
+  it('目录Fast名称大小写和原始ID不影响保存；错误名称不能假冒Fast', async t => {
+    const h = setup(t);
+    h.store.updateChannelBinding(h.binding.id, { codexModelPreferences: { model: 'next', reasoningEffort: null, speed: 'fast' } });
+    for (const tier of [
+      { id: 'priority', name: 'FAST', description: '' },
+      { id: 'accelerated-v2', name: 'fAsT', description: '' },
+    ]) {
+      h.llm.getModelCatalog = async () => ({ models: [{ ...catalog.models[0], serviceTiers: [tier] }] });
+      await h.selection.open(h.adapter, message(), h.store.getChannelBinding('feishu', 'chat')!);
+      await h.respond('next', { model: 'next' });
+      assert.doesNotMatch(h.adapter.cards.at(-1)?.notice ?? '', /不可用|未提供/);
+      await h.respond('apply', { reasoningEffort: '', speed: 'fast' });
+      assert.equal(h.store.getChannelBinding('feishu', 'chat')?.codexModelPreferences?.speed, 'fast');
+    }
+    h.llm.getModelCatalog = async () => ({ models: [{ ...catalog.models[0], serviceTiers: [{ id: 'fast', name: 'Economy', description: '' }] }] });
+    await assert.rejects(h.selection.setText(address, 'next'), /目录未提供 Fast 选项/);
   });
 
   it('同型号目录移除原强度和Fast时保留失效草稿，缺值apply不能自动降档', async t => {

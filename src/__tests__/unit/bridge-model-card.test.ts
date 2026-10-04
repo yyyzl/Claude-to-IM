@@ -20,7 +20,7 @@ const entry = (model = 'model-a', fast = true): ModelCatalogEntry => ({
   id: `catalog-${model}`, model, displayName: `显示名 ${model}`, isDefault: true,
   defaultReasoningEffort: 'medium',
   supportedReasoningEfforts: [{ reasoningEffort: 'medium', description: '均衡' }, { reasoningEffort: 'high', description: '复杂问题' }],
-  serviceTiers: fast ? [{ id: 'fast', name: 'Fast', description: '更快' }] : [], defaultServiceTier: 'default',
+  serviceTiers: fast ? [{ id: 'priority', name: 'Fast', description: '更快' }] : [], defaultServiceTier: 'default',
 });
 const view = (overrides: Partial<ModelSelectionView> = {}): ModelSelectionView => ({
   requestId: 'draft-1', revision: 2, step: 'model', summary: '当前偏好：跟随默认；运行时速度未指定',
@@ -109,13 +109,32 @@ test('强度和速度页只含目录选项，跟随默认使用有效初始值',
   assert.match(buildModelSelectionCard(view({ step: 'settings' })), /Fast 会消耗更多用量/);
 });
 
+test('卡片按Fast名称忽略大小写开放速度，不把档位ID当展示能力', () => {
+  for (const tier of [
+    { id: 'priority', name: 'FAST', description: '' },
+    { id: 'accelerated-v2', name: 'fAsT', description: '' },
+  ]) {
+    const selectedModelEntry = { ...entry(), serviceTiers: [tier] };
+    const elements = cardElements(view({ step: 'settings', selectedModelEntry, speed: 'fast' }));
+    assert.deepEqual(select(elements, 'speed').options?.map(option => option.value), ['normal', 'fast']);
+    assert.equal(select(elements, 'speed').initial_option, 'fast');
+  }
+  for (const serviceTiers of [[], [{ id: 'fast', name: 'Economy', description: '' }]]) {
+    const state = view({ step: 'settings', selectedModelEntry: { ...entry(), serviceTiers }, speed: 'fast' });
+    assert.deepEqual(select(cardElements(state), 'speed').options?.map(option => option.value), ['normal']);
+    assert.match(buildModelSelectionCard(state), /目录未提供 Fast 选项，可刷新/);
+    assert.match(buildModelSelectionCard(state), /之前的强度或速度不在当前目录选项中，请刷新或重新选择后应用/);
+    assert.doesNotMatch(buildModelSelectionCard(state), /仅支持正常|账号不支持|不受此模型支持/);
+  }
+});
+
 test('失效强度和不支持 Fast 的旧偏好不注入非法初始值或静默降档', () => {
   const state = view({ step: 'settings', selectedModelEntry: entry('model-b', false), reasoningEffort: 'xhigh', speed: 'fast' });
   const elements = cardElements(state);
   assert.equal(select(elements, 'reasoning_effort').initial_option, undefined);
   assert.equal(select(elements, 'speed').initial_option, undefined);
   assert.deepEqual(select(elements, 'speed').options?.map(option => option.value), ['normal']);
-  assert.match(buildModelSelectionCard(state), /请重新选择后再应用/);
+  assert.match(buildModelSelectionCard(state), /请刷新或重新选择后应用/);
   assert.throws(() => buildModelSelectionCard(view({ step: 'settings', selectedModelEntry: undefined })), /不在目录/);
 });
 

@@ -20,7 +20,7 @@
 
 模型目录须包含实际型号、默认项、支持的强度和 `serviceTiers`。列表分页完成、形状与重复项／游标验证成功后才替换缓存；并发刷新合并。刷新失败不停止其他会话的 app-server，也不把旧缓存伪装成刷新成功。
 
-只有目录明确提供 Fast 才开放该选项；没有速度元数据不代表支持 Fast。采用显式偏好的新请求向 `turn/start.serviceTierForTurn` 传 `default`（正常）或目录支持的 `fast`。省略或 null 会继承线程档位，不能用于关闭 Fast。不能把线程设置方法中的 null 清除语义套用到 turn/start。
+Fast 按目录条目的 `name` 不区分大小写识别（与锁定 Codex TUI 一致），卡片、保存校验和执行共用同一解析函数。`speed: fast` 是聊天偏好，不是请求 ID；采用显式偏好的新请求向 `turn/start.serviceTierForTurn` 传 `default`（正常）或找到的档位原始 `id`（正式目录例为 `priority`）。不得把 ID 写死为 `fast` 或 `priority`，也不根据模型名称或已废弃 `additionalSpeedTiers` 猜测能力。目录未提供 Fast 时不开放选项，提示目录信息不足/可刷新，不断言模型或账号永久不支持。省略或 null 会继承线程档位，不能用于关闭 Fast。不能把线程设置方法中的 null 清除语义套用到 turn/start。
 
 ### 聊天偏好
 
@@ -61,13 +61,16 @@
 
 仅用离线目录、mock JSON-RPC、平台传输和故障注入。覆盖分页与并发刷新、目录错误后连接可用、model/effort/速度的真实请求参数、default不固定、new/bind/restart继承、聊天隔离、flush失败、卡片来源／代次／消息／过期、重复提交、忙碌及new/stop竞态。
 
+协议 fixture 必须覆盖真实 `{id: priority, name: Fast}`、名称大小写和原始 ID 透传；额外覆盖 `id: fast` 但名称不是 Fast 的反例，不能让 mock 与错误实现共享同一假设。
+
 验证单元测试、typecheck和build；每次后台单测总超时60秒。真实账号Fast授权和飞书客户端渲染必须与离线测试结论分开说明。
 
 ## 7. 错误与正确做法
 
+- 错：查找 `tier.id === fast` 或发送用户偏好字符串 `fast`。正确：按档位名称识别，发送目录原始 ID（例如 `priority`）。
 - 错：status.model 写入显式偏好。正确：保存到运行信息，选择仍为default。
 - 错：普通速度发送null。正确：每次新turn显式发送serviceTierForTurn=default。
 - 错：回调只信任按钮里的chatId。正确：使用真实context/operator并匹配服务端草稿和原卡。
 - 错：模型列表刷新失败后stop活跃client。正确：独立刷新状态，完整成功才替换目录。
 
-来源：`10-05-codex-model-picker` 的协议研究、设计及回归要求。
+来源：`10-05-codex-model-picker` 的模型选择合同，以及 `10-05-codex-fast-capability` 根据锁定上游源码和真实目录形状修正的 Fast 协议研究。
