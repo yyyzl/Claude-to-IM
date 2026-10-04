@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 32
-- **Last Active**: 2026-03-25
+- **Total Sessions**: 33
+- **Last Active**: 2026-10-05
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1656 | Active |
+| `journal-1.md` | ~1692 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -27,8 +27,9 @@
 ## Session History
 
 <!-- @@@auto:session-history -->
-| # | Date | Title | Commits |
-|---|------|-------|---------|
+| # | Date | Title | Commits | Branch |
+|---|------|-------|---------|--------|
+| 33 | 2026-10-05 | Codex 飞书模型配置卡片 | `d5db4ed` | `codex/model-picker` |
 | 32 | 2026-03-25 | 方向A: Prompt模板优化 + Bug修复 + 降级透明性 | `c55c15c`, `de6f3e8` |
 | 31 | 2026-03-24 | Code-Review Workflow Bugfix (9 bugs + 4 review fixes) | `82889b3` |
 | 30 | 2026-03-24 | fix: 模板引擎 4 Bug 导致 Codex code-review 全轮超时 | `ccca9d6` |

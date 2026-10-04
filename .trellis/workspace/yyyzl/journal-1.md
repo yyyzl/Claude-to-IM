@@ -1654,3 +1654,39 @@ Three major features: (1) CLI rewrite with spec-review/code-review/review-fix su
 ### Next Steps
 
 - None - task complete
+
+
+## Session 33: Codex 飞书模型配置卡片
+<!-- trellis-session: v=2 fp=0c1b66aa20f67211 -->
+
+**Date**: 2026-10-05
+**Task**: Codex 飞书模型配置卡片
+**Branch**: `codex/model-picker`
+
+### Summary
+
+完成动态模型、推理强度与正常/Fast卡片选择，聊天偏好持久化及new继承；用户要求合入并推送origin/main。
+
+### Main Changes
+
+- 两步飞书模型卡片与动态能力校验；会话归属、过期和并发保护
+- 用户偏好与实际执行状态分离，正常速度显式关闭Fast继承
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d5db4ed` | feat(codex): 添加飞书模型配置卡片与聊天偏好继承 |
+
+### Testing
+
+- [OK] 最终643/643测试通过；typecheck、build、独立全范围审查通过
+- [OK] 提交前staged GitNexus范围检查与批准清单一致；真实飞书渲染和账号Fast权限尚未线上验证
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 按用户最新要求快进main并推送origin/main；重启桥接后使用/model
