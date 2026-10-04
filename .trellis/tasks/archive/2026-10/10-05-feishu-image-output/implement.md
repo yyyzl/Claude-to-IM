@@ -8,7 +8,9 @@
 - [x] 独立Trellis check通过：修复上游服务端错误与损坏JSON错误的媒体回显；相关83/83通过，无遗留缺陷。root更新契约/使用说明/README和父任务记录。
 - [x] typecheck/build通过；完整单测748/748、140 suites、17.01秒（外层60秒）。diff check通过；GitNexus staged完整检测另行记录。
 - [x] GitNexus刷新并完成staged结构化检测：108符号、46流程、CRITICAL，无partial/truncated，源码范围符合预期；图谱覆盖限制见final-verification。
-- [ ] 独立提交本能力；归档子/父任务、记录journal，刷新索引；正常快进main并推送，核验远端SHA和干净状态。
+- [x] 独立工作提交 `2dbfcc5` 已完成；代码与验证全部收尾。
+
+后续由Trellis收尾脚本归档子/父任务并记录journal，再刷新索引、正常快进main推送；发布结果以journal与远端Git引用为准。
 
 ## 范围与回滚
 
