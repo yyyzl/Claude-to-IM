@@ -1,9 +1,10 @@
 /** 将锁定版本 Codex app-server 的公开双向协议适配为桥接 SSE。 */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
-import type { LLMProvider, StreamChatParams, TokenUsage, UserInputQuestion } from '../../src/lib/bridge/host.js';
+import type { GeneratedImage, LLMProvider, StreamChatParams, TokenUsage, UserInputQuestion } from '../../src/lib/bridge/host.js';
 import type { CodexModelPreferences, ModelCatalog } from '../../src/lib/bridge/types.js';
 import { findFastServiceTier } from '../../src/lib/bridge/internal/model-capabilities.js';
+import { createGeneratedImage, checkGeneratedImageBudget } from '../../src/lib/bridge/internal/generated-image.js';
 import type { InMemoryPermissionGateway } from './permissions.ts';
 import { JsonRpcAppServerClient, redactSensitive } from './codex-jsonrpc.ts';
 import type { JsonRpcMessage } from './codex-jsonrpc.ts';
@@ -40,6 +41,7 @@ function record(value: unknown): Record<string, unknown> {
 function pickString(value: unknown): string | null { return typeof value === 'string' && value.trim() ? value.trim() : null; }
 function number(value: unknown): number { return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0; }
 function abortError(): Error { const error = new Error('任务已停止'); error.name = 'AbortError'; return error; }
+function turnTimeoutError(message: string): Error { const error = new Error(message); error.name = 'TimeoutError'; return error; }
 function toErrorMessage(error: unknown): string { return redactSensitive(error instanceof Error ? error.message : String(error)); }
 function normalizeTokenUsage(value: unknown): TokenUsage | null {
   const raw = record(value);
@@ -96,6 +98,8 @@ export class CodexAppServerLLMProvider implements LLMProvider {
       const command = /\.[cm]?js$/i.test(binary) ? [process.execPath, binary] : [binary];
       command.push('app-server', '--listen', 'stdio://');
       for (const override of overrides) command.push('-c', override);
+      // 仅当前桥接进程保留原生图片通知，不修改用户全局配置或读取 savedPath。
+      command.push('-c', 'features.omit_app_server_notification_media=false');
       this.client = new JsonRpcAppServerClient({ command, cwd: options.projectRoot, debug: options.debug });
     }
     this.client.onDisconnect(() => {
@@ -193,6 +197,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
           if (!abort.signal.aborted) send('status', { session_id: threadId, model: selection.model.model, reasoning_effort: selection.effort, service_tier: selection.serviceTierForTurn });
           const result = await this.collectTurnText({
             threadId, turnId, signal: abort.signal, onDelta: delta => send('text', delta), onProgress: text => send('progress', text),
+            onGeneratedImage: image => send('generated_image', image),
             onToolEvent: (id, name, status, item) => {
               if (status === 'running') send('tool_use', { id, name, input: item ?? {} });
               else send('tool_result', { tool_use_id: id, content: pickString(item?.aggregatedOutput) ?? '', is_error: status === 'error' });
@@ -202,7 +207,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
           send('result', { usage: result.usage, last_usage: result.lastUsage, context_window: result.contextWindow, context_tokens: result.contextTokens, is_error: false, session_id: threadId });
         } catch (error) {
           send('error', toErrorMessage(error));
-          send('result', { is_error: true, error_code: error instanceof Error && error.name === 'AbortError' ? 'abort' : 'error', session_id: threadId ?? null });
+          send('result', { is_error: true, error_code: error instanceof Error && error.name === 'AbortError' ? 'abort' : error instanceof Error && error.name === 'TimeoutError' ? 'timeout' : 'error', session_id: threadId ?? null });
         } finally {
           if (keepAlive) clearInterval(keepAlive);
           abort.abort();
@@ -405,6 +410,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
   private async collectTurnText(opts: {
     threadId: string; turnId: string; signal: AbortSignal; onDelta: (delta: string) => void;
     onProgress?: (text: string) => void;
+    onGeneratedImage?: (image: GeneratedImage) => void;
     onToolEvent?: (id: string, name: string, status: 'running' | 'complete' | 'error', item?: Record<string, unknown>) => void;
   }): Promise<TurnResult> {
     let text = ''; let emittedFinalText = false;
@@ -413,7 +419,19 @@ export class CodexAppServerLLMProvider implements LLMProvider {
     let finalTotal: TokenUsage | null = null;
     const items = new Map<string, { phase: string; buffered: string; emitted: string }>();
     const toolIds = new Set<string>();
+    const completedImageIds = new Set<string>();
+    const pendingImageIds = new Set<string>();
+    const imageNotices = new Set<string>();
+    let imageCount = 0;
+    let imageBytes = 0;
+    const imageNotice = (notice: string) => {
+      if (imageNotices.has(notice)) return;
+      imageNotices.add(notice);
+      const delta = `\n[图片交付] ${notice}\n`;
+      text += delta; emittedFinalText = true; opts.onDelta(delta);
+    };
     let completed = false;
+    let accepting = true;
     let timeout: NodeJS.Timeout | undefined; let idleTimer: NodeJS.Timeout | undefined;
     let off = () => {}; let offDisconnect = () => {};
     let rejectTurn: (error: Error) => void = () => {};
@@ -421,9 +439,10 @@ export class CodexAppServerLLMProvider implements LLMProvider {
     const matches = (message: JsonRpcMessage) => getNotifThreadId(message) === opts.threadId && getNotifTurnId(message) === opts.turnId;
     try {
       await new Promise<void>((resolve, reject) => {
-        rejectTurn = reject;
+        const fail = (error: Error) => { accepting = false; reject(error); };
+        rejectTurn = fail;
         const idleMs = this.options.turnIdleTimeoutMs ?? 0;
-        const refreshIdle = () => { if (idleTimer) clearTimeout(idleTimer); if (idleMs > 0) idleTimer = setTimeout(() => reject(new Error('Codex 长时间没有进展，已请求中断')), idleMs); };
+        const refreshIdle = () => { if (idleTimer) clearTimeout(idleTimer); if (idleMs > 0) idleTimer = setTimeout(() => fail(turnTimeoutError('Codex 长时间没有进展，已请求中断')), idleMs); };
         const flush = (id: string) => {
           const item = items.get(id);
           if (!item?.buffered || !item.phase) return;
@@ -432,7 +451,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
           else { text += delta; emittedFinalText = true; opts.onDelta(delta); }
         };
         const handle = (message: JsonRpcMessage) => {
-          if (!matches(message) || completed) return;
+          if (!matches(message) || !accepting || completed || opts.signal.aborted) return;
           refreshIdle();
           const params = message.params ?? {}; const item = record(params.item);
           if (message.method === 'thread/tokenUsage/updated') {
@@ -462,6 +481,28 @@ export class CodexAppServerLLMProvider implements LLMProvider {
                 else if (!state.emitted && item.text) { text += item.text; emittedFinalText = true; opts.onDelta(item.text); }
                 else if (item.text.startsWith(state.emitted) && item.text.length > state.emitted.length) { const delta = item.text.slice(state.emitted.length); text += delta; opts.onDelta(delta); }
               }
+            } else if (item.type === 'imageGeneration') {
+              // 不从 thread/resume 历史、宽松 ID 或任意文件路径恢复图片。
+              if (params.threadId !== opts.threadId || params.turnId !== opts.turnId || completedImageIds.has(id)) return;
+              if (!done) {
+                if (!pendingImageIds.has(id)) opts.onProgress?.('图片生成中，完成后将自动回传。');
+                pendingImageIds.add(id);
+                return;
+              }
+              completedImageIds.add(id); pendingImageIds.delete(id);
+              if (item.status !== 'completed' || item.failure != null) {
+                imageNotice('图片生成失败或未完成，没有可交付图片。');
+                return;
+              }
+              try {
+                const imageId = createHash('sha256').update(JSON.stringify([opts.threadId, opts.turnId, id])).digest('hex');
+                const image = createGeneratedImage(imageId, item.result);
+                checkGeneratedImageBudget(imageCount + 1, imageBytes + image.byteLength);
+                imageCount++; imageBytes += image.byteLength;
+                opts.onGeneratedImage?.(image);
+              } catch (error) {
+                imageNotice(error instanceof Error ? error.message : '生成图片数据无效，无法自动交付。');
+              }
             } else if (['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'webSearch', 'imageView', 'collabAgentToolCall'].includes(String(item.type))) {
               const name = pickString(item.tool) ?? pickString(item.command) ?? String(item.type);
               if (!toolIds.has(id)) { toolIds.add(id); opts.onToolEvent?.(id, name, 'running', item); }
@@ -470,20 +511,22 @@ export class CodexAppServerLLMProvider implements LLMProvider {
           } else if (message.method === 'item/mcpToolCall/progress') {
             if (typeof params.message === 'string') opts.onProgress?.(params.message);
           } else if (message.method === 'error' && params.willRetry !== true) {
-            reject(new Error(toErrorMessage(pickString(record(params.error).message) ?? JSON.stringify(params.error))));
+            // 远端错误可能回显图片或请求配置，不能传播到普通 SSE、历史和日志。
+            fail(new Error('Codex 回合执行失败，请稍后重试。'));
           } else if (message.method === 'turn/completed') {
             const turn = record(params.turn); completed = true;
-            if (turn.status === 'failed') reject(new Error(toErrorMessage(pickString(record(turn.error).message) ?? 'Codex turn 执行失败')));
-            else if (turn.status === 'interrupted') reject(abortError());
+            if (pendingImageIds.size) imageNotice('部分图片生成未完成，没有对应的可交付图片。');
+            if (turn.status === 'failed') fail(new Error('Codex 回合执行失败，请稍后重试。'));
+            else if (turn.status === 'interrupted') fail(abortError());
             else resolve();
           }
         };
-        off = this.client.onNotification(message => { try { handle(message); } catch (error) { reject(error); } });
-        offDisconnect = this.client.onDisconnect(error => reject(error));
+        off = this.client.onNotification(message => { try { handle(message); } catch (error) { fail(error instanceof Error ? error : new Error('Codex 通知处理失败')); } });
+        offDisconnect = this.client.onDisconnect(fail);
         opts.signal.addEventListener('abort', onAbort, { once: true });
-        if (opts.signal.aborted) { reject(abortError()); return; }
+        if (opts.signal.aborted) { fail(abortError()); return; }
         const timeoutMs = this.options.turnTimeoutMs ?? 90 * 60_000;
-        if (timeoutMs > 0) timeout = setTimeout(() => reject(new Error('Codex turn 执行超时，已请求中断')), timeoutMs);
+        if (timeoutMs > 0) timeout = setTimeout(() => fail(turnTimeoutError('Codex turn 执行超时，已请求中断')), timeoutMs);
         refreshIdle();
         for (const message of this.client.drainBacklog(matches)) handle(message);
       });

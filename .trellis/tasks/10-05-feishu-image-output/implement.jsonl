@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/reliability-contracts.md", "reason": "图文持久投递与取消合同"}
+{"file": ".trellis/spec/backend/testing-guidelines.md", "reason": "fake协议与网络隔离"}
+{"file": ".trellis/tasks/10-05-audit-priority-fixes/research/image-output-protocol.md", "reason": "固定0.160.0真实图片协议"}
+{"file": ".trellis/tasks/10-05-feishu-image-output/research/image-delivery-design.md", "reason": "SDK上传、outbox和日志证据"}

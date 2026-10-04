@@ -20,6 +20,15 @@ export interface FileAttachment {
   filePath?: string;
 }
 
+/** 当前回合生成的 PNG；仅进入独立事件和待发记录，不保存到普通对话正文。 */
+export interface GeneratedImage {
+  id: string;
+  mimeType: 'image/png';
+  data: string;
+  byteLength: number;
+  sha256: string;
+}
+
 /** Server-Sent Event from the LLM stream. */
 export interface SSEEvent {
   type: SSEEventType;
@@ -28,6 +37,7 @@ export interface SSEEvent {
 
 export type SSEEventType =
   | 'text'
+  | 'generated_image'
   | 'tool_use'
   | 'tool_result'
   | 'tool_output'
@@ -135,6 +145,10 @@ export interface OutboundRefInput {
   purpose: string;
 }
 
+export type ResponseChunk =
+  | { kind?: 'text'; text: string; parseMode: 'HTML' | 'Markdown' | 'plain'; plainFallback?: string; sent: boolean; messageId?: string }
+  | { kind: 'image'; image: GeneratedImage; imageKey?: string; sendUuid: string; sent: boolean; messageId?: string };
+
 /** 可重投的最终回答；每块成功后立即持久化进度。 */
 export interface ResponseDeliveryRecord {
   id: string;
@@ -142,7 +156,7 @@ export interface ResponseDeliveryRecord {
   address: import('./types.js').ChannelAddress;
   responseText: string;
   replyToMessageId?: string;
-  chunks: Array<{ text: string; parseMode: 'HTML' | 'Markdown' | 'plain'; plainFallback?: string; sent: boolean; messageId?: string }>;
+  chunks: ResponseChunk[];
   status: 'pending' | 'failed' | 'delivered';
   attempts: number;
   lastError?: string;

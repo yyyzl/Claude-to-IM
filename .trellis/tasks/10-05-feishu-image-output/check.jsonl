@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/reliability-contracts.md", "reason": "检查归属、进度与恢复"}
+{"file": ".trellis/spec/backend/testing-guidelines.md", "reason": "测试隔离与协议真实性"}
+{"file": ".trellis/tasks/10-05-audit-priority-fixes/research/image-output-protocol.md", "reason": "检查真实字段及非路径来源"}
+{"file": ".trellis/tasks/10-05-feishu-image-output/research/image-delivery-design.md", "reason": "检查投递生命周期与SDK返回"}

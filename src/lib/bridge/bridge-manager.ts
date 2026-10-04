@@ -1477,6 +1477,12 @@ async function handleMessage(
     });
     clearUserInputRequests(binding.codepilotSessionId);
     if (!isCurrent()) return;
+    const generatedImages = result.errorCode === 'abort' || result.errorCode === 'timeout' ? [] : result.generatedImages ?? [];
+    const responseText = [
+      result.responseText,
+      ...(generatedImages.length && result.hasError ? [`任务未完整完成：${result.errorMessage || '模型回合执行失败'}。已完成的图片仍会尝试交付。`] : []),
+    ].filter(Boolean).join('\n\n');
+    const hasOutput = Boolean(responseText || generatedImages.length);
 
     // Best-effort: record token usage into local daily summary.
     // 写入失败不得影响主流程（IM 响应/流式体验）。
@@ -1557,7 +1563,7 @@ async function handleMessage(
         return adapter.onStreamEnd(
           msg.address.chatId,
           status,
-          result.responseText,
+          responseText,
           ctxFooter ? { ctx: ctxFooter } : undefined,
         );
       }
@@ -1565,21 +1571,25 @@ async function handleMessage(
     };
 
     // 空回答没有待发记录，也必须限制卡片收尾等待，避免占住会话队列。
-    if (!result.responseText) {
+    if (!hasOutput) {
       const deadline = parsePositiveInt(store.getSetting('bridge_delivery_timeout_ms')) || 15_000;
       const settled = await abortable(settleWithin(finalize(), deadline), taskAbort.signal);
       if (!settled) console.warn('[bridge-manager] 空回答卡片收尾超时，平台更新结果未知。');
       if (!isCurrent()) return;
     }
 
-    // Send response text — render via channel-appropriate format.
-    // Skip if streaming card was finalized (content already in card).
-    if (result.responseText) {
-      const sent = await abortable(deliverResponse(adapter, msg.address, result.responseText, binding.codepilotSessionId, msg.messageId, {
-        turnId: context.turnId, isCurrent, finalize,
+    // 图文进入同一待发记录；流卡仅确认文字，纯图也必须走持久投递。
+    if (hasOutput) {
+      const sent = await abortable(deliverResponse(adapter, msg.address, responseText, binding.codepilotSessionId, msg.messageId, {
+        turnId: context.turnId, isCurrent, finalize, images: generatedImages,
       }), taskAbort.signal);
       if (!sent.ok && isCurrent()) {
         console.warn('[bridge-manager] 回答未送达，可通过 /retry 重投已有回答。');
+        await deliverSingle(adapter, {
+          address: msg.address,
+          text: `${sent.error || '回答未完整送达。'}\n使用 /retry 补发未送达内容，无需重新生成。`,
+          parseMode: 'plain', replyToMessageId: msg.messageId,
+        }, undefined, isCurrent);
       }
     } else if (result.hasError) {
       if (result.errorCode === 'timeout') {

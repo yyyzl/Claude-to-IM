@@ -72,6 +72,8 @@ export interface OutboundMessage {
   inlineButtons?: InlineButton[][];
   /** If replying to a specific message */
   replyToMessageId?: string;
+  /** 已上传的生成图。发送 UUID 在首次待发记录中生成，后续补发复用。 */
+  image?: { imageKey: string; sendUuid: string };
 }
 
 /** Inline keyboard button for permission prompts */

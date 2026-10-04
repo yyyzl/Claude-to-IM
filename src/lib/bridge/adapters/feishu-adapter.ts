@@ -26,7 +26,9 @@ import type {
   ModelSelectionResponse,
   ModelSelectionView,
 } from '../types.js';
-import type { UserInputRequest } from '../host.js';
+import type { GeneratedImage, UserInputRequest } from '../host.js';
+import type { ImageUploadResult } from '../channel-adapter.js';
+import { decodeGeneratedImage } from '../internal/generated-image.js';
 import type { FileAttachment } from '../types.js';
 import type { ToolCallInfo } from '../types.js';
 import { BaseChannelAdapter, registerAdapterFactory } from '../channel-adapter.js';
@@ -106,6 +108,39 @@ function assertFeishuSuccess(response: { code?: number; msg?: string }): void {
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown> : null;
+}
+
+/** SDK 的 Axios 错误含 multipart 正文，只提取数值状态，禁止转储对象或 message。 */
+function safeFeishuFailureMetadata(values: unknown[]): { code?: number; status?: number } {
+  const metadata: { code?: number; status?: number } = {};
+  const inspect = (value: unknown, depth: number): void => {
+    if (depth > 3) return;
+    if (Array.isArray(value)) {
+      for (const item of value.slice(0, 10)) inspect(item, depth + 1);
+      return;
+    }
+    const record = asRecord(value);
+    if (!record) return;
+    if (typeof record.code === 'number' && Number.isSafeInteger(record.code)) metadata.code = record.code;
+    if (typeof record.status === 'number' && Number.isSafeInteger(record.status) && record.status >= 100 && record.status <= 599) metadata.status = record.status;
+    const response = asRecord(record.response);
+    if (response) { inspect(response, depth + 1); inspect(response.data, depth + 1); }
+  };
+  for (const value of values) inspect(value, 0);
+  return metadata;
+}
+
+export const feishuSdkLogger: lark.Logger = {
+  error: (...values: unknown[]) => { console.error('[feishu-sdk] 请求失败', safeFeishuFailureMetadata(values)); },
+  warn: (...values: unknown[]) => { console.warn('[feishu-sdk] 请求警告', safeFeishuFailureMetadata(values)); },
+  // 低等级 SDK 消息可能携带请求数据，不输出原始诊断内容。
+  info() {}, debug() {}, trace() {},
+};
+
+function imageFailure(operation: string, error: unknown): SendResult {
+  const { code, status } = safeFeishuFailureMetadata([error]);
+  const details = [code === undefined ? '' : `代码 ${code}`, status === undefined ? '' : `状态 ${status}`].filter(Boolean).join('，');
+  return { ok: false, error: `${operation}失败${details ? `（${details}）` : ''}，可稍后补发`, httpStatus: status ?? 400 };
 }
 
 /** 这里只校验回调形状；目录、归属、revision 和期限由核心草稿统一校验。 */
@@ -306,6 +341,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       appId,
       appSecret,
       domain,
+      logger: feishuSdkLogger,
       // 保留 SDK 的响应解包和 User-Agent，给本客户端的请求设有界超时。
       // SDK 的默认实例拦截器返回 resp.data；Axios 原始声明未反映该解包。
       httpInstance: new Proxy(lark.defaultHttpInstance as unknown as lark.Client['httpInstance'], {
@@ -1178,9 +1214,36 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
   // ── Send ────────────────────────────────────────────────────
 
+  async uploadImage(image: GeneratedImage): Promise<ImageUploadResult> {
+    if (!this.restClient) return { ok: false, error: '飞书客户端尚未初始化' };
+    let bytes: Buffer;
+    try { bytes = decodeGeneratedImage(image); }
+    catch { return { ok: false, error: '生成图片内容无效，无法上传' }; }
+    try {
+      const response = await this.restClient.im.image.create({ data: { image_type: 'message', image: bytes } });
+      if (typeof response?.image_key !== 'string' || !response.image_key.trim()) {
+        return { ok: false, error: '飞书图片上传未返回有效标识，尚未发送图片消息' };
+      }
+      return { ok: true, imageKey: response.image_key };
+    } catch (error) { return imageFailure('飞书图片上传', error); }
+  }
+
   async send(message: OutboundMessage): Promise<SendResult> {
     if (!this.restClient) {
       return { ok: false, error: 'Feishu client not initialized' };
+    }
+
+    if (message.image) {
+      if (!message.image.imageKey.trim() || !message.image.sendUuid.trim()) return { ok: false, httpStatus: 400, error: '图片发送标识无效' };
+      try {
+        const response = await this.restClient.im.message.create({
+          params: { receive_id_type: 'chat_id' },
+          data: { receive_id: message.address.chatId, msg_type: 'image',
+            content: JSON.stringify({ image_key: message.image.imageKey }), uuid: message.image.sendUuid },
+        });
+        if (response?.code !== 0 || !response.data?.message_id?.trim()) return imageFailure('飞书图片发送', response);
+        return { ok: true, messageId: response.data.message_id };
+      } catch (error) { return imageFailure('飞书图片发送', error); }
     }
 
     let text = message.text;

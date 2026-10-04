@@ -11,6 +11,7 @@ import path from 'path';
 import type { ChannelBinding } from './types.js';
 import type {
   FileAttachment,
+  GeneratedImage,
   SSEEvent,
   TokenUsage,
   MessageContentBlock,
@@ -19,6 +20,7 @@ import type {
 import { getBridgeContext } from './context.js';
 import crypto from 'crypto';
 import { abortable } from './internal/abort.js';
+import { checkGeneratedImageBudget, validateGeneratedImage } from './internal/generated-image.js';
 
 class BridgeTurnTimeoutError extends Error {
   timeoutMs: number;
@@ -73,6 +75,8 @@ export interface InteractionCallbacks {
 
 export interface ConversationResult {
   responseText: string;
+  /** 独立生成产物，不进入 assistant 的普通文字/工具历史。 */
+  generatedImages?: GeneratedImage[];
   /**
    * Cumulative token usage for the entire turn (sum of all API calls the SDK made,
    * including tool-use round-trips). Suitable for daily total accounting.
@@ -295,6 +299,9 @@ async function consumeStream(
   let errorMessage = '';
   const seenToolResultIds = new Set<string>();
   const permissionRequests: PermissionRequestInfo[] = [];
+  const generatedImages: GeneratedImage[] = [];
+  const generatedImageIds = new Set<string>();
+  let generatedImageBytes = 0;
   let capturedSdkSessionId: string | null = null;
 
   try {
@@ -318,6 +325,22 @@ async function consumeStream(
         }
 
         switch (event.type) {
+          case 'generated_image': {
+            let value: unknown;
+            try { value = JSON.parse(event.data); }
+            catch { currentText += '\n[图片交付] 生成图片事件格式无效。\n'; break; }
+            try {
+              const image = validateGeneratedImage(value);
+              if (generatedImageIds.has(image.id)) break;
+              checkGeneratedImageBudget(generatedImages.length + 1, generatedImageBytes + image.byteLength);
+              generatedImageIds.add(image.id);
+              generatedImageBytes += image.byteLength;
+              generatedImages.push(image);
+            } catch (error) {
+              currentText += `\n[图片交付] ${error instanceof Error ? error.message : '生成图片数据无效。'}\n`;
+            }
+            break;
+          }
           case 'progress':
             try { interactions?.onProgress?.(event.data); } catch { /* 展示失败不影响执行 */ }
             break;
@@ -511,6 +534,7 @@ async function consumeStream(
 
     return {
       responseText,
+      generatedImages: resultErrorCode === 'abort' || resultErrorCode === 'timeout' ? [] : generatedImages,
       tokenUsage,
       lastTurnUsage,
       contextWindow,
@@ -551,7 +575,10 @@ async function consumeStream(
       || e instanceof Error && e.name === 'AbortError';
 
     return {
-      responseText: '',
+      responseText: isAbort || timeoutReason ? '' : contentBlocks
+        .filter((block): block is Extract<MessageContentBlock, { type: 'text' }> => block.type === 'text')
+        .map(block => block.text).join('').trim(),
+      generatedImages: isAbort || timeoutReason ? [] : generatedImages,
       tokenUsage,
       hasError: true,
       errorCode: timeoutReason ? 'timeout' : (isAbort ? 'abort' : 'error'),

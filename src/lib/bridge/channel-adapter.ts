@@ -14,7 +14,13 @@ import type {
   SendResult,
   ModelSelectionView,
 } from './types.js';
-import type { UserInputRequest } from './host.js';
+import type { GeneratedImage, UserInputRequest } from './host.js';
+
+export interface ImageUploadResult {
+  ok: boolean;
+  imageKey?: string;
+  error?: string;
+}
 
 export abstract class BaseChannelAdapter {
   /** Which channel type this adapter handles */
@@ -47,6 +53,11 @@ export abstract class BaseChannelAdapter {
    * Handles platform-specific formatting and API calls.
    */
   abstract send(message: OutboundMessage): Promise<SendResult>;
+
+  /** 上传与发消息分离，核心可在两者之间保存进度及复检回合归属。 */
+  async uploadImage(_image: GeneratedImage): Promise<ImageUploadResult> {
+    return { ok: false, error: '当前平台不支持生成图片发送，文字内容仍可正常送达' };
+  }
 
   /**
    * Answer a callback query (e.g. Telegram inline button press).

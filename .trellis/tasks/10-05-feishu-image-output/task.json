@@ -1,8 +1,8 @@
 {
-  "id": "audit-priority-fixes",
-  "name": "audit-priority-fixes",
-  "title": "修复审查前三项可靠性与会话问题",
-  "description": "隔离补发控制通道、确保补丁恢复判定一致、恢复当前聊天历史会话选择，验证后提交推送 main",
+  "id": "feishu-image-output",
+  "name": "feishu-image-output",
+  "title": "Codex 生成图片自动回传飞书",
+  "description": "将当前回合原生 imageGeneration 产物连同文字自动发送原聊天，接入可靠投递、补发与取消隔离",
   "status": "in_progress",
   "dev_type": null,
   "scope": null,
@@ -18,10 +18,8 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [
-    "10-05-feishu-image-output"
-  ],
-  "parent": null,
+  "children": [],
+  "parent": "10-05-audit-priority-fixes",
   "relatedFiles": [],
   "notes": "",
   "meta": {}

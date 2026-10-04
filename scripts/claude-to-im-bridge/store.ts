@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { BridgeApiProvider, ChannelSessionHistoryEntry, ResponseDeliveryRecord } from "../../src/lib/bridge/host.js";
 import type { ChannelBinding } from "../../src/lib/bridge/types.js";
+import { validateGeneratedImage, checkGeneratedImageBudget } from "../../src/lib/bridge/internal/generated-image.js";
 export type { ChannelBinding } from "../../src/lib/bridge/types.js";
 
 import { resolveBridgeSetting } from "./settings.ts";
@@ -437,7 +438,7 @@ export class JsonFileBridgeStore {
         raw = backup;
         console.warn('[BridgeStore] 主存储损坏，已加载有效备份；下次保存前保留损坏原件。');
       } catch {
-        throw new Error('[BridgeStore] 存储损坏且没有有效备份，拒绝覆盖原文件', { cause: error });
+        throw new Error('[BridgeStore] 主存储损坏且没有有效备份，拒绝覆盖原文件', { cause: error });
       }
     }
     this.sessions = new Map(Object.entries(parsed.sessions));
@@ -520,8 +521,40 @@ async function atomicWrite(target: string, content: string): Promise<void> {
   await fs.promises.rename(temporary, target);
 }
 
+function validateResponseChunks(chunks: unknown): void {
+  if (!Array.isArray(chunks)) throw new Error('Invalid response chunks');
+  const imageIds = new Set<string>();
+  let imageBytes = 0;
+  for (const value of chunks) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid response chunk');
+    const chunk = value as Record<string, unknown>;
+    if (typeof chunk.sent !== 'boolean' || (chunk.messageId !== undefined && typeof chunk.messageId !== 'string')) throw new Error('Invalid chunk progress');
+    if (chunk.kind === 'image') {
+      if (typeof chunk.sendUuid !== 'string' || !chunk.sendUuid.trim() || chunk.sendUuid.length > 128
+        || (chunk.imageKey !== undefined && (typeof chunk.imageKey !== 'string' || !chunk.imageKey.trim() || chunk.imageKey.length > 2048))
+        || (chunk.sent && chunk.imageKey === undefined)) throw new Error('Invalid image delivery identifiers');
+      const image = validateGeneratedImage(chunk.image);
+      if (imageIds.has(image.id)) throw new Error('Duplicate generated image');
+      imageIds.add(image.id);
+      imageBytes += image.byteLength;
+      checkGeneratedImageBudget(imageIds.size, imageBytes);
+      chunk.image = image;
+    } else {
+      if ((chunk.kind !== undefined && chunk.kind !== 'text') || typeof chunk.text !== 'string'
+        || typeof chunk.parseMode !== 'string' || !['HTML', 'Markdown', 'plain'].includes(chunk.parseMode)
+        || (chunk.plainFallback !== undefined && typeof chunk.plainFallback !== 'string')) throw new Error('Invalid text delivery');
+    }
+  }
+}
+
 function parsePersistedData(raw: string): PersistedData {
-  const data: unknown = JSON.parse(raw);
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    // SyntaxError 可能包含原始 JSON 片段，图片与凭据不能进入错误 cause。
+    throw new Error('Invalid store JSON syntax');
+  }
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Invalid store');
   const record = data as Record<string, unknown>;
   for (const key of ['sessions', 'bindings', 'messages', 'channelOffsets']) {
@@ -548,11 +581,8 @@ function parsePersistedData(raw: string): PersistedData {
     if (!value || value.id !== id || typeof value.sessionId !== 'string' || typeof value.responseText !== 'string'
       || !value.address || typeof value.address.channelType !== 'string' || typeof value.address.chatId !== 'string'
       || !['pending', 'failed', 'delivered'].includes(value.status) || !Number.isSafeInteger(value.attempts) || value.attempts < 0
-      || typeof value.createdAt !== 'string' || typeof value.updatedAt !== 'string' || !Array.isArray(value.chunks)
-      || value.chunks.some(chunk => !chunk || typeof chunk.text !== 'string' || typeof chunk.sent !== 'boolean'
-        || !['HTML', 'Markdown', 'plain'].includes(chunk.parseMode)
-        || (chunk.messageId !== undefined && typeof chunk.messageId !== 'string')
-        || (chunk.plainFallback !== undefined && typeof chunk.plainFallback !== 'string'))) throw new Error('Invalid response delivery');
+      || typeof value.createdAt !== 'string' || typeof value.updatedAt !== 'string') throw new Error('Invalid response delivery');
+    validateResponseChunks(value.chunks);
   }
   return record as PersistedData;
 }

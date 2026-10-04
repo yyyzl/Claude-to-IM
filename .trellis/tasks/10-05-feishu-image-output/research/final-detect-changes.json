@@ -1,0 +1,1404 @@
+{
+  "summary": {
+    "changed_count": 108,
+    "affected_count": 46,
+    "changed_files": 37,
+    "risk_level": "critical"
+  },
+  "changed_symbols": [
+    {
+      "id": "Section:README.md:L1:Claude-to-IM",
+      "name": "Claude-to-IM",
+      "type": "Section",
+      "filePath": "README.md",
+      "change_type": "touched"
+    },
+    {
+      "id": "Section:README.md:L15:Features",
+      "name": "Features",
+      "type": "Section",
+      "filePath": "README.md",
+      "change_type": "touched"
+    },
+    {
+      "id": "Section:README.zh-CN.md:L1:Claude-to-IM",
+      "name": "Claude-to-IM",
+      "type": "Section",
+      "filePath": "README.zh-CN.md",
+      "change_type": "touched"
+    },
+    {
+      "id": "Section:README.zh-CN.md:L15:功能特性",
+      "name": "功能特性",
+      "type": "Section",
+      "filePath": "README.zh-CN.md",
+      "change_type": "touched"
+    },
+    {
+      "id": "Section:docs/reliability-fixes.zh-CN.md:L1:可靠性修复与使用说明",
+      "name": "可靠性修复与使用说明",
+      "type": "Section",
+      "filePath": "docs/reliability-fixes.zh-CN.md",
+      "change_type": "touched"
+    },
+    {
+      "id": "Section:docs/reliability-fixes.zh-CN.md:L37:飞书",
+      "name": "飞书",
+      "type": "Section",
+      "filePath": "docs/reliability-fixes.zh-CN.md",
+      "change_type": "touched"
+    },
+    {
+      "id": "Section:docs/reliability-fixes.zh-CN.md:L45:Codex 生成图片自动回传",
+      "name": "Codex 生成图片自动回传",
+      "type": "Section",
+      "filePath": "docs/reliability-fixes.zh-CN.md",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:scripts/claude-to-im-bridge/codex-llm.ts:turnTimeoutError",
+      "name": "turnTimeoutError",
+      "type": "Function",
+      "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Class:scripts/claude-to-im-bridge/codex-llm.ts:CodexAppServerLLMProvider",
+      "name": "CodexAppServerLLMProvider",
+      "type": "Class",
+      "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Method:scripts/claude-to-im-bridge/codex-llm.ts:CodexAppServerLLMProvider.constructor#1",
+      "name": "constructor",
+      "type": "Method",
+      "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Method:scripts/claude-to-im-bridge/codex-llm.ts:CodexAppServerLLMProvider.streamChat#1",
+      "name": "streamChat",
+      "type": "Method",
+      "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:scripts/claude-to-im-bridge/codex-llm.ts:CodexAppServerLLMProvider.streamChat.start@160:6",
+      "name": "start",
+      "type": "Function",
+      "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:scripts/claude-to-im-bridge/codex-llm.ts:CodexAppServerLLMProvider.streamChat.start@160:13.onGeneratedImage@199:12",
+      "name": "onGeneratedImage",
+      "type": "Function",
+      "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Method:scripts/claude-to-im-bridge/codex-llm.ts:CodexAppServerLLMProvider.collectTurnText#1",
+      "name": "collectTurnText",
+      "type": "Method",
+      "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:scripts/claude-to-im-bridge/codex-llm.ts:CodexAppServerLLMProvider.collectTurnText.imageNotice@426:4",
+      "name": "imageNotice",
+      "type": "Function",
+      "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:scripts/claude-to-im-bridge/codex-llm.ts:CodexAppServerLLMProvider.collectTurnText.fn@440:30.fail@441:8",
+      "name": "fail",
+      "type": "Function",
+      "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:scripts/claude-to-im-bridge/codex-llm.ts:CodexAppServerLLMProvider.collectTurnText.fn@440:30.refreshIdle@444:8",
+      "name": "refreshIdle",
+      "type": "Function",
+      "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:scripts/claude-to-im-bridge/codex-llm.ts:CodexAppServerLLMProvider.collectTurnText.fn@440:30.handle@452:8",
+      "name": "handle",
+      "type": "Function",
+      "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Class:scripts/claude-to-im-bridge/store.ts:JsonFileBridgeStore",
+      "name": "JsonFileBridgeStore",
+      "type": "Class",
+      "filePath": "scripts/claude-to-im-bridge/store.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Method:scripts/claude-to-im-bridge/store.ts:JsonFileBridgeStore.load#0",
+      "name": "load",
+      "type": "Method",
+      "filePath": "scripts/claude-to-im-bridge/store.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:scripts/claude-to-im-bridge/store.ts:validateResponseChunks",
+      "name": "validateResponseChunks",
+      "type": "Function",
+      "filePath": "scripts/claude-to-im-bridge/store.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:scripts/claude-to-im-bridge/store.ts:parsePersistedData",
+      "name": "parsePersistedData",
+      "type": "Function",
+      "filePath": "scripts/claude-to-im-bridge/store.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/adapters/feishu-adapter.ts:safeFeishuFailureMetadata",
+      "name": "safeFeishuFailureMetadata",
+      "type": "Function",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/adapters/feishu-adapter.ts:safeFeishuFailureMetadata.inspect@115:2",
+      "name": "inspect",
+      "type": "Function",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Const:src/lib/bridge/adapters/feishu-adapter.ts:feishuSdkLogger",
+      "name": "feishuSdkLogger",
+      "type": "Const",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/adapters/feishu-adapter.ts:feishuSdkLogger.error",
+      "name": "error",
+      "type": "Function",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/adapters/feishu-adapter.ts:feishuSdkLogger.warn",
+      "name": "warn",
+      "type": "Function",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:feishuSdkLogger.debug#0",
+      "name": "debug",
+      "type": "Method",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:feishuSdkLogger.info#0",
+      "name": "info",
+      "type": "Method",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:feishuSdkLogger.trace#0",
+      "name": "trace",
+      "type": "Method",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/adapters/feishu-adapter.ts:imageFailure",
+      "name": "imageFailure",
+      "type": "Function",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/adapters/feishu-adapter.ts:imageFailure.error@142:22",
+      "name": "error",
+      "type": "Property",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/adapters/feishu-adapter.ts:imageFailure.httpStatus@142:85",
+      "name": "httpStatus",
+      "type": "Property",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/adapters/feishu-adapter.ts:imageFailure.ok@142:11",
+      "name": "ok",
+      "type": "Property",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Class:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter",
+      "name": "FeishuAdapter",
+      "type": "Class",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.start#0",
+      "name": "start",
+      "type": "Method",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.uploadImage#1",
+      "name": "uploadImage",
+      "type": "Method",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.uploadImage.error@1217:46",
+      "name": "error",
+      "type": "Property",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.uploadImage.ok@1217:35",
+      "name": "ok",
+      "type": "Property",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.uploadImage.error@1220:32",
+      "name": "error",
+      "type": "Property",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.uploadImage.ok@1220:21",
+      "name": "ok",
+      "type": "Property",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.uploadImage.error@1224:28",
+      "name": "error",
+      "type": "Property",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.uploadImage.ok@1224:17",
+      "name": "ok",
+      "type": "Property",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.uploadImage.imageKey@1226:25",
+      "name": "imageKey",
+      "type": "Property",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.uploadImage.ok@1226:15",
+      "name": "ok",
+      "type": "Property",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.send#1",
+      "name": "send",
+      "type": "Method",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.send.error@1236:113",
+      "name": "error",
+      "type": "Property",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.send.httpStatus@1236:96",
+      "name": "httpStatus",
+      "type": "Property",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.send.ok@1236:85",
+      "name": "ok",
+      "type": "Property",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.send.messageId@1244:27",
+      "name": "messageId",
+      "type": "Property",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.send.ok@1244:17",
+      "name": "ok",
+      "type": "Property",
+      "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/bridge-manager.ts:handleMessage",
+      "name": "handleMessage",
+      "type": "Function",
+      "filePath": "src/lib/bridge/bridge-manager.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/bridge-manager.ts:handleMessage.finalize@1558:4",
+      "name": "finalize",
+      "type": "Function",
+      "filePath": "src/lib/bridge/bridge-manager.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Interface:src/lib/bridge/channel-adapter.ts:ImageUploadResult",
+      "name": "ImageUploadResult",
+      "type": "Interface",
+      "filePath": "src/lib/bridge/channel-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/channel-adapter.ts:ImageUploadResult.ok",
+      "name": "ok",
+      "type": "Property",
+      "filePath": "src/lib/bridge/channel-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/channel-adapter.ts:ImageUploadResult.imageKey",
+      "name": "imageKey",
+      "type": "Property",
+      "filePath": "src/lib/bridge/channel-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/channel-adapter.ts:ImageUploadResult.error",
+      "name": "error",
+      "type": "Property",
+      "filePath": "src/lib/bridge/channel-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Class:src/lib/bridge/channel-adapter.ts:BaseChannelAdapter",
+      "name": "BaseChannelAdapter",
+      "type": "Class",
+      "filePath": "src/lib/bridge/channel-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Method:src/lib/bridge/channel-adapter.ts:BaseChannelAdapter.uploadImage#1",
+      "name": "uploadImage",
+      "type": "Method",
+      "filePath": "src/lib/bridge/channel-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/channel-adapter.ts:BaseChannelAdapter.uploadImage.error@58:24",
+      "name": "error",
+      "type": "Property",
+      "filePath": "src/lib/bridge/channel-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/channel-adapter.ts:BaseChannelAdapter.uploadImage.ok@58:13",
+      "name": "ok",
+      "type": "Property",
+      "filePath": "src/lib/bridge/channel-adapter.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Interface:src/lib/bridge/conversation-engine.ts:ConversationResult",
+      "name": "ConversationResult",
+      "type": "Interface",
+      "filePath": "src/lib/bridge/conversation-engine.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/conversation-engine.ts:ConversationResult.generatedImages",
+      "name": "generatedImages",
+      "type": "Property",
+      "filePath": "src/lib/bridge/conversation-engine.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/conversation-engine.ts:consumeStream",
+      "name": "consumeStream",
+      "type": "Function",
+      "filePath": "src/lib/bridge/conversation-engine.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/conversation-engine.ts:consumeStream.generatedImages@536:6",
+      "name": "generatedImages",
+      "type": "Property",
+      "filePath": "src/lib/bridge/conversation-engine.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/conversation-engine.ts:consumeStream.responseText@577:6",
+      "name": "responseText",
+      "type": "Property",
+      "filePath": "src/lib/bridge/conversation-engine.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/conversation-engine.ts:consumeStream.generatedImages@580:6",
+      "name": "generatedImages",
+      "type": "Property",
+      "filePath": "src/lib/bridge/conversation-engine.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Interface:src/lib/bridge/host.ts:GeneratedImage",
+      "name": "GeneratedImage",
+      "type": "Interface",
+      "filePath": "src/lib/bridge/host.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/host.ts:GeneratedImage.id",
+      "name": "id",
+      "type": "Property",
+      "filePath": "src/lib/bridge/host.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/host.ts:GeneratedImage.mimeType",
+      "name": "mimeType",
+      "type": "Property",
+      "filePath": "src/lib/bridge/host.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/host.ts:GeneratedImage.data",
+      "name": "data",
+      "type": "Property",
+      "filePath": "src/lib/bridge/host.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/host.ts:GeneratedImage.byteLength",
+      "name": "byteLength",
+      "type": "Property",
+      "filePath": "src/lib/bridge/host.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/host.ts:GeneratedImage.sha256",
+      "name": "sha256",
+      "type": "Property",
+      "filePath": "src/lib/bridge/host.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "TypeAlias:src/lib/bridge/host.ts:SSEEventType",
+      "name": "SSEEventType",
+      "type": "TypeAlias",
+      "filePath": "src/lib/bridge/host.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "TypeAlias:src/lib/bridge/host.ts:ResponseChunk",
+      "name": "ResponseChunk",
+      "type": "TypeAlias",
+      "filePath": "src/lib/bridge/host.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Interface:src/lib/bridge/host.ts:ResponseDeliveryRecord",
+      "name": "ResponseDeliveryRecord",
+      "type": "Interface",
+      "filePath": "src/lib/bridge/host.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/host.ts:ResponseDeliveryRecord.chunks",
+      "name": "chunks",
+      "type": "Property",
+      "filePath": "src/lib/bridge/host.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Const:src/lib/bridge/internal/generated-image.ts:MAX_GENERATED_IMAGE_BYTES",
+      "name": "MAX_GENERATED_IMAGE_BYTES",
+      "type": "Const",
+      "filePath": "src/lib/bridge/internal/generated-image.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Const:src/lib/bridge/internal/generated-image.ts:MAX_GENERATED_IMAGES",
+      "name": "MAX_GENERATED_IMAGES",
+      "type": "Const",
+      "filePath": "src/lib/bridge/internal/generated-image.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Const:src/lib/bridge/internal/generated-image.ts:MAX_GENERATED_IMAGES_TOTAL_BYTES",
+      "name": "MAX_GENERATED_IMAGES_TOTAL_BYTES",
+      "type": "Const",
+      "filePath": "src/lib/bridge/internal/generated-image.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Const:src/lib/bridge/internal/generated-image.ts:PNG_SIGNATURE",
+      "name": "PNG_SIGNATURE",
+      "type": "Const",
+      "filePath": "src/lib/bridge/internal/generated-image.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/internal/generated-image.ts:decodePng",
+      "name": "decodePng",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/generated-image.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/internal/generated-image.ts:checkId",
+      "name": "checkId",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/generated-image.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/internal/generated-image.ts:createGeneratedImage",
+      "name": "createGeneratedImage",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/generated-image.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/internal/generated-image.ts:createGeneratedImage.byteLength@61:60",
+      "name": "byteLength",
+      "type": "Property",
+      "filePath": "src/lib/bridge/internal/generated-image.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/internal/generated-image.ts:createGeneratedImage.data@61:38",
+      "name": "data",
+      "type": "Property",
+      "filePath": "src/lib/bridge/internal/generated-image.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/internal/generated-image.ts:createGeneratedImage.id@61:11",
+      "name": "id",
+      "type": "Property",
+      "filePath": "src/lib/bridge/internal/generated-image.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/internal/generated-image.ts:createGeneratedImage.mimeType@61:15",
+      "name": "mimeType",
+      "type": "Property",
+      "filePath": "src/lib/bridge/internal/generated-image.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/internal/generated-image.ts:createGeneratedImage.sha256@61:86",
+      "name": "sha256",
+      "type": "Property",
+      "filePath": "src/lib/bridge/internal/generated-image.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/internal/generated-image.ts:readGeneratedImage",
+      "name": "readGeneratedImage",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/generated-image.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/internal/generated-image.ts:readGeneratedImage.bytes@73:117",
+      "name": "bytes",
+      "type": "Property",
+      "filePath": "src/lib/bridge/internal/generated-image.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/internal/generated-image.ts:readGeneratedImage.image@73:11",
+      "name": "image",
+      "type": "Property",
+      "filePath": "src/lib/bridge/internal/generated-image.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/internal/generated-image.ts:validateGeneratedImage",
+      "name": "validateGeneratedImage",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/generated-image.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/internal/generated-image.ts:decodeGeneratedImage",
+      "name": "decodeGeneratedImage",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/generated-image.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/internal/generated-image.ts:checkGeneratedImageBudget",
+      "name": "checkGeneratedImageBudget",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/generated-image.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/response-delivery.ts:Options.finalize",
+      "name": "finalize",
+      "type": "Property",
+      "filePath": "src/lib/bridge/response-delivery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/response-delivery.ts:Options.images",
+      "name": "images",
+      "type": "Property",
+      "filePath": "src/lib/bridge/response-delivery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/response-delivery.ts:Options.isCurrent",
+      "name": "isCurrent",
+      "type": "Property",
+      "filePath": "src/lib/bridge/response-delivery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/response-delivery.ts:Options.turnId",
+      "name": "turnId",
+      "type": "Property",
+      "filePath": "src/lib/bridge/response-delivery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "TypeAlias:src/lib/bridge/response-delivery.ts:Options",
+      "name": "Options",
+      "type": "TypeAlias",
+      "filePath": "src/lib/bridge/response-delivery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/response-delivery.ts:chunks",
+      "name": "chunks",
+      "type": "Function",
+      "filePath": "src/lib/bridge/response-delivery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/response-delivery.ts:uploadWithinDeadline",
+      "name": "uploadWithinDeadline",
+      "type": "Function",
+      "filePath": "src/lib/bridge/response-delivery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/response-delivery.ts:attempt",
+      "name": "attempt",
+      "type": "Function",
+      "filePath": "src/lib/bridge/response-delivery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Function:src/lib/bridge/response-delivery.ts:deliverResponse",
+      "name": "deliverResponse",
+      "type": "Function",
+      "filePath": "src/lib/bridge/response-delivery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/response-delivery.ts:deliverResponse.error@140:24",
+      "name": "error",
+      "type": "Property",
+      "filePath": "src/lib/bridge/response-delivery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/response-delivery.ts:deliverResponse.ok@140:13",
+      "name": "ok",
+      "type": "Property",
+      "filePath": "src/lib/bridge/response-delivery.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Interface:src/lib/bridge/types.ts:OutboundMessage",
+      "name": "OutboundMessage",
+      "type": "Interface",
+      "filePath": "src/lib/bridge/types.ts",
+      "change_type": "touched"
+    },
+    {
+      "id": "Property:src/lib/bridge/types.ts:OutboundMessage.image",
+      "name": "image",
+      "type": "Property",
+      "filePath": "src/lib/bridge/types.ts",
+      "change_type": "touched"
+    }
+  ],
+  "affected_processes": [
+    {
+      "id": "proc_3_handlemessage",
+      "name": "HandleMessage → ChatAdmissionGate",
+      "process_type": "cross_community",
+      "step_count": 8,
+      "changed_steps": [
+        {
+          "symbol": "handleMessage",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_5_handlemessage",
+      "name": "HandleMessage → GetBridgeContext",
+      "process_type": "cross_community",
+      "step_count": 7,
+      "changed_steps": [
+        {
+          "symbol": "handleMessage",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_18_start",
+      "name": "Start → CatalogDescription",
+      "process_type": "cross_community",
+      "step_count": 5,
+      "changed_steps": [
+        {
+          "symbol": "start",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_19_start",
+      "name": "Start → CatalogRecord",
+      "process_type": "cross_community",
+      "step_count": 5,
+      "changed_steps": [
+        {
+          "symbol": "start",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_20_start",
+      "name": "Start → CatalogString",
+      "process_type": "cross_community",
+      "step_count": 5,
+      "changed_steps": [
+        {
+          "symbol": "start",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_22_handlemessage",
+      "name": "HandleMessage → Key",
+      "process_type": "cross_community",
+      "step_count": 5,
+      "changed_steps": [
+        {
+          "symbol": "handleMessage",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_23_handlemessage",
+      "name": "HandleMessage → Now",
+      "process_type": "cross_community",
+      "step_count": 5,
+      "changed_steps": [
+        {
+          "symbol": "handleMessage",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_24_handlemessage",
+      "name": "HandleMessage → IsCurrent",
+      "process_type": "cross_community",
+      "step_count": 5,
+      "changed_steps": [
+        {
+          "symbol": "handleMessage",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_40_send",
+      "name": "Send → AsRecord",
+      "process_type": "cross_community",
+      "step_count": 5,
+      "changed_steps": [
+        {
+          "symbol": "imageFailure",
+          "step": 2
+        },
+        {
+          "symbol": "inspect",
+          "step": 4
+        },
+        {
+          "symbol": "safeFeishuFailureMetadata",
+          "step": 3
+        },
+        {
+          "symbol": "send",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_44_start",
+      "name": "Start → AssertConnectionEpoch",
+      "process_type": "intra_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "start",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_45_start",
+      "name": "Start → ResetConnectionState",
+      "process_type": "cross_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "start",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_55_main",
+      "name": "Main → IsCurrent",
+      "process_type": "cross_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "consumeStream",
+          "step": 3
+        }
+      ]
+    },
+    {
+      "id": "proc_56_main",
+      "name": "Main → OnProgress",
+      "process_type": "cross_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "consumeStream",
+          "step": 3
+        }
+      ]
+    },
+    {
+      "id": "proc_57_main",
+      "name": "Main → OnUserInputRequest",
+      "process_type": "cross_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "consumeStream",
+          "step": 3
+        }
+      ]
+    },
+    {
+      "id": "proc_62_deliverresponse",
+      "name": "DeliverResponse → CheckId",
+      "process_type": "cross_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "deliverResponse",
+          "step": 1
+        },
+        {
+          "symbol": "validateGeneratedImage",
+          "step": 2
+        },
+        {
+          "symbol": "readGeneratedImage",
+          "step": 3
+        },
+        {
+          "symbol": "checkId",
+          "step": 4
+        }
+      ]
+    },
+    {
+      "id": "proc_63_deliverresponse",
+      "name": "DeliverResponse → DecodePng",
+      "process_type": "cross_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "deliverResponse",
+          "step": 1
+        },
+        {
+          "symbol": "validateGeneratedImage",
+          "step": 2
+        },
+        {
+          "symbol": "readGeneratedImage",
+          "step": 3
+        },
+        {
+          "symbol": "decodePng",
+          "step": 4
+        }
+      ]
+    },
+    {
+      "id": "proc_73_collectturntext",
+      "name": "CollectTurnText → Number",
+      "process_type": "cross_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "handle",
+          "step": 2
+        },
+        {
+          "symbol": "collectTurnText",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_74_collectturntext",
+      "name": "CollectTurnText → Record",
+      "process_type": "cross_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "handle",
+          "step": 2
+        },
+        {
+          "symbol": "collectTurnText",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_85_start",
+      "name": "Start → SelectCodexEffort",
+      "process_type": "intra_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "start",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_86_start",
+      "name": "Start → SelectCodexModel",
+      "process_type": "intra_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "start",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_87_start",
+      "name": "Start → FindFastServiceTier",
+      "process_type": "cross_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "start",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_92_handlemessage",
+      "name": "HandleMessage → IsAuthorized",
+      "process_type": "cross_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "handleMessage",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_108_deliverresponse",
+      "name": "DeliverResponse → Records",
+      "process_type": "cross_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "deliverResponse",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_109_retryresponsedeliver",
+      "name": "RetryResponseDelivery → InsertAuditLog",
+      "process_type": "intra_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "attempt",
+          "step": 2
+        }
+      ]
+    },
+    {
+      "id": "proc_110_retryresponsedeliver",
+      "name": "RetryResponseDelivery → InsertOutboundRef",
+      "process_type": "intra_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "attempt",
+          "step": 2
+        }
+      ]
+    },
+    {
+      "id": "proc_111_retryresponsedeliver",
+      "name": "RetryResponseDelivery → InsertAuditLog",
+      "process_type": "intra_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "attempt",
+          "step": 2
+        }
+      ]
+    },
+    {
+      "id": "proc_112_retryresponsedeliver",
+      "name": "RetryResponseDelivery → InsertOutboundRef",
+      "process_type": "intra_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "attempt",
+          "step": 2
+        }
+      ]
+    },
+    {
+      "id": "proc_117_collectturntext",
+      "name": "CollectTurnText → SubtractUsage",
+      "process_type": "cross_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "handle",
+          "step": 2
+        },
+        {
+          "symbol": "collectTurnText",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_124_send",
+      "name": "Send → BuildPermissionButtonCard",
+      "process_type": "intra_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "send",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_125_send",
+      "name": "Send → HtmlToFeishuMarkdown",
+      "process_type": "intra_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "send",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_126_start",
+      "name": "Start → Enqueue",
+      "process_type": "cross_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "start",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_163_send",
+      "name": "Send → NormalizeNumericCode",
+      "process_type": "cross_community",
+      "step_count": 5,
+      "changed_steps": [
+        {
+          "symbol": "send",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_164_send",
+      "name": "Send → PickString",
+      "process_type": "cross_community",
+      "step_count": 5,
+      "changed_steps": [
+        {
+          "symbol": "send",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_169_uploadimage",
+      "name": "UploadImage → AsRecord",
+      "process_type": "cross_community",
+      "step_count": 5,
+      "changed_steps": [
+        {
+          "symbol": "imageFailure",
+          "step": 2
+        },
+        {
+          "symbol": "inspect",
+          "step": 4
+        },
+        {
+          "symbol": "safeFeishuFailureMetadata",
+          "step": 3
+        },
+        {
+          "symbol": "uploadImage",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_175_deliverresponse",
+      "name": "DeliverResponse → Durable",
+      "process_type": "cross_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "deliverResponse",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_178_uploadimage",
+      "name": "UploadImage → CheckId",
+      "process_type": "cross_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "decodeGeneratedImage",
+          "step": 2
+        },
+        {
+          "symbol": "readGeneratedImage",
+          "step": 3
+        },
+        {
+          "symbol": "checkId",
+          "step": 4
+        },
+        {
+          "symbol": "uploadImage",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_179_uploadimage",
+      "name": "UploadImage → DecodePng",
+      "process_type": "cross_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "decodeGeneratedImage",
+          "step": 2
+        },
+        {
+          "symbol": "readGeneratedImage",
+          "step": 3
+        },
+        {
+          "symbol": "decodePng",
+          "step": 4
+        },
+        {
+          "symbol": "uploadImage",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_186_constructor",
+      "name": "Constructor → PickString",
+      "process_type": "cross_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "constructor",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_222_start",
+      "name": "Start → AsRecord",
+      "process_type": "cross_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "start",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_229_handlemessage",
+      "name": "HandleMessage → UpdateInteractionMessage",
+      "process_type": "cross_community",
+      "step_count": 6,
+      "changed_steps": [
+        {
+          "symbol": "handleMessage",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_276_send",
+      "name": "Send → BuildPostContent",
+      "process_type": "intra_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "send",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_286_send",
+      "name": "Send → AssertFeishuSuccess",
+      "process_type": "cross_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "send",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_289_constructor",
+      "name": "Constructor → UpdateInteractionMessage",
+      "process_type": "cross_community",
+      "step_count": 6,
+      "changed_steps": [
+        {
+          "symbol": "constructor",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_291_send",
+      "name": "Send → BuildCardContent",
+      "process_type": "intra_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "send",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_298_start",
+      "name": "Start → PickString",
+      "process_type": "cross_community",
+      "step_count": 3,
+      "changed_steps": [
+        {
+          "symbol": "start",
+          "step": 1
+        }
+      ]
+    },
+    {
+      "id": "proc_371_start",
+      "name": "Start → GetBridgeContext",
+      "process_type": "cross_community",
+      "step_count": 4,
+      "changed_steps": [
+        {
+          "symbol": "start",
+          "step": 1
+        }
+      ]
+    }
+  ]
+}

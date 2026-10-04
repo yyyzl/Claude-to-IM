@@ -7,7 +7,7 @@
 ## 2. 接口
 
 - `processWithSessionLock(..., signal?: AbortSignal)`：信号取消尚未开始的排队任务；已运行任务由自己的取消上下文结束。
-- `deliverResponse(adapter, address, responseText, sessionId, replyToMessageId?, options?)`：统一生成响应分块、保存待发记录和投递；`options` 可携带 `turnId / isCurrent / finalize`。
+- `deliverResponse(adapter, address, responseText, sessionId, replyToMessageId?, options?)`：统一生成响应分块、保存待发记录和投递；`options` 可携带 `turnId / isCurrent / finalize / images`。
 - `retryResponseDelivery(adapter, address, id?, { isCurrent }?)`：只重投已有记录的未送达块，不调用模型；有效性谓词在每个后续分块与发送重试前检查。
 - `BridgeStore.saveResponseDelivery/getResponseDelivery/listResponseDeliveries/flush`：四项共同形成可选的持久待发能力；`close()` 用于停机。
 - `BridgeStore.listChannelSessionHistory?(channelType, chatId): ChannelSessionHistoryEntry[]`：只读当前聊天历史；条目为 `sessionId/title/workingDirectory/updatedAt`，按最近关联排序。`/sessions [页码]` 每页 5 条，完整 ID 可用于 `/bind`。
@@ -34,6 +34,18 @@
 
 重试必须验证 chat/channel/user 来源并互斥。不能把失败记成成功去重，也不能按旧格式错误判断降级后的重试。成功记录清除重复正文并限制元数据保留。平台送达与本地保存之间有不确定窗口，不声称 exactly-once。
 
+### 生成图片
+
+Codex 生成图仅来自精确匹配当前 thread/turn 的 `item/completed.imageGeneration`，要求 completed 状态与有效 PNG Base64，以 thread/turn/item 标识去重。忽略历史、imageView、输入附件和文字路径，不读取 savedPath 或扫描目录。桥接仅为自身 app-server 子进程设置不省略通知媒体；不得改全局配置或将静态 capability 当作账号可用性证明。
+
+生成图片通过独立事件进入会话结果，禁止 Base64 进入普通正文、工具日志或原始 SDK 错误日志。共享校验先限制编码长度，再检查标准 Base64、PNG 最小结构及 IHDR 尺寸；每图最多 10_000_000 字节、宽高 1…12000，每回合最多 8 张、合计 30_000_000 字节。无效或超限须给用户可见说明，保留已接受内容。
+
+回合结束且归属有效后建立单条图文 outbox，文字在前、图片按生成顺序。记录先 save + flush，再上传；图片上传得到 imageKey 后先保存并 flush，再检查归属，使用持久 sendUuid 发送图片消息；成功进度必须在后续取消检查前落盘。重试复用 imageKey/sendUuid，不重新生成图片。建立 outbox 前不承诺内存产物的崩溃恢复。
+
+流卡 finalize 只确认文字块送达，随后继续图片；纯图片也必须收尾原卡。图片不得进入文字/卡片降级路径，其他渠道默认明确不支持。上传与发送分离，上传迟到不得自动触发发送；超时保持结果未知语义，不能虚报成功。旧无 kind 的文本块继续按文本加载，混合记录须严格校验，成功后清除图片数据。
+
+飞书 SDK 的 image.create 返回扁平 image_key；message.create 须同时检查平台成功与 message_id。SDK logger 仅输出固定类别与安全数值状态码，不传递原始错误、请求配置、Buffer 或 Base64。Codex 服务端失败和 JSON 语法错误同样不得透传原始异常文本或 cause 链；保留固定错误类别和主存储/备份角色，避免错误信息回显媒体内容。
+
 审批发送、登记、超时失败必须解开模型等待。原卡状态在网关确认解决后更新，超时使用真实 resolution，不再维护猜测时长的第二套计时器。卡片更新失败不能撤销已经成立的权限解决。
 
 ### 持久化与审查
@@ -58,6 +70,10 @@ JSON 写入采用同目录临时文件、同步内容后原子替换，并保留
 | 旧回合晚到或绑定切走再切回 | 不更新新 binding、状态或卡片 |
 | 待发记录 flush 失败 | 不发送，返回可定位的持久化错误 |
 | 第 N 块失败 | 保留前 N-1 块进度；补发不重调模型 |
+| 流卡收尾成功且仍有图片 | 只确认文字，继续上传并发送图片 |
+| 图片上传后发送失败或进程重启 | 复用保存的 imageKey/sendUuid，补发未确认块 |
+| 取消后图片上传迟到 | 不继续发送；不影响新回合 |
+| 纯图、空/坏/超限结果或不支持图片的平台 | 纯图正常出站；失败有明确说明，不发送 Base64 或空文本假成功 |
 | 聊天 A 补发等待，聊天 B stop/审批 | 控制事件继续消费，不等 A 的网络结果 |
 | 补发中 stop/new/bind 或停机 | 停止后续块；成功块仍写回原投递记录；旧回执不更新新聊天状态 |
 | 当前聊天 new 后查询 sessions | 可找到旧关联并获取完整可用 ID，不暴露其他聊天记录 |
@@ -87,6 +103,8 @@ JSON 写入采用同目录临时文件、同步内容后原子替换，并保留
 
 补发回归应真正运行 manager 消费循环并挂起 fake 平台发送；会话历史回归应关闭后重建 JSON store，验证 channel/chat 隔离。补丁恢复回归应使用真实 WorkflowStore、fake ModelInvoker，并在 application/spec/plan/ledger/checkpoint 保存前后注入故障，再创建新 Store/Engine 恢复；与无故障执行比较文档、问题状态、版本数量及模型调用次数。
 
+图片回归使用锁定 Codex 协议结构、合成 PNG 与 fake 传输。覆盖 early 通知、重复/错回合、失败/空/坏/超限、纯图和图文、流卡收尾、上传检查点、重启补发、取消后迟到及 SDK 日志脱敏。禁止真实生图与生产飞书调用，测试不得扫描用户图片目录。
+
 ## 7. 错误与正确做法
 
 - 错：`await deliverResponse(...)` 后忽略结果并认为用户已收到。正确：送达状态独立记录，失败保留补发入口。
@@ -96,4 +114,4 @@ JSON 写入采用同目录临时文件、同步内容后原子替换，并保留
 - 错：保存过文档就从 latest 重放补丁。正确：先保存原始基线与应用结果，恢复固定判定及目标版本。
 - 错：把渠道当前绑定列表当作聊天历史并截断 ID。正确：按 channel/chat 的历史关联读取，提供完整可用绑定命令。
 
-来源：`10-04-optimization-audit` 的隔离研究与 `10-04-reliability-fixes` 的实现/回归。
+来源：`10-04-optimization-audit` 的隔离研究，`10-04-reliability-fixes`、`10-05-audit-priority-fixes` 与 `10-05-feishu-image-output` 的实现/回归。

@@ -46,7 +46,7 @@ test('failed终态不会被报告成功，未知模型不会静默替换', async
   const { client, provider } = setup();
   client.onTurn = () => client.publish('turn/completed', { turn: { id: 'turn', status: 'failed', error: { message: 'upstream failed' } } });
   const events = await read(provider.streamChat({ prompt: 'hi', sessionId: 's' }));
-  assert.match(events.find(e => e.type === 'error')!.data, /upstream failed/);
+  assert.match(events.find(e => e.type === 'error')!.data, /Codex 回合执行失败/);
   assert.equal(JSON.parse(events.find(e => e.type === 'result')!.data).is_error, true);
   const invalid = await read(provider.streamChat({ prompt: 'hi', sessionId: 's', model: 'unavailable' }));
   assert.match(invalid.find(e => e.type === 'error')!.data, /unavailable/);
