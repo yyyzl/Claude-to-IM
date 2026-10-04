@@ -5,8 +5,9 @@ import { BaseChannelAdapter } from '../../lib/bridge/channel-adapter';
 import { initBridgeContext } from '../../lib/bridge/context';
 import type { BridgeSession, BridgeStore, LLMProvider, UpsertChannelBindingInput } from '../../lib/bridge/host';
 import type { ChannelBinding, InboundMessage, OutboundMessage, SendResult } from '../../lib/bridge/types';
+import { InMemoryPermissionGateway } from '../../../scripts/claude-to-im-bridge/permissions.ts';
 
-function sse(type: 'text' | 'result', data: string | Record<string, unknown>): string {
+function sse(type: 'text' | 'result' | 'user_input_request' | 'progress', data: string | Record<string, unknown>): string {
   return `data: ${JSON.stringify({ type, data: typeof data === 'string' ? data : JSON.stringify(data) })}\n`;
 }
 
@@ -177,6 +178,49 @@ describe('bridge-manager ctx footer', () => {
   beforeEach(() => {
     delete (globalThis as Record<string, unknown>).__bridge_context__;
     delete (globalThis as Record<string, unknown>).__bridge_manager__;
+  });
+
+  it('uses explicit backend context estimate after compaction', async () => {
+    const { streamEndCalls } = await runHandleMessage(streamFromChunks([
+      sse('text', 'Done'), sse('result', { context_tokens: 50000, context_window: 100000, last_usage: { input_tokens: 0, output_tokens: 0 }, is_error: false }),
+    ]));
+    assert.match(streamEndCalls[0].extras?.ctx ?? '', /50%/);
+  });
+
+  it('/model stores the exact model and effort, /status shows it without guessing model names', async () => {
+    const store = createStore();
+    initBridgeContext({ store, llm: { streamChat: () => { throw new Error('命令不得调用模型'); } }, permissions: { resolvePendingPermission: () => false }, lifecycle: {} });
+    const { adapter, sent } = createAdapter();
+    const { _testOnly } = await import('../../lib/bridge/bridge-manager');
+    const base = { messageId: 'command', address: { channelType: 'feishu', chatId: 'chat-model', userId: 'user' }, timestamp: Date.now() };
+    await _testOnly.handleMessage(adapter, { ...base, text: '/model model-next ultra' });
+    assert.equal(store.getChannelBinding('feishu', 'chat-model')?.model, 'model-next');
+    assert.equal(store.getChannelBinding('feishu', 'chat-model')?.reasoningEffort, 'ultra');
+    await _testOnly.handleMessage(adapter, { ...base, text: '/status' });
+    assert.match(sent.at(-1)?.text ?? '', /ultra/);
+  });
+
+  it('模型提问可通过/answer解锁，progress不会被发送成最终正文', async () => {
+    const store = createStore(); const permissions = new InMemoryPermissionGateway();
+    let observedAnswer: unknown;
+    const llm: LLMProvider = { streamChat: () => new ReadableStream({ start: async controller => {
+      const resolution = permissions.waitFor('flow-question');
+      controller.enqueue(sse('progress', 'internal progress'));
+      controller.enqueue(sse('user_input_request', { requestId: 'flow-question', questions: [{ id: 'q', question: '请选择', options: [{ label: 'A' }] }] }));
+      observedAnswer = (await resolution).updatedInput;
+      controller.enqueue(sse('text', 'final answer')); controller.close();
+    } }) };
+    initBridgeContext({ store, llm, permissions, lifecycle: {} });
+    const { adapter, sent, streamEndCalls } = createAdapter();
+    const { _testOnly } = await import('../../lib/bridge/bridge-manager');
+    const base = { messageId: 'question', address: { channelType: 'feishu', chatId: 'chat-input', userId: 'user' }, timestamp: Date.now() };
+    const processing = _testOnly.handleMessage(adapter, { ...base, text: 'hello' });
+    for (let i = 0; i < 100 && !sent.some(message => message.text.includes('/answer flow-question')); i++) await new Promise(resolve => setTimeout(resolve, 1));
+    assert.ok(sent.some(message => message.text.includes('/answer flow-question')));
+    await _testOnly.handleMessage(adapter, { ...base, messageId: 'answer', text: '/answer flow-question A' });
+    await processing;
+    assert.deepEqual(observedAnswer, { answers: { q: ['A'] } });
+    assert.equal(streamEndCalls.at(-1)?.responseText, 'final answer');
   });
 
   it('prefers last_usage over cumulative usage for ctx footer', async () => {

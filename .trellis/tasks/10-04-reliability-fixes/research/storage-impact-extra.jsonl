@@ -1,0 +1,1200 @@
+{
+  "target": {
+    "id": "Method:src/lib/workflow/workflow-engine.ts:WorkflowEngine.start#1",
+    "name": "start",
+    "type": "Method",
+    "filePath": "src/lib/workflow/workflow-engine.ts"
+  },
+  "direction": "upstream",
+  "impactedCount": 0,
+  "risk": "LOW",
+  "summary": {
+    "direct": 0,
+    "processes_affected": 0,
+    "modules_affected": 0
+  },
+  "affected_processes": [],
+  "affected_modules": [],
+  "byDepth": {}
+}
+{
+  "target": {
+    "id": "Method:src/lib/workflow/workflow-engine.ts:WorkflowEngine.resume#2",
+    "name": "resume",
+    "type": "Method",
+    "filePath": "src/lib/workflow/workflow-engine.ts"
+  },
+  "direction": "upstream",
+  "impactedCount": 6,
+  "risk": "CRITICAL",
+  "summary": {
+    "direct": 2,
+    "processes_affected": 5,
+    "modules_affected": 3
+  },
+  "affected_processes": [
+    {
+      "name": "handleResume",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 9,
+      "total_hits": 9,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "handleCommand",
+      "type": "Function",
+      "filePath": "src/lib/bridge/bridge-manager.ts",
+      "affected_process_count": 7,
+      "total_hits": 7,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "handleWorkflowCommand",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 7,
+      "total_hits": 7,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "handleResume",
+      "type": "Function",
+      "filePath": "src/lib/workflow/cli.ts",
+      "affected_process_count": 5,
+      "total_hits": 5,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "main",
+      "type": "Function",
+      "filePath": "src/lib/workflow/cli.ts",
+      "affected_process_count": 5,
+      "total_hits": 5,
+      "earliest_broken_step": 1
+    }
+  ],
+  "affected_modules": [
+    {
+      "name": "Workflow",
+      "hits": 3,
+      "impact": "direct"
+    },
+    {
+      "name": "Internal",
+      "hits": 1,
+      "impact": "indirect"
+    },
+    {
+      "name": "Bridge",
+      "hits": 1,
+      "impact": "indirect"
+    }
+  ],
+  "byDepth": {
+    "1": [
+      {
+        "depth": 1,
+        "id": "Function:src/lib/workflow/cli.ts:handleResume",
+        "name": "handleResume",
+        "filePath": "src/lib/workflow/cli.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      },
+      {
+        "depth": 1,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleResume",
+        "name": "handleResume",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      }
+    ],
+    "2": [
+      {
+        "depth": 2,
+        "id": "Function:src/lib/workflow/cli.ts:main",
+        "name": "main",
+        "filePath": "src/lib/workflow/cli.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 2,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleWorkflowCommand",
+        "name": "handleWorkflowCommand",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "3": [
+      {
+        "depth": 3,
+        "id": "Function:src/lib/bridge/bridge-manager.ts:handleCommand",
+        "name": "handleCommand",
+        "filePath": "src/lib/bridge/bridge-manager.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      },
+      {
+        "depth": 3,
+        "id": "File:src/lib/workflow/cli.ts",
+        "name": "cli.ts",
+        "filePath": "src/lib/workflow/cli.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ]
+  }
+}
+{
+  "target": {
+    "id": "Function:scripts/feishu-claude-bridge.ts:main",
+    "name": "main",
+    "type": "Function",
+    "filePath": "scripts/feishu-claude-bridge.ts"
+  },
+  "direction": "upstream",
+  "impactedCount": 1,
+  "risk": "LOW",
+  "summary": {
+    "direct": 1,
+    "processes_affected": 0,
+    "modules_affected": 0
+  },
+  "affected_processes": [],
+  "affected_modules": [],
+  "byDepth": {
+    "1": [
+      {
+        "depth": 1,
+        "id": "File:scripts/feishu-claude-bridge.ts",
+        "name": "feishu-claude-bridge.ts",
+        "filePath": "scripts/feishu-claude-bridge.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ]
+  }
+}
+{
+  "target": {
+    "id": "Method:src/lib/workflow/diff-reader.ts:DiffReader.buildDiffArgs#1",
+    "name": "buildDiffArgs",
+    "type": "Method",
+    "filePath": "src/lib/workflow/diff-reader.ts"
+  },
+  "direction": "upstream",
+  "impactedCount": 6,
+  "risk": "CRITICAL",
+  "summary": {
+    "direct": 1,
+    "processes_affected": 5,
+    "modules_affected": 2
+  },
+  "affected_processes": [
+    {
+      "name": "handleStartCodeReview",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 7,
+      "total_hits": 7,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "handleWorkflowCommand",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 7,
+      "total_hits": 7,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "handleStartReviewFix",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 7,
+      "total_hits": 7,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "main",
+      "type": "Function",
+      "filePath": "src/lib/workflow/cli.ts",
+      "affected_process_count": 5,
+      "total_hits": 5,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "createSnapshot",
+      "type": "Function",
+      "filePath": "src/lib/workflow/diff-reader.ts",
+      "affected_process_count": 1,
+      "total_hits": 1,
+      "earliest_broken_step": 1
+    }
+  ],
+  "affected_modules": [
+    {
+      "name": "Internal",
+      "hits": 3,
+      "impact": "indirect"
+    },
+    {
+      "name": "Workflow",
+      "hits": 3,
+      "impact": "direct"
+    }
+  ],
+  "byDepth": {
+    "1": [
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/diff-reader.ts:DiffReader.createSnapshot#1",
+        "name": "createSnapshot",
+        "filePath": "src/lib/workflow/diff-reader.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "2": [
+      {
+        "depth": 2,
+        "id": "Function:src/lib/workflow/cli.ts:handleCodeReview",
+        "name": "handleCodeReview",
+        "filePath": "src/lib/workflow/cli.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      },
+      {
+        "depth": 2,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleStartCodeReview",
+        "name": "handleStartCodeReview",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      },
+      {
+        "depth": 2,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleStartReviewFix",
+        "name": "handleStartReviewFix",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      }
+    ],
+    "3": [
+      {
+        "depth": 3,
+        "id": "Function:src/lib/workflow/cli.ts:main",
+        "name": "main",
+        "filePath": "src/lib/workflow/cli.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 3,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleWorkflowCommand",
+        "name": "handleWorkflowCommand",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ]
+  }
+}
+{
+  "target": {
+    "id": "Method:src/lib/workflow/diff-reader.ts:DiffReader.resolveBaseRef#1",
+    "name": "resolveBaseRef",
+    "type": "Method",
+    "filePath": "src/lib/workflow/diff-reader.ts"
+  },
+  "direction": "upstream",
+  "impactedCount": 6,
+  "risk": "CRITICAL",
+  "summary": {
+    "direct": 1,
+    "processes_affected": 5,
+    "modules_affected": 2
+  },
+  "affected_processes": [
+    {
+      "name": "handleWorkflowCommand",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 7,
+      "total_hits": 7,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "handleStartReviewFix",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 7,
+      "total_hits": 7,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "handleStartCodeReview",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 7,
+      "total_hits": 7,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "main",
+      "type": "Function",
+      "filePath": "src/lib/workflow/cli.ts",
+      "affected_process_count": 5,
+      "total_hits": 5,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "createSnapshot",
+      "type": "Function",
+      "filePath": "src/lib/workflow/diff-reader.ts",
+      "affected_process_count": 1,
+      "total_hits": 1,
+      "earliest_broken_step": 1
+    }
+  ],
+  "affected_modules": [
+    {
+      "name": "Internal",
+      "hits": 3,
+      "impact": "indirect"
+    },
+    {
+      "name": "Workflow",
+      "hits": 3,
+      "impact": "direct"
+    }
+  ],
+  "byDepth": {
+    "1": [
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/diff-reader.ts:DiffReader.createSnapshot#1",
+        "name": "createSnapshot",
+        "filePath": "src/lib/workflow/diff-reader.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "2": [
+      {
+        "depth": 2,
+        "id": "Function:src/lib/workflow/cli.ts:handleCodeReview",
+        "name": "handleCodeReview",
+        "filePath": "src/lib/workflow/cli.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      },
+      {
+        "depth": 2,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleStartCodeReview",
+        "name": "handleStartCodeReview",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      },
+      {
+        "depth": 2,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleStartReviewFix",
+        "name": "handleStartReviewFix",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      }
+    ],
+    "3": [
+      {
+        "depth": 3,
+        "id": "Function:src/lib/workflow/cli.ts:main",
+        "name": "main",
+        "filePath": "src/lib/workflow/cli.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 3,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleWorkflowCommand",
+        "name": "handleWorkflowCommand",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ]
+  }
+}
+{
+  "target": {
+    "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleStartReviewFix",
+    "name": "handleStartReviewFix",
+    "type": "Function",
+    "filePath": "src/lib/bridge/internal/workflow-command.ts"
+  },
+  "direction": "upstream",
+  "impactedCount": 3,
+  "risk": "HIGH",
+  "summary": {
+    "direct": 1,
+    "processes_affected": 3,
+    "modules_affected": 2
+  },
+  "affected_processes": [
+    {
+      "name": "handleWorkflowCommand",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 7,
+      "total_hits": 7,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "handleCommand",
+      "type": "Function",
+      "filePath": "src/lib/bridge/bridge-manager.ts",
+      "affected_process_count": 7,
+      "total_hits": 7,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "handleMessage",
+      "type": "Function",
+      "filePath": "src/lib/bridge/bridge-manager.ts",
+      "affected_process_count": 1,
+      "total_hits": 1,
+      "earliest_broken_step": 1
+    }
+  ],
+  "affected_modules": [
+    {
+      "name": "Bridge",
+      "hits": 2,
+      "impact": "indirect"
+    },
+    {
+      "name": "Internal",
+      "hits": 1,
+      "impact": "direct"
+    }
+  ],
+  "byDepth": {
+    "1": [
+      {
+        "depth": 1,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleWorkflowCommand",
+        "name": "handleWorkflowCommand",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "2": [
+      {
+        "depth": 2,
+        "id": "Function:src/lib/bridge/bridge-manager.ts:handleCommand",
+        "name": "handleCommand",
+        "filePath": "src/lib/bridge/bridge-manager.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      }
+    ],
+    "3": [
+      {
+        "depth": 3,
+        "id": "Function:src/lib/bridge/bridge-manager.ts:handleMessage",
+        "name": "handleMessage",
+        "filePath": "src/lib/bridge/bridge-manager.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ]
+  }
+}
+{
+  "status": "ambiguous",
+  "message": "Found 2 symbols matching 'shutdown'. Use target_uid, file_path, or kind to disambiguate.",
+  "target": {
+    "name": "shutdown"
+  },
+  "direction": "upstream",
+  "impactedCount": 0,
+  "risk": "UNKNOWN",
+  "candidates": [
+    {
+      "uid": "Function:scripts/feishu-claude-bridge.ts:shutdown",
+      "name": "shutdown",
+      "kind": "Function",
+      "filePath": "scripts/feishu-claude-bridge.ts",
+      "line": 483,
+      "score": 0.56
+    },
+    {
+      "uid": "Const:scripts/feishu-claude-bridge.ts:shutdown",
+      "name": "shutdown",
+      "kind": "",
+      "filePath": "scripts/feishu-claude-bridge.ts",
+      "line": 483,
+      "score": 0.5
+    }
+  ]
+}
+{
+  "target": {
+    "id": "Method:src/lib/workflow/diff-reader.ts:DiffReader.getBlobShaFromIndex#1",
+    "name": "getBlobShaFromIndex",
+    "type": "Method",
+    "filePath": "src/lib/workflow/diff-reader.ts"
+  },
+  "direction": "upstream",
+  "impactedCount": 5,
+  "risk": "HIGH",
+  "summary": {
+    "direct": 1,
+    "processes_affected": 3,
+    "modules_affected": 2
+  },
+  "affected_processes": [
+    {
+      "name": "handleStartReviewFix",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 7,
+      "total_hits": 7,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "handleStartCodeReview",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 7,
+      "total_hits": 7,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "createSnapshot",
+      "type": "Function",
+      "filePath": "src/lib/workflow/diff-reader.ts",
+      "affected_process_count": 1,
+      "total_hits": 1,
+      "earliest_broken_step": 1
+    }
+  ],
+  "affected_modules": [
+    {
+      "name": "Workflow",
+      "hits": 3,
+      "impact": "direct"
+    },
+    {
+      "name": "Internal",
+      "hits": 2,
+      "impact": "indirect"
+    }
+  ],
+  "byDepth": {
+    "1": [
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/diff-reader.ts:DiffReader.getBlobSha#3",
+        "name": "getBlobSha",
+        "filePath": "src/lib/workflow/diff-reader.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "2": [
+      {
+        "depth": 2,
+        "id": "Method:src/lib/workflow/diff-reader.ts:DiffReader.createSnapshot#1",
+        "name": "createSnapshot",
+        "filePath": "src/lib/workflow/diff-reader.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "3": [
+      {
+        "depth": 3,
+        "id": "Function:src/lib/workflow/cli.ts:handleCodeReview",
+        "name": "handleCodeReview",
+        "filePath": "src/lib/workflow/cli.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      },
+      {
+        "depth": 3,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleStartCodeReview",
+        "name": "handleStartCodeReview",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      },
+      {
+        "depth": 3,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleStartReviewFix",
+        "name": "handleStartReviewFix",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      }
+    ]
+  }
+}
+{
+  "target": {
+    "id": "Method:src/lib/workflow/diff-reader.ts:DiffReader.getBlobShaFromWorkTree#1",
+    "name": "getBlobShaFromWorkTree",
+    "type": "Method",
+    "filePath": "src/lib/workflow/diff-reader.ts"
+  },
+  "direction": "upstream",
+  "impactedCount": 5,
+  "risk": "HIGH",
+  "summary": {
+    "direct": 1,
+    "processes_affected": 3,
+    "modules_affected": 2
+  },
+  "affected_processes": [
+    {
+      "name": "handleStartReviewFix",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 7,
+      "total_hits": 7,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "handleStartCodeReview",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 7,
+      "total_hits": 7,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "createSnapshot",
+      "type": "Function",
+      "filePath": "src/lib/workflow/diff-reader.ts",
+      "affected_process_count": 1,
+      "total_hits": 1,
+      "earliest_broken_step": 1
+    }
+  ],
+  "affected_modules": [
+    {
+      "name": "Workflow",
+      "hits": 3,
+      "impact": "direct"
+    },
+    {
+      "name": "Internal",
+      "hits": 2,
+      "impact": "indirect"
+    }
+  ],
+  "byDepth": {
+    "1": [
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/diff-reader.ts:DiffReader.getBlobSha#3",
+        "name": "getBlobSha",
+        "filePath": "src/lib/workflow/diff-reader.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "2": [
+      {
+        "depth": 2,
+        "id": "Method:src/lib/workflow/diff-reader.ts:DiffReader.createSnapshot#1",
+        "name": "createSnapshot",
+        "filePath": "src/lib/workflow/diff-reader.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "3": [
+      {
+        "depth": 3,
+        "id": "Function:src/lib/workflow/cli.ts:handleCodeReview",
+        "name": "handleCodeReview",
+        "filePath": "src/lib/workflow/cli.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      },
+      {
+        "depth": 3,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleStartCodeReview",
+        "name": "handleStartCodeReview",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      },
+      {
+        "depth": 3,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleStartReviewFix",
+        "name": "handleStartReviewFix",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      }
+    ]
+  }
+}
+{
+  "target": {
+    "id": "Method:src/lib/workflow/diff-reader.ts:DiffReader.getHeadCommit#0",
+    "name": "getHeadCommit",
+    "type": "Method",
+    "filePath": "src/lib/workflow/diff-reader.ts"
+  },
+  "direction": "upstream",
+  "impactedCount": 6,
+  "risk": "CRITICAL",
+  "summary": {
+    "direct": 1,
+    "processes_affected": 5,
+    "modules_affected": 2
+  },
+  "affected_processes": [
+    {
+      "name": "handleWorkflowCommand",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 7,
+      "total_hits": 7,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "handleStartReviewFix",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 7,
+      "total_hits": 7,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "handleStartCodeReview",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 7,
+      "total_hits": 7,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "main",
+      "type": "Function",
+      "filePath": "src/lib/workflow/cli.ts",
+      "affected_process_count": 5,
+      "total_hits": 5,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "createSnapshot",
+      "type": "Function",
+      "filePath": "src/lib/workflow/diff-reader.ts",
+      "affected_process_count": 1,
+      "total_hits": 1,
+      "earliest_broken_step": 1
+    }
+  ],
+  "affected_modules": [
+    {
+      "name": "Internal",
+      "hits": 3,
+      "impact": "indirect"
+    },
+    {
+      "name": "Workflow",
+      "hits": 3,
+      "impact": "direct"
+    }
+  ],
+  "byDepth": {
+    "1": [
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/diff-reader.ts:DiffReader.createSnapshot#1",
+        "name": "createSnapshot",
+        "filePath": "src/lib/workflow/diff-reader.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "2": [
+      {
+        "depth": 2,
+        "id": "Function:src/lib/workflow/cli.ts:handleCodeReview",
+        "name": "handleCodeReview",
+        "filePath": "src/lib/workflow/cli.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      },
+      {
+        "depth": 2,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleStartCodeReview",
+        "name": "handleStartCodeReview",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      },
+      {
+        "depth": 2,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleStartReviewFix",
+        "name": "handleStartReviewFix",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      }
+    ],
+    "3": [
+      {
+        "depth": 3,
+        "id": "Function:src/lib/workflow/cli.ts:main",
+        "name": "main",
+        "filePath": "src/lib/workflow/cli.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 3,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleWorkflowCommand",
+        "name": "handleWorkflowCommand",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ]
+  }
+}
+{
+  "target": {
+    "id": "Method:src/lib/workflow/diff-reader.ts:DiffReader.git#1",
+    "name": "git",
+    "type": "Method",
+    "filePath": "src/lib/workflow/diff-reader.ts"
+  },
+  "direction": "upstream",
+  "impactedCount": 14,
+  "risk": "CRITICAL",
+  "summary": {
+    "direct": 7,
+    "processes_affected": 6,
+    "modules_affected": 2
+  },
+  "affected_processes": [
+    {
+      "name": "handleWorkflowCommand",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 7,
+      "total_hits": 7,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "handleStartReviewFix",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 7,
+      "total_hits": 7,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "handleStartCodeReview",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 7,
+      "total_hits": 7,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "main",
+      "type": "Function",
+      "filePath": "src/lib/workflow/cli.ts",
+      "affected_process_count": 5,
+      "total_hits": 5,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "readFileContents",
+      "type": "Function",
+      "filePath": "src/lib/workflow/diff-reader.ts",
+      "affected_process_count": 1,
+      "total_hits": 2,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "createSnapshot",
+      "type": "Function",
+      "filePath": "src/lib/workflow/diff-reader.ts",
+      "affected_process_count": 1,
+      "total_hits": 2,
+      "earliest_broken_step": 1
+    }
+  ],
+  "affected_modules": [
+    {
+      "name": "Workflow",
+      "hits": 11,
+      "impact": "direct"
+    },
+    {
+      "name": "Internal",
+      "hits": 3,
+      "impact": "indirect"
+    }
+  ],
+  "byDepth": {
+    "1": [
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/diff-reader.ts:DiffReader.isGitRepo#0",
+        "name": "isGitRepo",
+        "filePath": "src/lib/workflow/diff-reader.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/diff-reader.ts:DiffReader.createSnapshot#1",
+        "name": "createSnapshot",
+        "filePath": "src/lib/workflow/diff-reader.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/diff-reader.ts:DiffReader.readFileContent#1",
+        "name": "readFileContent",
+        "filePath": "src/lib/workflow/diff-reader.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/diff-reader.ts:DiffReader.getHeadCommit#0",
+        "name": "getHeadCommit",
+        "filePath": "src/lib/workflow/diff-reader.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/diff-reader.ts:DiffReader.getBlobShaFromIndex#1",
+        "name": "getBlobShaFromIndex",
+        "filePath": "src/lib/workflow/diff-reader.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/diff-reader.ts:DiffReader.getBlobShaFromWorkTree#1",
+        "name": "getBlobShaFromWorkTree",
+        "filePath": "src/lib/workflow/diff-reader.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/diff-reader.ts:DiffReader.getBlobShaFromRef#2",
+        "name": "getBlobShaFromRef",
+        "filePath": "src/lib/workflow/diff-reader.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "2": [
+      {
+        "depth": 2,
+        "id": "Method:src/lib/workflow/diff-reader.ts:DiffReader.readFileContents#2",
+        "name": "readFileContents",
+        "filePath": "src/lib/workflow/diff-reader.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 2,
+        "id": "Method:src/lib/workflow/diff-reader.ts:DiffReader.getBlobSha#3",
+        "name": "getBlobSha",
+        "filePath": "src/lib/workflow/diff-reader.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 2,
+        "id": "Function:src/lib/workflow/cli.ts:handleCodeReview",
+        "name": "handleCodeReview",
+        "filePath": "src/lib/workflow/cli.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      },
+      {
+        "depth": 2,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleStartCodeReview",
+        "name": "handleStartCodeReview",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      },
+      {
+        "depth": 2,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleStartReviewFix",
+        "name": "handleStartReviewFix",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      }
+    ],
+    "3": [
+      {
+        "depth": 3,
+        "id": "Function:src/lib/workflow/cli.ts:main",
+        "name": "main",
+        "filePath": "src/lib/workflow/cli.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 3,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleWorkflowCommand",
+        "name": "handleWorkflowCommand",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ]
+  }
+}
+{
+  "target": {
+    "id": "Method:src/lib/workflow/auto-fixer.ts:AutoFixer.git#2",
+    "name": "git",
+    "type": "Method",
+    "filePath": "src/lib/workflow/auto-fixer.ts"
+  },
+  "direction": "upstream",
+  "impactedCount": 7,
+  "risk": "HIGH",
+  "summary": {
+    "direct": 3,
+    "processes_affected": 4,
+    "modules_affected": 2
+  },
+  "affected_processes": [
+    {
+      "name": "handleWorkflowCommand",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 7,
+      "total_hits": 7,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "handleStartReviewFix",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 7,
+      "total_hits": 7,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "main",
+      "type": "Function",
+      "filePath": "src/lib/workflow/cli.ts",
+      "affected_process_count": 5,
+      "total_hits": 5,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "applyFixes",
+      "type": "Function",
+      "filePath": "src/lib/workflow/auto-fixer.ts",
+      "affected_process_count": 3,
+      "total_hits": 4,
+      "earliest_broken_step": 1
+    }
+  ],
+  "affected_modules": [
+    {
+      "name": "Workflow",
+      "hits": 5,
+      "impact": "direct"
+    },
+    {
+      "name": "Internal",
+      "hits": 2,
+      "impact": "indirect"
+    }
+  ],
+  "byDepth": {
+    "1": [
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/auto-fixer.ts:AutoFixer.applyFixes#2",
+        "name": "applyFixes",
+        "filePath": "src/lib/workflow/auto-fixer.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/auto-fixer.ts:AutoFixer.createWorktree#2",
+        "name": "createWorktree",
+        "filePath": "src/lib/workflow/auto-fixer.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/auto-fixer.ts:AutoFixer.tryApplyCodexOutput#4",
+        "name": "tryApplyCodexOutput",
+        "filePath": "src/lib/workflow/auto-fixer.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "2": [
+      {
+        "depth": 2,
+        "id": "Function:src/lib/workflow/cli.ts:handleCodeReview",
+        "name": "handleCodeReview",
+        "filePath": "src/lib/workflow/cli.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      },
+      {
+        "depth": 2,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleStartReviewFix",
+        "name": "handleStartReviewFix",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      }
+    ],
+    "3": [
+      {
+        "depth": 3,
+        "id": "Function:src/lib/workflow/cli.ts:main",
+        "name": "main",
+        "filePath": "src/lib/workflow/cli.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 3,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleWorkflowCommand",
+        "name": "handleWorkflowCommand",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ]
+  }
+}

@@ -1,4 +1,5 @@
 import type { ToolCallInfo } from '../types.js';
+import type { UserInputRequest } from '../host.js';
 
 /**
  * Feishu-specific Markdown processing.
@@ -68,6 +69,52 @@ export function buildPostContent(text: string): string {
   });
 }
 
+/** 将完整请求体的 UTF-8 体积计入预算，包含 content 字符串的再次转义。 */
+export function feishuPayloadBytes(text: string): number {
+  const content = hasComplexMarkdown(text) ? buildCardContent(preprocessFeishuMarkdown(text)) : buildPostContent(text);
+  return Buffer.byteLength(JSON.stringify({ receive_id: 'x'.repeat(256), msg_type: 'interactive', content }), 'utf8');
+}
+
+/** 保留原始字符并为跨片代码块补围栏；不拆开 UTF-16 代理对。 */
+export function splitFeishuMarkdown(text: string, budget = 28_000): string[] {
+  if (!text) return [];
+  const chunks: string[] = [];
+  let rest = text;
+  let fence: { marker: string; language: string } | undefined;
+  const nextFence = (part: string) => {
+    let current = fence;
+    for (const line of part.split('\n')) {
+      const match = line.match(/^\s*(`{3,}|~{3,})([^\r\n]*)$/);
+      if (!match) continue;
+      if (!current) current = { marker: match[1], language: match[2] };
+      else if (match[1][0] === current.marker[0] && match[1].length >= current.marker.length && !match[2].trim()) current = undefined;
+    }
+    return current;
+  };
+  while (rest) {
+    const prefix = fence ? `${fence.marker}${fence.language}\n` : '';
+    const render = (raw: string) => prefix + raw + (nextFence(raw) ? '\n' + nextFence(raw)!.marker : '');
+    const points = Array.from(rest);
+    let low = 1; let high = points.length; let best = 0;
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      const end = points.slice(0, mid).join('').length;
+      if (end > 0 && feishuPayloadBytes(render(rest.slice(0, end))) <= budget) { best = end; low = mid + 1; }
+      else high = mid - 1;
+    }
+    if (!best) throw new Error('飞书消息封装超过字节预算');
+    if (best < rest.length) {
+      const boundary = rest.lastIndexOf('\n', best - 1) + 1;
+      if (boundary > best / 2) best = boundary;
+    }
+    const raw = rest.slice(0, best);
+    chunks.push(render(raw));
+    fence = nextFence(raw);
+    rest = rest.slice(best);
+  }
+  return chunks;
+}
+
 /**
  * Convert simple HTML (from command responses) to markdown for Feishu.
  * Handles common tags: <b>, <i>, <code>, <br>, entities.
@@ -117,19 +164,6 @@ export function formatElapsed(ms: number): string {
 }
 
 /**
- * Build the body elements array for a streaming card update.
- * Combines main text content with tool progress.
- */
-export function buildStreamingContent(text: string, tools: ToolCallInfo[]): string {
-  let content = text || '';
-  const toolMd = buildToolProgressMarkdown(tools);
-  if (toolMd) {
-    content = content ? `${content}\n\n${toolMd}` : toolMd;
-  }
-  return content || '💭 Thinking...';
-}
-
-/**
  * Build the final card JSON (schema 2.0) with text, tool progress, and footer.
  */
 export function buildFinalCardJson(
@@ -173,7 +207,11 @@ export function buildFinalCardJson(
 
   return JSON.stringify({
     schema: '2.0',
-    config: { wide_screen_mode: true, streaming_mode: false },
+    config: {
+      wide_screen_mode: true,
+      streaming_mode: false,
+      summary: { content: `${footer?.status || ''} ${text.replace(/\s+/g, ' ').trim()}`.trim().slice(0, 120) || '任务已结束' },
+    },
     body: { elements },
   });
 }
@@ -322,9 +360,9 @@ export function buildPermissionButtonCard(
   chatId?: string,
 ): string {
   const buttons = [
-    { label: 'Allow', type: 'primary', action: 'allow' },
-    { label: 'Allow Session', type: 'default', action: 'allow_session' },
-    { label: 'Deny', type: 'danger', action: 'deny' },
+    { label: '允许一次', type: 'primary', action: 'allow' },
+    { label: '本会话允许', type: 'default', action: 'allow_session' },
+    { label: '拒绝', type: 'danger', action: 'deny' },
   ];
 
   const buttonColumns = buttons.map((btn) => ({
@@ -343,7 +381,7 @@ export function buildPermissionButtonCard(
     schema: '2.0',
     config: { wide_screen_mode: true },
     header: {
-      title: { tag: 'plain_text', content: 'Permission Required' },
+      title: { tag: 'plain_text', content: '需要授权' },
       template: 'blue',
       icon: { tag: 'standard_icon', token: 'lock-chat_filled' },
       padding: '12px 12px 12px 12px',
@@ -351,7 +389,7 @@ export function buildPermissionButtonCard(
     body: {
       elements: [
         { tag: 'markdown', content: text, text_size: 'normal' },
-        { tag: 'markdown', content: '⏱ This request will expire in 5 minutes', text_size: 'notation' },
+        { tag: 'markdown', content: '请在请求有效期间操作。取消、超时或已处理的请求不能重复批准。', text_size: 'notation' },
         { tag: 'hr' },
         {
           tag: 'column_set',
@@ -362,10 +400,47 @@ export function buildPermissionButtonCard(
         { tag: 'hr' },
         {
           tag: 'markdown',
-          content: 'Or reply: `1` Allow · `2` Allow Session · `3` Deny',
+          content: '也可回复：`1` 允许一次 · `2` 本会话允许 · `3` 拒绝',
           text_size: 'notation',
         },
       ],
     },
+  });
+}
+
+/** JSON 2.0 原生表单：用户一次提交全部问题，答案只经回调回传。 */
+export function buildUserInputCard(request: UserInputRequest): string {
+  const elements: Array<Record<string, unknown>> = [];
+  const fields: Record<string, string> = {};
+  const multiSelectFields: string[] = [];
+  request.questions.forEach((question, index) => {
+    const name = `q${index}`;
+    fields[name] = question.id;
+    elements.push({ tag: 'markdown', content: question.header ? `**${question.header}**\n${question.question}` : question.question });
+    if (question.options?.length) {
+      if (question.multiSelect) multiSelectFields.push(name);
+      elements.push({
+        tag: question.multiSelect ? 'multi_select_static' : 'select_static',
+        name, required: !question.allowOther,
+        placeholder: { tag: 'plain_text', content: question.multiSelect ? '请选择，可多选' : '请选择' },
+        options: question.options.map(option => ({ text: { tag: 'plain_text', content: option.label }, value: option.label })),
+        width: 'fill',
+      });
+      const descriptions = question.options.filter(option => option.description).map(option => `**${option.label}**：${option.description}`);
+      if (descriptions.length) elements.push({ tag: 'markdown', content: descriptions.join('\n'), text_size: 'notation' });
+      if (question.allowOther) elements.push({ tag: 'input', name: `${name}_other`, placeholder: { tag: 'plain_text', content: '其他答案（选填）' }, width: 'fill', max_length: 4_000 });
+    } else {
+      elements.push({ tag: 'input', name, required: true, placeholder: { tag: 'plain_text', content: '请输入答案' }, width: 'fill', max_length: 4_000 });
+    }
+  });
+  elements.push({
+    tag: 'button', name: 'submit_answers', type: 'primary', text: { tag: 'plain_text', content: '提交答案' },
+    form_action_type: 'submit',
+    behaviors: [{ type: 'callback', value: { user_input_request_id: request.requestId, fields, multi_select_fields: multiSelectFields } }],
+  });
+  return JSON.stringify({
+    schema: '2.0', config: { wide_screen_mode: true },
+    header: { title: { tag: 'plain_text', content: '需要你的选择' }, template: 'blue' },
+    body: { elements: [{ tag: 'form', name: 'answers', elements }] },
   });
 }

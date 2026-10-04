@@ -36,6 +36,8 @@ export type SSEEventType =
   | 'result'
   | 'error'
   | 'permission_request'
+  | 'user_input_request'
+  | 'progress'
   | 'mode_changed'
   | 'task_update'
   | 'keep_alive'
@@ -125,6 +127,21 @@ export interface OutboundRefInput {
   purpose: string;
 }
 
+/** 可重投的最终回答；每块成功后立即持久化进度。 */
+export interface ResponseDeliveryRecord {
+  id: string;
+  sessionId: string;
+  address: import('./types.js').ChannelAddress;
+  responseText: string;
+  replyToMessageId?: string;
+  chunks: Array<{ text: string; parseMode: 'HTML' | 'Markdown' | 'plain'; plainFallback?: string; sent: boolean; messageId?: string }>;
+  status: 'pending' | 'failed' | 'delivered';
+  attempts: number;
+  lastError?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** Input for upserting a channel binding. */
 export interface UpsertChannelBindingInput {
   channelType: string;
@@ -142,6 +159,12 @@ export interface UpsertChannelBindingInput {
  * All database operations are abstracted through this interface.
  */
 export interface BridgeStore {
+  /** 可选持久待发能力；必须连同 flush 提供，才能保证发送前落盘。 */
+  saveResponseDelivery?(record: ResponseDeliveryRecord): void;
+  getResponseDelivery?(id: string): ResponseDeliveryRecord | null;
+  listResponseDeliveries?(channelType: string, chatId: string): ResponseDeliveryRecord[];
+  flush?(): Promise<void>;
+  close?(): Promise<void>;
   // ── Settings ──
   getSetting(key: string): string | null;
 
@@ -208,6 +231,7 @@ export interface StreamChatParams {
   sessionId: string;
   sdkSessionId?: string;
   model?: string;
+  reasoningEffort?: string;
   systemPrompt?: string;
   workingDirectory?: string;
   abortController?: AbortController;
@@ -233,9 +257,35 @@ export interface PermissionResolution {
   behavior: 'allow' | 'deny';
   message?: string;
   updatedPermissions?: unknown[];
+  scope?: 'turn' | 'session';
+  updatedInput?: Record<string, unknown>;
+  reason?: 'expired' | 'cancelled' | 'delivery_failed';
+}
+
+/** 模型向用户询问的信息。问题 ID 由 provider 映射回厂商协议。 */
+export interface UserInputQuestion {
+  id: string;
+  question: string;
+  header?: string;
+  options?: Array<{ label: string; description?: string }>;
+  multiSelect?: boolean;
+  allowOther?: boolean;
+  isSecret?: boolean;
+}
+
+export interface UserInputRequest {
+  requestId: string;
+  questions: UserInputQuestion[];
+}
+
+export interface UserInputResponse {
+  requestId: string;
+  answers: Record<string, string[]>;
 }
 
 export interface PermissionGateway {
+  /** 观察真实请求终态；用于移除原卡按钮，不另行猜测超时时间。 */
+  onResolution?(permissionRequestId: string, listener: (resolution: PermissionResolution) => void): () => void;
   /**
    * Resolve a pending permission request.
    * Returns true if the permission was found and resolved.

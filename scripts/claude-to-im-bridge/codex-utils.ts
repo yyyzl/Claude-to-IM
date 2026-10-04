@@ -1,182 +1,64 @@
-import fs from "node:fs";
-import path from "node:path";
+/** Codex 本地运行时解析与模型目录选择。 */
+import fs from 'node:fs';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 
-export type CodexModelListItem = {
-  id?: string;
+export interface CodexModelListItem {
+  id: string;
   model?: string;
   displayName?: string;
-  description?: string;
   isDefault?: boolean;
-  [k: string]: unknown;
-};
-
-function findFirstExistingOnPath(names: string[]): string | null {
-  const pathVar = process.env.PATH || "";
-  const dirs = pathVar.split(path.delimiter).map((d) => d.trim()).filter(Boolean);
-  for (const dir of dirs) {
-    for (const name of names) {
-      const candidate = path.join(dir, name);
-      if (fs.existsSync(candidate)) return candidate;
-    }
-  }
-  return null;
+  hidden?: boolean;
+  defaultReasoningEffort?: string;
+  supportedReasoningEfforts?: Array<{ reasoningEffort: string }>;
+  inputModalities?: string[];
 }
 
-/**
- * 解析 codex 可执行文件路径。
- *
- * 设计目标：尽量模拟 session-orchestrator 的 resolve_codex_binary 行为，
- * 在 Windows 下优先 codex.cmd，并在 PATH 缺失时回退到 %APPDATA%\\npm。
- */
-export function resolveCodexBinary(userSpecified?: string): string {
-  const specified = (userSpecified || "").trim();
-  if (specified) return specified;
-
-  const names = process.platform === "win32"
-    ? ["codex.exe", "codex.cmd", "codex"]
-    : ["codex"];
-
-  const found = findFirstExistingOnPath(names);
-  if (found) return found;
-
-  if (process.platform === "win32") {
-    const appdata = process.env.APPDATA || "";
-    if (appdata) {
-      const npmDir = path.join(appdata, "npm");
-      for (const name of ["codex.cmd", "codex.exe", "codex"]) {
-        const candidate = path.join(npmDir, name);
-        if (fs.existsSync(candidate)) return candidate;
-      }
-    }
+/** 显式可执行文件优先，否则只使用项目锁定版本，避免 PATH 版本漂移。 */
+export function resolveCodexBinary(userSpecified?: string, projectRoot = fileURLToPath(new URL('../../', import.meta.url))): string {
+  if (userSpecified?.trim()) return userSpecified.trim();
+  const requireFromProject = createRequire(path.join(projectRoot, 'package.json'));
+  try {
+    const manifestPath = requireFromProject.resolve('@openai/codex/package.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as { bin?: { codex?: string } };
+    if (typeof manifest.bin?.codex !== 'string') throw new Error('缺少 bin.codex');
+    const entry = path.resolve(path.dirname(manifestPath), manifest.bin.codex);
+    if (!fs.existsSync(entry)) throw new Error('入口不存在');
+    return entry;
+  } catch {
+    throw new Error('未找到项目依赖 @openai/codex，请运行 npm install，或显式配置 bridge_codex_bin。');
   }
-
-  throw new Error(
-    [
-      "未找到 codex 可执行文件。",
-      "请确认已安装 codex-cli，并满足其一：",
-      "1) codex 在 PATH 中可用；或",
-      "2) Windows 下 %APPDATA%\\npm 中存在 codex.cmd；或",
-      "3) 显式配置 bridge_codex_bin 指向 codex 可执行文件。",
-    ].join("\n"),
-  );
 }
 
 export function buildTurnSandboxPolicy(sandboxMode: string): Record<string, unknown> {
-  if (sandboxMode === "danger-full-access") {
-    return { type: "dangerFullAccess" };
+  switch (sandboxMode) {
+    case 'danger-full-access': return { type: 'dangerFullAccess' };
+    case 'workspace-write': return { type: 'workspaceWrite' };
+    case 'read-only': return { type: 'readOnly' };
+    default: throw new Error(`不支持的 sandbox_mode: ${sandboxMode}`);
   }
-  if (sandboxMode === "workspace-write") {
-    return {
-      type: "workspaceWrite",
-      readOnlyAccess: { type: "fullAccess" },
-    };
-  }
-  if (sandboxMode === "read-only") {
-    return {
-      type: "readOnly",
-      access: { type: "fullAccess" },
-    };
-  }
-  throw new Error(`不支持的 sandbox_mode: ${sandboxMode}`);
 }
 
-function normalizeModelHaystack(model: CodexModelListItem): string {
-  const parts = [
-    String(model.id || ""),
-    String(model.model || ""),
-    String(model.displayName || ""),
-    String(model.description || ""),
-  ];
-  return parts.join(" ").toLowerCase();
+/** 用户的精确选择不得静默换成另一型号，默认选择服务端目录的默认项。 */
+export function selectCodexModel(models: CodexModelListItem[], opts: { explicitId?: string; hint?: string } = {}): CodexModelListItem | null {
+  const selection = (opts.explicitId || opts.hint || '').trim();
+  const [id] = selection.split(/\s+/);
+  if (id && id !== 'default') {
+    const selected = models.find(model => model.id === id || model.model === id);
+    if (!selected) throw new Error(`Codex 模型目录中没有 ${id}；请检查 /model 或 bridge_codex_model 配置。`);
+    return selected;
+  }
+  const visible = models.filter(model => !model.hidden);
+  return visible.find(model => model.isDefault) ?? visible[0] ?? null;
 }
 
-function extractBestGptVersionRank(haystack: string): number {
-  let best = 0;
-  for (const match of haystack.matchAll(/\bgpt-(\d+)(?:\.(\d+))?\b/g)) {
-    const major = Number.parseInt(match[1] || "0", 10);
-    const minor = Number.parseInt(match[2] || "0", 10);
-    if (!Number.isFinite(major) || !Number.isFinite(minor)) continue;
-    best = Math.max(best, major * 1000 + minor * 100);
+export function selectCodexEffort(model: CodexModelListItem, selection?: string, configuredEffort?: string): string | undefined {
+  const tokens = selection?.trim().split(/\s+/) ?? [];
+  if (tokens.length > 2) throw new Error('模型格式应为 <model-id> [effort]');
+  const effort = tokens[1] || configuredEffort || model.defaultReasoningEffort;
+  if (effort && !model.supportedReasoningEfforts?.some(option => option.reasoningEffort === effort)) {
+    throw new Error(`模型 ${model.model || model.id} 不支持思考强度 ${effort}`);
   }
-  return best;
-}
-
-function scoreWithHint(haystack: string, hint: string): number {
-  if (!hint) return 0;
-
-  const h = hint.toLowerCase();
-  let score = 0;
-
-  // Strong preferences
-  if (h.includes("xhigh") && haystack.includes("xhigh")) score += 2000;
-  const hintedVersions = h.match(/\bgpt-\d+(?:\.\d+)?\b/g) ?? [];
-  for (const version of hintedVersions) {
-    if (haystack.includes(version)) score += 1500;
-  }
-
-  // Weaker, token-based matching
-  const tokens = h.split(/\s+/).map((t) => t.trim()).filter(Boolean);
-  for (const t of tokens) {
-    if (t.length < 2) continue;
-    if (haystack.includes(t)) score += 120;
-  }
-
-  if (h.includes("codex") && haystack.includes("codex")) score += 600;
-  if (h.includes("gpt-5") && haystack.includes("gpt-5")) score += 250;
-
-  return score;
-}
-
-function baseScore(model: CodexModelListItem, haystack: string): number {
-  let score = 0;
-  // Prefer newer Codex models without hard-coding one release line.
-  const versionRank = extractBestGptVersionRank(haystack);
-  if (versionRank > 0 && haystack.includes("codex")) score += 1000 + versionRank;
-  else if (versionRank > 0) score += 200 + Math.floor(versionRank / 4);
-  if (haystack.includes("gpt-5") && haystack.includes("codex")) score += 900;
-  if (haystack.includes("codex")) score += 600;
-  if (haystack.includes("gpt-5")) score += 200;
-  if (model.isDefault) score += 50;
-  return score;
-}
-
-/**
- * 从 Codex app-server 的 model/list 返回中选择一个最合适的模型。
- *
- * - explicitId：完全匹配优先
- * - hint：支持 "gpt-5.5 xhigh" 这类模糊提示，按相似度打分
- */
-export function selectCodexModel(
-  models: CodexModelListItem[],
-  opts: { explicitId?: string; hint?: string } = {},
-): CodexModelListItem | null {
-  if (!Array.isArray(models) || models.length === 0) return null;
-
-  const explicit = (opts.explicitId || "").trim();
-  if (explicit) {
-    const exact = models.find((m) => String(m.id || "") === explicit);
-    if (exact) return exact;
-  }
-
-  const hint = (opts.hint || "").trim();
-  if (hint) {
-    // 如果 hint 里包含一个“确切模型 id”，优先直接使用（例如 "gpt-5.5 xhigh"）。
-    const tokens = hint.split(/\s+/).map((t) => t.trim()).filter(Boolean);
-    for (const rawToken of tokens) {
-      const token = rawToken.replace(/^['"]|['"]$/g, "").replace(/[),.;]+$/, "");
-      if (!token) continue;
-      const exact = models.find((m) => String(m.id || "") === token);
-      if (exact) return exact;
-    }
-  }
-
-  const ranked = [...models].sort((a, b) => {
-    const ha = normalizeModelHaystack(a);
-    const hb = normalizeModelHaystack(b);
-    const sa = baseScore(a, ha) + scoreWithHint(ha, hint);
-    const sb = baseScore(b, hb) + scoreWithHint(hb, hint);
-    return sb - sa;
-  });
-
-  return ranked[0] || null;
+  return effort;
 }

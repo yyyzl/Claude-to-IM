@@ -8,6 +8,13 @@ export class SessionQueueTimeoutError extends Error {
   }
 }
 
+export class SessionQueueCancelledError extends Error {
+  constructor() {
+    super('排队任务已取消');
+    this.name = 'SessionQueueCancelledError';
+  }
+}
+
 /**
  * 对同一 session 的任务做串行化执行（同一 session 串行，不同 session 并行）。
  *
@@ -20,11 +27,14 @@ export function processWithSessionLock(
   sessionId: string,
   fn: () => Promise<void>,
   queueTimeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<void> {
   const prev = locks.get(sessionId) || Promise.resolve();
 
   let cancelled = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let started = false;
+  let cancelWait: (() => void) | undefined;
 
   const current = prev.catch(() => {}).then(async () => {
     // 已从队列出队：后续不再受“排队超时”影响
@@ -32,7 +42,9 @@ export function processWithSessionLock(
       clearTimeout(timer);
       timer = null;
     }
-    if (cancelled) return;
+    if (cancelled || signal?.aborted) return;
+    started = true;
+    if (cancelWait) signal?.removeEventListener('abort', cancelWait);
     await fn();
   });
 
@@ -47,16 +59,29 @@ export function processWithSessionLock(
     }
   }).catch(() => {});
 
-  if (queueTimeoutMs <= 0) return current;
+  if (queueTimeoutMs <= 0 && !signal) return current;
 
   return new Promise<void>((resolve, reject) => {
-    timer = setTimeout(() => {
+    cancelWait = () => {
+      if (started) return;
       cancelled = true;
+      if (timer) clearTimeout(timer);
       timer = null;
-      reject(new SessionQueueTimeoutError(sessionId, queueTimeoutMs));
-    }, queueTimeoutMs);
-
-    current.then(resolve, reject);
+      reject(new SessionQueueCancelledError());
+    };
+    signal?.addEventListener('abort', cancelWait, { once: true });
+    if (signal?.aborted) cancelWait();
+    if (queueTimeoutMs > 0 && !cancelled) {
+      timer = setTimeout(() => {
+        cancelled = true;
+        timer = null;
+        if (cancelWait) signal?.removeEventListener('abort', cancelWait);
+        reject(new SessionQueueTimeoutError(sessionId, queueTimeoutMs));
+      }, queueTimeoutMs);
+    }
+    current.then(resolve, reject).finally(() => {
+      if (cancelWait) signal?.removeEventListener('abort', cancelWait);
+    });
   });
 }
 

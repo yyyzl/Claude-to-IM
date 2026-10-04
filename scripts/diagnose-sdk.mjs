@@ -39,9 +39,7 @@ console.log("SDK version:", sdkPkg.version);
 
 // 测试 SDK
 console.log("\n=== 测试 SDK query ===");
-const { query } = await import(
-  "file:///" + path.join(root, "node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs").replace(/\\/g, "/")
-);
+const { query } = await import('@anthropic-ai/claude-agent-sdk');
 
 let stderrBuf = "";
 try {

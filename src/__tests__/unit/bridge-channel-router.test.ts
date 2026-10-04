@@ -197,6 +197,13 @@ describe('channel-router', () => {
     assert.equal(binding.workingDirectory, '/custom/path');
   });
 
+  it('createBinding() uses the Codex backend default rather than the Claude setting', () => {
+    store.setCurrentBackend('codex');
+    const binding = router.createBinding({ channelType: 'telegram', chatId: 'codex-binding' });
+    assert.equal(binding.model, store.getSetting('bridge_codex_model_id'));
+    assert.notEqual(binding.model, store.getSetting('bridge_default_model'));
+  });
+
   it('bindToSession() returns null for non-existent session', () => {
     const result = router.bindToSession(
       { channelType: 'telegram', chatId: '789' },
@@ -213,6 +220,18 @@ describe('channel-router', () => {
     );
     assert.ok(binding);
     assert.equal(binding!.codepilotSessionId, session.id);
+  });
+
+  it('新会话、重新绑定及createBinding不会继承旧模型的effort', () => {
+    const address = { channelType: 'telegram', chatId: 'effort' };
+    const first = router.resolve(address);
+    store.updateChannelBinding(first.id, { reasoningEffort: 'ultra' });
+    assert.equal(router.startNewSession(address).reasoningEffort, '');
+    store.updateChannelBinding(first.id, { reasoningEffort: 'ultra' });
+    const session = store.createSession('Other', 'model', undefined, '/test');
+    assert.equal(router.bindToSession(address, session.id)?.reasoningEffort, '');
+    store.updateChannelBinding(first.id, { reasoningEffort: 'ultra' });
+    assert.equal(router.createBinding(address).reasoningEffort, '');
   });
 
   it('listBindings() filters by channel type', () => {

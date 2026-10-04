@@ -1,0 +1,33 @@
+Changes: 50 files, 431 symbols
+Affected processes: 200
+Risk level: critical
+
+Changed symbols:
+  undefined 强烈建议：锁死一个你网关/账号明确支持的模型，避免自动选到新版本导致 502 → docs/bridge-runner.zh-CN.md
+  undefined 或：bridge_codex_model_hint=gpt-5.5 xhigh → docs/bridge-runner.zh-CN.md
+  undefined 可选：输入合并窗口（毫秒）。用于把“短时间内连发的多条消息”合并成一次 LLM 请求。 → docs/bridge-runner.zh-CN.md
+  undefined 例如：你先发一句“帮我改下 X”，紧接着又补充一句“另外要兼容 Y”，希望一次性发给模型。 → docs/bridge-runner.zh-CN.md
+  undefined 设为 0 可关闭（恢复每条消息一个 turn）。 → docs/bridge-runner.zh-CN.md
+  undefined 卡死才用强制结束（结束进程树） → docs/bridge-runner.zh-CN.md
+  undefined 4) 经验教训（这次折腾最关键的几条） → docs/bridge-runner.zh-CN.md
+  undefined 4.2 先用 `codex debug` 把“上游可用性”跑通 → docs/bridge-runner.zh-CN.md
+  undefined 5) 安全建议 → docs/bridge-runner.zh-CN.md
+  undefined Channel Bindings → docs/development.md
+  undefined JsonRpcAppServerClient → scripts/claude-to-im-bridge/codex-jsonrpc.ts
+  undefined ext → scripts/claude-to-im-bridge/codex-jsonrpc.ts
+  undefined isWindows → scripts/claude-to-im-bridge/codex-jsonrpc.ts
+  undefined needsCmdWrapper → scripts/claude-to-im-bridge/codex-jsonrpc.ts
+  undefined trimmed → scripts/claude-to-im-bridge/codex-jsonrpc.ts
+  ... and 416 more
+
+Affected execution flows:
+  • OnToolEvent → BuildToolProgressMarkdown (7 steps) — changed: buildToolProgressMarkdown, onToolEvent, updateToolProgress, flushCardUpdate, updateCardContent, scheduleCardUpdate
+  • OnToolEvent → NormalizeNumericCode (7 steps) — changed: normalizeNumericCode, onToolEvent, updateToolProgress, flushCardUpdate, updateCardContent, scheduleCardUpdate
+  • OnToolEvent → PickString (7 steps) — changed: pickString, onToolEvent, updateToolProgress, flushCardUpdate, updateCardContent, scheduleCardUpdate
+  • OnStreamText → BuildToolProgressMarkdown (6 steps) — changed: buildToolProgressMarkdown, onStreamText, flushCardUpdate, updateCardContent, scheduleCardUpdate
+  • OnStreamText → NormalizeNumericCode (6 steps) — changed: normalizeNumericCode, onStreamText, flushCardUpdate, updateCardContent, scheduleCardUpdate
+  • OnStreamText → PickString (6 steps) — changed: pickString, onStreamText, flushCardUpdate, updateCardContent, scheduleCardUpdate
+  • CreateCard → GetOrCreate (6 steps) — changed: deliver
+  • CreateCard → PruneOld (6 steps) — changed: deliver
+  • CreateCard → Send (6 steps) — changed: sendWithRetry, deliver
+  • CreateCard → ClassifyError (6 steps) — changed: sendWithRetry, deliver

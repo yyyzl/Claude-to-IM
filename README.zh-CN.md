@@ -261,3 +261,7 @@ npm run test
 ## License
 
 MIT
+
+## 运行时升级
+
+当前固定的 SDK/CLI 版本、模型默认值、权限与重启验证边界见[运行时升级说明](docs/runtime-upgrade.zh-CN.md)。

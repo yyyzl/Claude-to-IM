@@ -36,6 +36,7 @@
 import * as fs from 'node:fs/promises';
 import * as process from 'node:process';
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { createSpecReviewEngine, createCodeReviewEngine } from './index.js';
 import { DiffReader } from './diff-reader.js';
 import { ReportGenerator } from './report-generator.js';
@@ -152,7 +153,7 @@ COMMON OPTIONS:
   --context <files>       Comma-separated context file paths
   --config <path>         JSON config override file
   --base-path <dir>       Storage directory (default: .claude-workflows)
-  --model <name>          Claude model (default: claude-sonnet-4-20250514)
+  --model <name>          Claude model (default: sonnet runtime alias)
   --codex-backend <name>  Codex backend (default: codex)
 
 CODE-REVIEW / REVIEW-FIX OPTIONS:
@@ -234,6 +235,18 @@ async function readConfig(configPath: string | undefined): Promise<Partial<Workf
   return JSON.parse(raw) as Partial<WorkflowConfig>;
 }
 
+/** 将显式 CLI 参数覆盖到配置上；未提供配置文件时也保留覆盖值。 */
+export function applyModelOverrides(
+  config: Partial<WorkflowConfig> | undefined,
+  args: { claudeModel?: string; codexBackend?: string },
+): Partial<WorkflowConfig> {
+  return {
+    ...config,
+    ...(args.claudeModel ? { claude_model: args.claudeModel } : {}),
+    ...(args.codexBackend ? { codex_backend: args.codexBackend } : {}),
+  };
+}
+
 /** Build ReviewScope from CLI args. */
 function buildReviewScope(args: ParsedArgs): ReviewScope {
   if (args.branchDiff) {
@@ -297,10 +310,7 @@ async function handleSpecReview(args: ParsedArgs): Promise<void> {
   const spec = await fs.readFile(args.specPath, 'utf-8');
   const plan = await fs.readFile(args.planPath, 'utf-8');
   const contextFiles = await readContextFiles(args.contextPaths);
-  const config = await readConfig(args.configPath);
-
-  if (args.claudeModel) (config as Record<string, unknown> ?? {}).claude_model = args.claudeModel;
-  if (args.codexBackend) (config as Record<string, unknown> ?? {}).codex_backend = args.codexBackend;
+  const config = applyModelOverrides(await readConfig(args.configPath), args);
 
   runId = await engine.start({ spec, plan, config, contextFiles });
   console.log(`\nSpec-review completed. Run ID: ${runId}`);
@@ -397,23 +407,16 @@ async function handleCodeReview(args: ParsedArgs, enableFix: boolean): Promise<v
         codexTimeoutMs: mergedConfig.codex_timeout_ms,
       });
 
-      if (fixResult.success) {
-        console.log(`\n✅ Auto-fix completed in worktree: ${fixResult.worktreePath}`);
-        console.log(`   Fixed: ${fixResult.fixedCount}/${fixResult.totalCount} issues`);
-        console.log(`   Diff:\n${fixResult.diffPreview}`);
-        console.log(`\nTo apply fixes:`);
-        console.log(`  cd "${fixResult.worktreePath}" && git diff | git apply`);
-        console.log(`Or to cherry-pick:`);
-        console.log(`  git merge --no-ff ${fixResult.worktreeBranch}`);
-      } else {
-        console.log(`\n⚠️ Auto-fix partially completed: ${fixResult.fixedCount}/${fixResult.totalCount}`);
-        if (fixResult.errors.length > 0) {
-          console.log('Errors:');
-          for (const err of fixResult.errors) {
-            console.log(`  - ${err}`);
-          }
-        }
+      console.log(`\n修复候选: ${fixResult.proposedIssueIds.length}/${fixResult.totalCount}；验证通过: ${fixResult.fixedCount}`);
+      console.log(`Worktree: ${fixResult.worktreePath}`);
+      console.log(`基线: ${fixResult.fixBaseSha}；候选 head: ${fixResult.fixHeadSha}`);
+      console.log(`Diff:\n${fixResult.diffPreview}`);
+      if (fixResult.commits.length) {
+        console.log('先检查完整候选补丁并运行项目验证；暂存/未暂存审查的原始改动需先保存、提交到目标仓库，确认目标包含被审查基线且工作区干净，再应用候选提交：');
+        console.log(`  git -C "${cwd}" cherry-pick ${fixResult.commits.join(' ')}`);
       }
+      for (const error of fixResult.errors) console.log(`  - ${error}`);
+      if (fixResult.skippedIssueIds.length) console.log(`失败后保留现场，未继续尝试: ${fixResult.skippedIssueIds.join(', ')}`);
     } catch (err: unknown) {
       console.error('Auto-fix failed:', err instanceof Error ? err.message : String(err));
       console.log('Review report is still available above.');
@@ -500,7 +503,9 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err: unknown) => {
-  console.error('Fatal error:', err);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  main().catch((err: unknown) => {
+    console.error('Fatal error:', err);
+    process.exit(1);
+  });
+}

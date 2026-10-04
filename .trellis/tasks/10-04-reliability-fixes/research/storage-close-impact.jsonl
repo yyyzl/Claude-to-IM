@@ -1,0 +1,188 @@
+{
+  "status": "ambiguous",
+  "message": "Found 3 symbols matching 'upsertChannelBinding'. Use target_uid, file_path, or kind to disambiguate.",
+  "target": {
+    "name": "upsertChannelBinding"
+  },
+  "direction": "upstream",
+  "impactedCount": 0,
+  "risk": "UNKNOWN",
+  "candidates": [
+    {
+      "uid": "Method:src/lib/bridge/host.ts:BridgeStore.upsertChannelBinding#1",
+      "name": "upsertChannelBinding",
+      "kind": "Method",
+      "filePath": "src/lib/bridge/host.ts",
+      "line": 149,
+      "score": 0.54
+    },
+    {
+      "uid": "Method:scripts/claude-to-im-bridge/store.ts:JsonFileBridgeStore.upsertChannelBinding#1",
+      "name": "upsertChannelBinding",
+      "kind": "Method",
+      "filePath": "scripts/claude-to-im-bridge/store.ts",
+      "line": 135,
+      "score": 0.54
+    },
+    {
+      "uid": "Method:src/lib/bridge/examples/mock-host.ts:InMemoryStore.upsertChannelBinding#1",
+      "name": "upsertChannelBinding",
+      "kind": "Method",
+      "filePath": "src/lib/bridge/examples/mock-host.ts",
+      "line": 46,
+      "score": 0.54
+    }
+  ]
+}
+{
+  "target": {
+    "id": "Method:scripts/claude-to-im-bridge/store.ts:JsonFileBridgeStore.updateChannelBinding#2",
+    "name": "updateChannelBinding",
+    "type": "Method",
+    "filePath": "scripts/claude-to-im-bridge/store.ts"
+  },
+  "direction": "upstream",
+  "impactedCount": 0,
+  "risk": "LOW",
+  "summary": {
+    "direct": 0,
+    "processes_affected": 0,
+    "modules_affected": 0
+  },
+  "affected_processes": [],
+  "affected_modules": [],
+  "byDepth": {}
+}
+{
+  "target": {
+    "id": "Method:scripts/claude-to-im-bridge/store.ts:JsonFileBridgeStore.createSession#5",
+    "name": "createSession",
+    "type": "Method",
+    "filePath": "scripts/claude-to-im-bridge/store.ts"
+  },
+  "direction": "upstream",
+  "impactedCount": 0,
+  "risk": "LOW",
+  "summary": {
+    "direct": 0,
+    "processes_affected": 0,
+    "modules_affected": 0
+  },
+  "affected_processes": [],
+  "affected_modules": [],
+  "byDepth": {}
+}
+{
+  "target": {
+    "id": "Method:scripts/claude-to-im-bridge/store.ts:JsonFileBridgeStore.updateSessionProviderId#2",
+    "name": "updateSessionProviderId",
+    "type": "Method",
+    "filePath": "scripts/claude-to-im-bridge/store.ts"
+  },
+  "direction": "upstream",
+  "impactedCount": 0,
+  "risk": "LOW",
+  "summary": {
+    "direct": 0,
+    "processes_affected": 0,
+    "modules_affected": 0
+  },
+  "affected_processes": [],
+  "affected_modules": [],
+  "byDepth": {}
+}
+{
+  "target": {
+    "id": "Method:scripts/claude-to-im-bridge/store.ts:JsonFileBridgeStore.addMessage#4",
+    "name": "addMessage",
+    "type": "Method",
+    "filePath": "scripts/claude-to-im-bridge/store.ts"
+  },
+  "direction": "upstream",
+  "impactedCount": 0,
+  "risk": "LOW",
+  "summary": {
+    "direct": 0,
+    "processes_affected": 0,
+    "modules_affected": 0
+  },
+  "affected_processes": [],
+  "affected_modules": [],
+  "byDepth": {}
+}
+{
+  "target": {
+    "id": "Method:scripts/claude-to-im-bridge/store.ts:JsonFileBridgeStore.updateSdkSessionId#2",
+    "name": "updateSdkSessionId",
+    "type": "Method",
+    "filePath": "scripts/claude-to-im-bridge/store.ts"
+  },
+  "direction": "upstream",
+  "impactedCount": 0,
+  "risk": "LOW",
+  "summary": {
+    "direct": 0,
+    "processes_affected": 0,
+    "modules_affected": 0
+  },
+  "affected_processes": [],
+  "affected_modules": [],
+  "byDepth": {}
+}
+{
+  "target": {
+    "id": "Method:scripts/claude-to-im-bridge/store.ts:JsonFileBridgeStore.updateSessionModel#2",
+    "name": "updateSessionModel",
+    "type": "Method",
+    "filePath": "scripts/claude-to-im-bridge/store.ts"
+  },
+  "direction": "upstream",
+  "impactedCount": 0,
+  "risk": "LOW",
+  "summary": {
+    "direct": 0,
+    "processes_affected": 0,
+    "modules_affected": 0
+  },
+  "affected_processes": [],
+  "affected_modules": [],
+  "byDepth": {}
+}
+{
+  "target": {
+    "id": "Method:scripts/claude-to-im-bridge/store.ts:JsonFileBridgeStore.setChannelOffset#2",
+    "name": "setChannelOffset",
+    "type": "Method",
+    "filePath": "scripts/claude-to-im-bridge/store.ts"
+  },
+  "direction": "upstream",
+  "impactedCount": 0,
+  "risk": "LOW",
+  "summary": {
+    "direct": 0,
+    "processes_affected": 0,
+    "modules_affected": 0
+  },
+  "affected_processes": [],
+  "affected_modules": [],
+  "byDepth": {}
+}
+{
+  "target": {
+    "id": "Method:scripts/claude-to-im-bridge/store.ts:JsonFileBridgeStore.upsertChannelBinding#1",
+    "name": "upsertChannelBinding",
+    "type": "Method",
+    "filePath": "scripts/claude-to-im-bridge/store.ts"
+  },
+  "direction": "upstream",
+  "impactedCount": 0,
+  "risk": "LOW",
+  "summary": {
+    "direct": 0,
+    "processes_affected": 0,
+    "modules_affected": 0
+  },
+  "affected_processes": [],
+  "affected_modules": [],
+  "byDepth": {}
+}

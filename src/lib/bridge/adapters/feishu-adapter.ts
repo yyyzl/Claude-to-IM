@@ -22,7 +22,9 @@ import type {
   InboundMessage,
   OutboundMessage,
   SendResult,
+  ChannelAddress,
 } from '../types.js';
+import type { UserInputRequest } from '../host.js';
 import type { FileAttachment } from '../types.js';
 import type { ToolCallInfo } from '../types.js';
 import { BaseChannelAdapter, registerAdapterFactory } from '../channel-adapter.js';
@@ -33,10 +35,13 @@ import {
   hasComplexMarkdown,
   buildCardContent,
   buildPostContent,
-  buildStreamingContent,
+  buildToolProgressMarkdown,
   buildFinalCardJson,
   buildPermissionButtonCard,
+  buildUserInputCard,
   formatElapsed,
+  splitFeishuMarkdown,
+  feishuPayloadBytes,
 } from '../markdown/feishu.js';
 
 /** Max number of message_ids to keep for dedup. */
@@ -61,6 +66,12 @@ interface FeishuCardState {
   throttleTimer: ReturnType<typeof setTimeout> | null;
   nextFlushAt: number | null;
   inFlight: boolean;
+  operation: Promise<void> | null;
+  closing: boolean;
+  progress: string;
+  sentText: string;
+  sentProgress: string;
+  sentNotice: string;
   needsFlush: boolean;
   cooldownUntil: number;
   rateLimitBackoffMs: number;
@@ -71,7 +82,8 @@ interface FeishuCardState {
 
 /** Streaming card flush interval (ms). */
 const DEFAULT_CARD_THROTTLE_MS = 2_000;
-const MIN_CARD_THROTTLE_MS = 200;
+// 一轮最多两次写入，250ms 下限为收尾请求预留单卡 10 次/秒预算。
+const MIN_CARD_THROTTLE_MS = 250;
 const MAX_CARD_THROTTLE_MS = 30_000;
 
 /** Feishu request trigger frequency limit (rate-limit). */
@@ -79,6 +91,18 @@ const FEISHU_TRIGGER_RATE_LIMIT_CODE = 99991400;
 const DEFAULT_RATE_LIMIT_BACKOFF_MS = 5_000;
 const MAX_RATE_LIMIT_BACKOFF_MS = 60_000;
 const RATE_LIMIT_LOG_THROTTLE_MS = 60_000;
+const MAX_CARD_BYTES = 30_000;
+
+function assertFeishuSuccess(response: { code?: number; msg?: string }): void {
+  if (response.code !== undefined && response.code !== 0) {
+    throw Object.assign(new Error(`FeishuError(${response.code}): ${response.msg ?? '请求失败'}`), response);
+  }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown> : null;
+}
 
 function parsePositiveInt(raw: string | null): number | null {
   if (raw == null) return null;
@@ -211,6 +235,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
   private waiters: Array<(msg: InboundMessage | null) => void> = [];
   private wsClient: lark.WSClient | null = null;
   private restClient: lark.Client | null = null;
+  private incomingInFlight = new Set<string>();
+  private cardGenerations = new Map<string, object>();
+  private reactionMessages = new Map<string, string>();
   private seenMessageIds = new Map<string, boolean>();
   private botOpenId: string | null = null;
   /** All known bot IDs (open_id, user_id, union_id) for mention matching. */
@@ -227,7 +254,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
   private cardCreatePromises = new Map<string, Promise<boolean>>();
 
   /** Active workflow progress card state per chatId (independent of streaming cards). */
-  private workflowCards = new Map<string, { cardId: string; sequence: number }>();
+  private workflowCards = new Map<string, { cardId: string; sequence: number; operation: Promise<unknown>; closing: boolean }>();
 
   // ── Lifecycle ───────────────────────────────────────────────
 
@@ -252,6 +279,16 @@ export class FeishuAdapter extends BaseChannelAdapter {
       appId,
       appSecret,
       domain,
+      // 保留 SDK 的响应解包和 User-Agent，给本客户端的请求设有界超时。
+      // SDK 的默认实例拦截器返回 resp.data；Axios 原始声明未反映该解包。
+      httpInstance: new Proxy(lark.defaultHttpInstance as unknown as lark.Client['httpInstance'], {
+        get(target, property, receiver) {
+          if (property === 'request') {
+            return (options: Parameters<typeof target.request>[0]) => target.request({ ...options, timeout: 15_000 });
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      }),
     });
 
     // Resolve bot identity for @mention detection
@@ -326,16 +363,20 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
     // Clean up active cards
     for (const [, state] of this.activeCards) {
+      state.closing = true;
       if (state.throttleTimer) clearTimeout(state.throttleTimer);
     }
     this.activeCards.clear();
     this.cardCreatePromises.clear();
+    this.cardGenerations.clear();
     this.workflowCards.clear();
 
     // Clear state
     this.seenMessageIds.clear();
+    this.incomingInFlight.clear();
     this.lastIncomingMessageId.clear();
     this.typingReactions.clear();
+    this.reactionMessages.clear();
     for (const [, t] of this.processingNoticeTimers) {
       clearTimeout(t);
     }
@@ -377,6 +418,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
    * Called by bridge-manager via onMessageStart().
    */
   onMessageStart(chatId: string): void {
+    this.cleanupCard(chatId);
+    const generation = {};
+    this.cardGenerations.set(chatId, generation);
     const messageId = this.lastIncomingMessageId.get(chatId);
 
     // Clear previous fallback timer (if any)
@@ -398,6 +442,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     // 就回一条短提示，避免长时间无反馈导致用户不确定是否还在跑。
     if (messageId && this.restClient) {
       const timer = setTimeout(() => {
+        if (this.cardGenerations.get(chatId) !== generation) return;
         this.processingNoticeTimers.delete(chatId);
         if (this.activeCards.has(chatId) || this.typingReactions.has(chatId)) return;
 
@@ -416,7 +461,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     // 创建流式卡片（非关键路径）。若成功，取消兜底提示。
     if (messageId) {
       this.createStreamingCard(chatId, messageId)
-        .then((ok) => { if (ok) cancelProcessingNotice(); })
+        .then((ok) => { if (ok && this.cardGenerations.get(chatId) === generation) cancelProcessingNotice(); })
         .catch(() => {});
     }
 
@@ -428,6 +473,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
     }).then((res) => {
       const reactionId = (res as any)?.data?.reaction_id;
       if (reactionId) {
+        if (this.cardGenerations.get(chatId) !== generation) {
+          void this.restClient?.im.messageReaction.delete({ path: { message_id: messageId, reaction_id: reactionId } }).catch(() => {});
+          return;
+        }
+        this.reactionMessages.set(chatId, messageId);
         this.typingReactions.set(chatId, reactionId);
         cancelProcessingNotice();
       }
@@ -455,7 +505,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
     // Remove typing reaction (same as before)
     const reactionId = this.typingReactions.get(chatId);
-    const messageId = this.lastIncomingMessageId.get(chatId);
+    const messageId = this.reactionMessages.get(chatId);
+    this.reactionMessages.delete(chatId);
     if (!reactionId || !messageId || !this.restClient) return;
     this.typingReactions.delete(chatId);
     this.restClient.im.messageReaction.delete({
@@ -471,40 +522,55 @@ export class FeishuAdapter extends BaseChannelAdapter {
    * Must return within 3 seconds (Feishu timeout), so uses a 2.5s race.
    */
   private async handleCardAction(data: unknown): Promise<unknown> {
-    const FALLBACK_TOAST = { toast: { type: 'info' as const, content: '已收到' } };
-
-    try {
-      const event = data as any;
-      const value = event?.action?.value ?? {};
-      const callbackData = value.callback_data;
-      if (!callbackData) return FALLBACK_TOAST;
-
-      // Extract chat/user context
-      const chatId = event?.context?.open_chat_id || value.chatId || '';
-      const messageId = event?.context?.open_message_id || event?.open_message_id || '';
-      const userId = event?.operator?.open_id || event?.open_id || '';
-
-      if (!chatId) return FALLBACK_TOAST;
-
-      const callbackMsg: import('../types.js').InboundMessage = {
-        messageId: messageId || `card_action_${Date.now()}`,
-        address: {
-          channelType: 'feishu',
-          chatId,
-          userId,
-        },
-        text: '',
-        timestamp: Date.now(),
-        callbackData,
-        callbackMessageId: messageId,
-      };
-      this.enqueue(callbackMsg);
-
-      return { toast: { type: 'info' as const, content: '已收到，正在处理...' } };
-    } catch (err) {
-      console.error('[feishu-adapter] Card action handler error:', err instanceof Error ? err.message : err);
-      return FALLBACK_TOAST;
+    const event = asRecord(data);
+    const action = asRecord(event?.action);
+    const value = asRecord(action?.value);
+    const context = asRecord(event?.context);
+    const operator = asRecord(event?.operator);
+    // 来源只能取飞书回调上下文，不能信任按钮 value 中的 chatId。
+    const chatId = pickString(context?.open_chat_id);
+    const messageId = pickString(context?.open_message_id);
+    const userId = pickString(operator?.open_id);
+    if (!chatId || !messageId || !userId || !this.isAuthorized(userId, chatId)) {
+      return { toast: { type: 'error', content: '无权操作此卡片，或消息来源无效。' } };
     }
+    const callbackMsg: InboundMessage = {
+      messageId: `card_action_${crypto.randomUUID()}`,
+      address: { channelType: 'feishu', chatId, userId },
+      text: '', timestamp: Date.now(), callbackMessageId: messageId,
+    };
+    const requestId = pickString(value?.user_input_request_id);
+    if (requestId) {
+      const fields = asRecord(value?.fields);
+      const form = asRecord(action?.form_value);
+      if (!fields || !form || Object.keys(fields).length === 0 || Object.keys(fields).length > 50) {
+        return { toast: { type: 'error', content: '问答表单无效，请重新提交。' } };
+      }
+      const answers: Record<string, string[]> = Object.create(null);
+      for (const [name, rawId] of Object.entries(fields)) {
+        const id = pickString(rawId);
+        if (!id || !/^q\d+$/.test(name)) return { toast: { type: 'error', content: '问答字段无效。' } };
+        const raw = form[name];
+        const other = form[`${name}_other`];
+        if (raw !== undefined && typeof raw !== 'string' && !(Array.isArray(raw) && raw.every(item => typeof item === 'string'))) {
+          return { toast: { type: 'error', content: '答案格式无效。' } };
+        }
+        if (other !== undefined && typeof other !== 'string') return { toast: { type: 'error', content: '补充答案格式无效。' } };
+        const selected = (Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : []).filter(item => item.trim());
+        // 自由文本用于替代单选，或补充多选；核心 broker 继续校验问题和可选值。
+        const multiSelect = Array.isArray(value?.multi_select_fields) && value.multi_select_fields.includes(name);
+        answers[id] = typeof other === 'string' && other.trim()
+          ? multiSelect ? [...selected, other.trim()] : [other.trim()]
+          : selected;
+      }
+      callbackMsg.userInputResponse = { requestId, answers };
+    } else {
+      const callbackData = pickString(value?.callback_data);
+      if (!callbackData || !/^(perm|workflow):/.test(callbackData)) return { toast: { type: 'error', content: '不支持的卡片操作。' } };
+      callbackMsg.callbackData = callbackData;
+    }
+    this.enqueue(callbackMsg);
+    return { toast: { type: 'info', content: '已提交，正在校验请求状态。' } };
   }
 
   // ── Streaming Card (CardKit v1) ────────────────────────────────
@@ -520,13 +586,15 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const existing = this.cardCreatePromises.get(chatId);
     if (existing) return existing;
 
-    const promise = this._doCreateStreamingCard(chatId, replyToMessageId);
+    const generation = this.cardGenerations.get(chatId) ?? {};
+    this.cardGenerations.set(chatId, generation);
+    const promise = this._doCreateStreamingCard(chatId, replyToMessageId, generation);
     this.cardCreatePromises.set(chatId, promise);
-    promise.finally(() => this.cardCreatePromises.delete(chatId));
+    void promise.finally(() => { if (this.cardCreatePromises.get(chatId) === promise) this.cardCreatePromises.delete(chatId); });
     return promise;
   }
 
-  private async _doCreateStreamingCard(chatId: string, replyToMessageId?: string): Promise<boolean> {
+  private async _doCreateStreamingCard(chatId: string, replyToMessageId: string | undefined, generation: object): Promise<boolean> {
     if (!this.restClient) return false;
 
     try {
@@ -537,21 +605,25 @@ export class FeishuAdapter extends BaseChannelAdapter {
           streaming_mode: true,
           wide_screen_mode: true,
           summary: { content: '思考中...' },
+          streaming_config: { print_frequency_ms: { default: 70 }, print_step: { default: 1 }, print_strategy: 'fast' },
         },
         body: {
           elements: [{
             tag: 'markdown',
-            content: '💭 Thinking...',
+            content: ' ',
             text_align: 'left',
             text_size: 'normal',
             element_id: 'streaming_content',
-          }],
+          }, { tag: 'markdown', content: '💭 思考中…', element_id: 'tool_progress', text_size: 'notation' },
+          { tag: 'markdown', content: ' ', element_id: 'append_notice', text_size: 'notation' }],
         },
       };
 
-      const createResp = await (this.restClient as any).cardkit.v1.card.create({
+      const createResp = await this.restClient.cardkit.v1.card.create({
         data: { type: 'card_json', data: JSON.stringify(cardBody) },
       });
+      assertFeishuSuccess(createResp);
+      if (this.cardGenerations.get(chatId) !== generation) return false;
       const cardId = createResp?.data?.card_id;
       if (!cardId) {
         console.warn('[feishu-adapter] Card create returned no card_id');
@@ -577,6 +649,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
         });
       }
 
+      assertFeishuSuccess(msgResp);
+      if (this.cardGenerations.get(chatId) !== generation) return false;
       const messageId = msgResp?.data?.message_id;
       if (!messageId) {
         console.warn('[feishu-adapter] Card message send returned no message_id');
@@ -596,6 +670,12 @@ export class FeishuAdapter extends BaseChannelAdapter {
         throttleTimer: null,
         nextFlushAt: null,
         inFlight: false,
+        operation: null,
+        closing: false,
+        progress: '',
+        sentText: '',
+        sentProgress: '💭 思考中…',
+        sentNotice: '',
         needsFlush: false,
         cooldownUntil: 0,
         rateLimitBackoffMs: DEFAULT_RATE_LIMIT_BACKOFF_MS,
@@ -619,13 +699,12 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const raw = store.getSetting('bridge_feishu_stream_card_throttle_ms');
     const n = parsePositiveInt(raw);
     if (n == null) return DEFAULT_CARD_THROTTLE_MS;
-    if (n === 0) return 0;
     return clamp(n, MIN_CARD_THROTTLE_MS, MAX_CARD_THROTTLE_MS);
   }
 
   private scheduleCardUpdate(chatId: string): void {
     const state = this.activeCards.get(chatId);
-    if (!state) return;
+    if (!state || state.closing) return;
 
     if (state.inFlight) {
       state.needsFlush = true;
@@ -656,22 +735,25 @@ export class FeishuAdapter extends BaseChannelAdapter {
     state.nextFlushAt = earliest;
     state.throttleTimer = setTimeout(() => {
       const current = this.activeCards.get(chatId);
-      if (!current) return;
+      if (current !== state || state.closing) return;
       current.throttleTimer = null;
       current.nextFlushAt = null;
       this.flushCardUpdate(chatId);
     }, Math.max(0, earliest - now));
+    state.throttleTimer.unref();
   }
 
   private updateCardContent(chatId: string, text: string): void {
     const state = this.activeCards.get(chatId);
-    if (!state || !this.restClient) return;
+    if (!state || state.closing || !this.restClient) return;
 
     // Clear thinking state once text arrives
     if (state.thinking && text.trim()) {
       state.thinking = false;
     }
-    state.pendingText = text;
+    const parts = splitFeishuMarkdown(text, 20_000);
+    state.pendingText = parts[0] ?? '';
+    if (parts.length > 1) state.appendNotice = '正文较长，完整回答将在结束后分段发送。';
     this.scheduleCardUpdate(chatId);
   }
 
@@ -680,73 +762,69 @@ export class FeishuAdapter extends BaseChannelAdapter {
    */
   private flushCardUpdate(chatId: string): void {
     const state = this.activeCards.get(chatId);
-    if (!state || !this.restClient) return;
+    const client = this.restClient;
+    if (!state || !client || state.closing) return;
+    if (state.inFlight) { state.needsFlush = true; return; }
+    if (state.cooldownUntil > Date.now()) { this.scheduleCardUpdate(chatId); return; }
 
-    if (state.inFlight) {
-      state.needsFlush = true;
-      return;
-    }
+    const text = state.pendingText || '';
+    const progress = [state.progress, buildToolProgressMarkdown(state.toolCalls)].filter(Boolean).join('\n');
+    const notice = state.appendNotice || '';
+    if (text === state.sentText && progress === state.sentProgress && notice === state.sentNotice) return;
+    // 超长正文留给最终分块投递，不截断或谎报已完成。
+    if (Buffer.byteLength(JSON.stringify({ text, progress, notice }), 'utf8') > MAX_CARD_BYTES - 2_000) return;
 
-    const now = Date.now();
-    if (state.cooldownUntil > now) {
-      this.scheduleCardUpdate(chatId);
-      return;
-    }
-
-    let content = buildStreamingContent(state.pendingText || '', state.toolCalls);
-    // 追加消息提示：显示在流式内容底部
-    if (state.appendNotice) {
-      content = content + '\n\n---\n' + state.appendNotice;
-    }
-
-    state.sequence++;
-    const seq = state.sequence;
-    const cardId = state.cardId;
-
-    // Fire-and-forget — streaming updates are non-critical
     state.inFlight = true;
     state.needsFlush = false;
-    (this.restClient as any).cardkit.v1.cardElement.content({
-      path: { card_id: cardId, element_id: 'streaming_content' },
-      data: { content, sequence: seq },
-    }).then(() => {
-      state.lastUpdateAt = Date.now();
-      state.cooldownUntil = 0;
-      state.rateLimitBackoffMs = DEFAULT_RATE_LIMIT_BACKOFF_MS;
-    }).catch((err: unknown) => {
-      const payload = findFeishuApiErrorPayload(err);
-      const code = payload?.code ?? null;
-      const msg = payload?.msg ?? null;
-      const logId = payload?.log_id ?? null;
-
-      if (code === FEISHU_TRIGGER_RATE_LIMIT_CODE) {
-        const base = state.rateLimitBackoffMs > 0 ? state.rateLimitBackoffMs : DEFAULT_RATE_LIMIT_BACKOFF_MS;
-        const next = clamp(base * 2, DEFAULT_RATE_LIMIT_BACKOFF_MS, MAX_RATE_LIMIT_BACKOFF_MS);
-        state.rateLimitBackoffMs = next;
-        state.cooldownUntil = Date.now() + next;
-        // 强制触发一次后续 flush（由 cooldown + throttle 共同控制），避免卡片长时间停在旧内容。
-        state.needsFlush = true;
-
-        const ts = Date.now();
-        if (ts - state.lastRateLimitLogAt >= RATE_LIMIT_LOG_THROTTLE_MS) {
-          state.lastRateLimitLogAt = ts;
-          const seconds = Math.max(1, Math.ceil(next / 1000));
-          const extra = logId ? ` log_id=${logId}` : '';
-          console.warn(`[feishu-adapter] cardElement.content 触发频控（${code}），将退避 ${seconds}s。${extra}`);
+    state.operation = (async () => {
+      try {
+        if (text !== state.sentText && text) {
+          assertFeishuSuccess(await client.cardkit.v1.cardElement.content({
+            path: { card_id: state.cardId, element_id: 'streaming_content' },
+            data: { content: text, sequence: ++state.sequence },
+          }));
+          state.sentText = text;
         }
-      } else if (code != null || msg != null) {
-        const extra = logId ? ` log_id=${logId}` : '';
-        console.warn(`[feishu-adapter] cardElement.content failed: code=${code ?? 'unknown'}, msg=${msg ?? 'unknown'}.${extra}`);
-      } else {
-        console.warn(`[feishu-adapter] cardElement.content failed: ${toErrorMessage(err)}`);
+        // 收尾已开始时无需再写进度，最终卡会替换所有元素。
+        if (state.closing) return;
+        const actions: Array<Record<string, unknown>> = [];
+        if (progress !== state.sentProgress) actions.push({ action: 'partial_update_element', params: { element_id: 'tool_progress', partial_element: { content: progress || ' ' } } });
+        if (notice !== state.sentNotice) actions.push({ action: 'partial_update_element', params: { element_id: 'append_notice', partial_element: { content: notice || ' ' } } });
+        if (actions.length) {
+          assertFeishuSuccess(await client.cardkit.v1.card.batchUpdate({
+            path: { card_id: state.cardId },
+            data: { actions: JSON.stringify(actions), sequence: ++state.sequence },
+          }));
+          state.sentProgress = progress;
+          state.sentNotice = notice;
+        }
+        state.cooldownUntil = 0;
+        state.rateLimitBackoffMs = DEFAULT_RATE_LIMIT_BACKOFF_MS;
+      } catch (err) {
+        const payload = findFeishuApiErrorPayload(err);
+        if (payload?.code === FEISHU_TRIGGER_RATE_LIMIT_CODE) {
+          const backoff = state.rateLimitBackoffMs;
+          state.cooldownUntil = Date.now() + backoff;
+          state.rateLimitBackoffMs = Math.min(backoff * 2, MAX_RATE_LIMIT_BACKOFF_MS);
+          state.needsFlush = true;
+          if (Date.now() - state.lastRateLimitLogAt >= RATE_LIMIT_LOG_THROTTLE_MS) {
+            state.lastRateLimitLogAt = Date.now();
+            console.warn(`[feishu-adapter] 卡片更新频控，退避 ${backoff}ms`);
+          }
+        } else {
+          console.warn(`[feishu-adapter] 卡片更新失败：${toErrorMessage(err)}`);
+        }
+      } finally {
+        state.lastUpdateAt = Date.now();
+        state.inFlight = false;
+        state.operation = null;
+        // 旧卡片的异步回调不得调度同一聊天后续新卡。
+        if (!state.closing && this.activeCards.get(chatId) === state && state.needsFlush) {
+          state.needsFlush = false;
+          this.scheduleCardUpdate(chatId);
+        }
       }
-    }).finally(() => {
-      state.inFlight = false;
-      if (state.needsFlush) {
-        state.needsFlush = false;
-        this.scheduleCardUpdate(chatId);
-      }
-    });
+    })();
   }
 
   /**
@@ -754,172 +832,84 @@ export class FeishuAdapter extends BaseChannelAdapter {
    */
   private updateToolProgress(chatId: string, tools: ToolCallInfo[]): void {
     const state = this.activeCards.get(chatId);
-    if (!state) return;
+    if (!state || state.closing) return;
     state.toolCalls = tools;
-    // Trigger a content flush with current text + updated tools
-    this.updateCardContent(chatId, state.pendingText || '');
+    this.scheduleCardUpdate(chatId);
   }
 
-  /**
-   * Finalize the streaming card: close streaming mode, update with final content + footer.
-   *
-   * Strategy:
-   * 1. Wait for any in-flight cardElement.content request to finish (avoid sequence conflicts).
-   * 2. Try card.update (full replacement) up to 3 times with exponential back-off.
-   * 3. If card.update keeps failing, fall back to cardElement.content to at least strip tool info.
-   */
+  /** 先禁止新更新，再等待已发请求，最后提交完成卡。 */
   private async finalizeCard(
     chatId: string,
     status: 'completed' | 'interrupted' | 'error',
     responseText: string,
     extras?: { ctx?: string },
   ): Promise<boolean> {
-    // Wait for in-flight card creation to complete before finalizing
+    const generation = this.cardGenerations.get(chatId);
+    let state = this.activeCards.get(chatId);
     const pending = this.cardCreatePromises.get(chatId);
-    if (pending) {
-      try { await pending; } catch { /* creation failed — no card to finalize */ }
-    }
+    if (pending) { try { await pending; } catch { /* 创建失败交回普通投递 */ } }
+    if (this.cardGenerations.get(chatId) !== generation) return false;
+    state ??= this.activeCards.get(chatId);
+    const client = this.restClient;
+    if (!state || !client || state.closing) return false;
+    state.closing = true;
+    state.needsFlush = false;
+    if (state.throttleTimer) clearTimeout(state.throttleTimer);
+    state.throttleTimer = null;
+    state.nextFlushAt = null;
+    if (state.operation) await state.operation;
+    if (this.cardGenerations.get(chatId) !== generation || this.activeCards.get(chatId) !== state) return false;
 
-    const state = this.activeCards.get(chatId);
-    if (!state || !this.restClient) return false;
-
-    // Clear any pending throttle timer
-    if (state.throttleTimer) {
-      clearTimeout(state.throttleTimer);
-      state.throttleTimer = null;
-    }
-
-    // ── Wait for in-flight cardElement.content to settle ──────────
-    // flushCardUpdate is fire-and-forget; if one is still in-flight its sequence
-    // might conflict with our card.update call.  Wait up to 3 s.
-    if (state.inFlight) {
-      const deadline = Date.now() + 3_000;
-      await new Promise<void>((resolve) => {
-        const tick = setInterval(() => {
-          if (!state.inFlight || Date.now() >= deadline) {
-            clearInterval(tick);
-            resolve();
-          }
-        }, 100);
-      });
-    }
-
+    const labels = { completed: '✅ 已完成', interrupted: '⚠️ 已中断', error: '❌ 出错' };
+    const elapsed = formatElapsed(Date.now() - state.startTime);
+    const finalCardJson = buildFinalCardJson(responseText, [], { status: labels[status], elapsed, ...extras });
+    const summary = `${labels[status]} ${responseText.replace(/\s+/g, ' ').trim()}`.slice(0, 120);
+    let updated = false;
     try {
-      // Build and apply final card
-      const statusLabels: Record<string, string> = {
-        completed: '✅ Completed',
-        interrupted: '⚠️ Interrupted',
-        error: '❌ Error',
-      };
-      const elapsedMs = Date.now() - state.startTime;
-      const elapsed = formatElapsed(elapsedMs);
-      const footer: { status: string; elapsed: string; ctx?: string } = {
-        status: statusLabels[status] || status,
-        elapsed,
-      };
-      if (extras?.ctx) footer.ctx = extras.ctx;
-
-      // Pass empty tools array — tool progress is only useful during streaming;
-      // the final card should show clean text + footer only.
-      const finalCardJson = buildFinalCardJson(responseText, [], footer);
-
-      // ── Retry card.update up to 3 times with exponential back-off ──
-      const MAX_ATTEMPTS = 3;
-      let cardUpdated = false;
-      let lastErr: unknown;
-
-      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-        try {
-          state.sequence++;
-          await (this.restClient as any).cardkit.v1.card.update({
-            path: { card_id: state.cardId },
-            data: { card: { type: 'card_json', data: finalCardJson }, sequence: state.sequence },
-          });
-          cardUpdated = true;
-          break;
-        } catch (err) {
-          lastErr = err;
-          if (attempt < MAX_ATTEMPTS) {
-            const backoff = attempt * 2_000; // 2 s, 4 s
-            console.warn(
-              `[feishu-adapter] card.update attempt ${attempt}/${MAX_ATTEMPTS} failed, retrying in ${backoff}ms:`,
-              err instanceof Error ? err.message : err,
-            );
-            await new Promise((r) => setTimeout(r, backoff));
-          }
-        }
-      }
-
-      if (!cardUpdated) {
-        console.warn(
-          `[feishu-adapter] card.update failed after ${MAX_ATTEMPTS} attempts, falling back to cardElement.content:`,
-          lastErr instanceof Error ? lastErr.message : lastErr,
-        );
-
-        // ── Fallback: strip tool info via element-level update ──────
-        // The card stays in streaming_mode but at least the visible content
-        // won't contain tool progress lines.
-        try {
-          const cleanContent = buildStreamingContent(responseText || '', []);
-          state.sequence++;
-          await (this.restClient as any).cardkit.v1.cardElement.content({
-            path: { card_id: state.cardId, element_id: 'streaming_content' },
-            data: { content: cleanContent, sequence: state.sequence },
-          });
-          console.log('[feishu-adapter] Fallback cardElement.content succeeded — tool info stripped');
-        } catch (fallbackErr) {
-          console.warn(
-            '[feishu-adapter] Fallback cardElement.content also failed:',
-            fallbackErr instanceof Error ? fallbackErr.message : fallbackErr,
-          );
-        }
-      }
-
-      // 完成态额外发一条新消息，用于触发未读/推送提醒（卡片更新本身通常不会提醒）。
-      // 可通过 bridge_feishu_stream_card_notify_on_complete=false 禁用。
-      try {
-        const { store } = getBridgeContext();
-        const notifyEnabled = store.getSetting('bridge_feishu_stream_card_notify_on_complete') !== 'false';
-        const shouldNotify = notifyEnabled && (status === 'completed' || (status === 'error' && responseText.trim()));
-
-        if (shouldNotify) {
-          const noticeLabels: Record<string, string> = {
-            completed: '任务已完成',
-            error: '任务执行出错',
-            interrupted: '任务已中断',
-          };
-          const noticeText = `${noticeLabels[status] || status}（耗时 ${elapsed}）`;
-
-          await this.restClient.im.message.create({
-            params: { receive_id_type: 'chat_id' },
-            data: {
-              receive_id: chatId,
-              msg_type: 'text',
-              content: JSON.stringify({ text: noticeText }),
-            },
-          });
-        }
-      } catch (err) {
-        console.warn('[feishu-adapter] Completion notice failed:', err instanceof Error ? err.message : err);
-      }
-
-      console.log(`[feishu-adapter] Card finalized: cardId=${state.cardId}, status=${status}, elapsed=${elapsed}, updated=${cardUpdated}`);
-      return cardUpdated;
+      if (Buffer.byteLength(JSON.stringify({ card: { type: 'card_json', data: finalCardJson }, sequence: state.sequence + 1 }), 'utf8') > MAX_CARD_BYTES) throw new Error('最终卡片超过 30KB，转交完整回答投递');
+      assertFeishuSuccess(await client.cardkit.v1.card.update({
+        path: { card_id: state.cardId },
+        data: { card: { type: 'card_json', data: finalCardJson }, sequence: ++state.sequence },
+      }));
+      updated = true;
     } catch (err) {
-      console.warn('[feishu-adapter] Card finalize failed:', err instanceof Error ? err.message : err);
-      return false;
+      console.warn(`[feishu-adapter] 完成卡更新失败：${toErrorMessage(err)}`);
+      // 即使最终正文投递失败也结束流式状态；返回 false 让核心发送完整回答。
+      try {
+        if (this.cardGenerations.get(chatId) !== generation) return false;
+        assertFeishuSuccess(await client.cardkit.v1.card.settings({
+          path: { card_id: state.cardId },
+          data: { settings: JSON.stringify({ config: { streaming_mode: false, summary: { content: summary } } }), sequence: ++state.sequence },
+        }));
+      } catch (closeError) {
+        console.warn(`[feishu-adapter] 关闭流式卡失败：${toErrorMessage(closeError)}`);
+      }
     } finally {
-      this.activeCards.delete(chatId);
+      if (this.activeCards.get(chatId) === state) this.activeCards.delete(chatId);
     }
+    const notifyEnabled = getBridgeContext().store.getSetting('bridge_feishu_stream_card_notify_on_complete') !== 'false';
+    if (this.cardGenerations.get(chatId) === generation && updated && notifyEnabled && (status === 'completed' || (status === 'error' && responseText.trim()))) {
+      try {
+        const notice = status === 'completed' ? '任务已完成' : '任务执行出错';
+        assertFeishuSuccess(await client.im.message.create({
+          params: { receive_id_type: 'chat_id' },
+          data: { receive_id: chatId, msg_type: 'text', content: JSON.stringify({ text: `${notice}（耗时 ${elapsed}）` }) },
+        }));
+      } catch (err) { console.warn(`[feishu-adapter] 完成通知失败：${toErrorMessage(err)}`); }
+    }
+    return updated;
   }
 
   /**
    * Clean up card state without finalizing (e.g. on unexpected errors).
    */
   private cleanupCard(chatId: string): void {
+    this.cardGenerations.delete(chatId);
     this.cardCreatePromises.delete(chatId);
     const state = this.activeCards.get(chatId);
     if (!state) return;
+    state.closing = true;
+    state.needsFlush = false;
     if (state.throttleTimer) {
       clearTimeout(state.throttleTimer);
     }
@@ -942,7 +932,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
    */
   notifyAppend(chatId: string, count: number, previewText: string): boolean {
     const state = this.activeCards.get(chatId);
-    if (!state) return false;
+    if (!state || state.closing) return false;
     const preview = previewText.length > 60
       ? previewText.slice(0, 57) + '...'
       : previewText;
@@ -962,8 +952,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (!this.activeCards.has(chatId)) {
       // Card should have been created by onMessageStart, but create lazily if not
       const messageId = this.lastIncomingMessageId.get(chatId);
-      this.createStreamingCard(chatId, messageId).then((ok) => {
-        if (ok) this.updateCardContent(chatId, fullText);
+      const creating = this.createStreamingCard(chatId, messageId);
+      const generation = this.cardGenerations.get(chatId);
+      creating.then((ok) => {
+        if (ok && this.cardGenerations.get(chatId) === generation) this.updateCardContent(chatId, fullText);
       }).catch(() => {});
       return;
     }
@@ -972,6 +964,45 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
   onToolEvent(chatId: string, tools: ToolCallInfo[]): void {
     this.updateToolProgress(chatId, tools);
+  }
+
+  onProgress(chatId: string, text: string): void {
+    const state = this.activeCards.get(chatId);
+    if (!state) {
+      const creating = this.createStreamingCard(chatId, this.lastIncomingMessageId.get(chatId));
+      const generation = this.cardGenerations.get(chatId);
+      void creating.then(ok => {
+        if (ok && this.cardGenerations.get(chatId) === generation) this.onProgress(chatId, text);
+      });
+      return;
+    }
+    if (state.closing) return;
+    state.progress = text;
+    this.scheduleCardUpdate(chatId);
+  }
+
+  async sendUserInputRequest(address: ChannelAddress, request: UserInputRequest, replyToMessageId?: string): Promise<SendResult> {
+    if (request.questions.some(question => question.isSecret)) {
+      return { ok: false, error: '此聊天不支持安全输入，请在本地完成。' };
+    }
+    if (!this.restClient) return { ok: false, error: 'Feishu client not initialized' };
+    try {
+      const content = buildUserInputCard(request);
+      if (Buffer.byteLength(content, 'utf8') > MAX_CARD_BYTES) return { ok: false, error: '问答卡片超过大小限制，请在本地完成。' };
+      const response = replyToMessageId
+        ? await this.restClient.im.message.reply({ path: { message_id: replyToMessageId }, data: { msg_type: 'interactive', content } })
+        : await this.restClient.im.message.create({ params: { receive_id_type: 'chat_id' }, data: { receive_id: address.chatId, msg_type: 'interactive', content } });
+      assertFeishuSuccess(response);
+      return response.data?.message_id ? { ok: true, messageId: response.data.message_id } : { ok: false, error: '问答卡片发送后缺少消息 ID' };
+    } catch (err) {
+      return { ok: false, error: toErrorMessage(err) };
+    }
+  }
+
+  async updateInteractionMessage(address: ChannelAddress, messageId: string, status: 'allowed' | 'denied' | 'expired' | 'failed' | 'answered'): Promise<void> {
+    if (!this.restClient) throw new Error('Feishu client not initialized');
+    const labels = { allowed: '✅ 已允许', denied: '⛔ 已拒绝或取消', expired: '⌛ 请求已过期', failed: '❌ 请求投递失败，已拒绝', answered: '✅ 答案已提交' };
+    assertFeishuSuccess(await this.restClient.im.message.patch({ path: { message_id: messageId }, data: { content: buildCardContent(labels[status]) } }));
   }
 
   async onStreamEnd(
@@ -1000,9 +1031,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
     try {
       // Step 1: Create card via CardKit v1
-      const createResp = await (this.restClient as any).cardkit.v1.card.create({
+      const createResp = await this.restClient.cardkit.v1.card.create({
         data: { type: 'card_json', data: cardJson },
       });
+      assertFeishuSuccess(createResp);
       const cardId = createResp?.data?.card_id;
       if (!cardId) {
         console.warn('[feishu-adapter] Workflow card create returned no card_id');
@@ -1024,12 +1056,13 @@ export class FeishuAdapter extends BaseChannelAdapter {
         });
       }
 
+      assertFeishuSuccess(msgResp);
       if (!msgResp?.data?.message_id) {
         console.warn('[feishu-adapter] Workflow card message send returned no message_id');
         return null;
       }
 
-      this.workflowCards.set(chatId, { cardId, sequence: 0 });
+      this.workflowCards.set(chatId, { cardId, sequence: 0, operation: Promise.resolve(), closing: false });
       console.log(`[feishu-adapter] Workflow card created: cardId=${cardId}`);
       return cardId;
     } catch (err) {
@@ -1043,26 +1076,21 @@ export class FeishuAdapter extends BaseChannelAdapter {
    */
   async updateWorkflowCard(chatId: string, cardJson: string): Promise<boolean> {
     const state = this.workflowCards.get(chatId);
-    if (!state || !this.restClient) return false;
-
-    const nextSeq = state.sequence + 1;
-    try {
-      await (this.restClient as any).cardkit.v1.card.update({
+    const client = this.restClient;
+    if (!state || !client || state.closing) return false;
+    const operation = state.operation.then(async () => {
+      if (state.closing) return false;
+      assertFeishuSuccess(await client.cardkit.v1.card.update({
         path: { card_id: state.cardId },
-        data: { card: { type: 'card_json', data: cardJson }, sequence: nextSeq },
-      });
-      state.sequence = nextSeq; // only bump on success
+        data: { card: { type: 'card_json', data: cardJson }, sequence: ++state.sequence },
+      }));
       return true;
-    } catch (err) {
-      const payload = findFeishuApiErrorPayload(err);
-      const code = payload?.code ?? null;
-      if (code === FEISHU_TRIGGER_RATE_LIMIT_CODE) {
-        console.warn('[feishu-adapter] Workflow card update rate-limited, will retry on next event');
-      } else {
-        console.warn('[feishu-adapter] Workflow card update failed:', err instanceof Error ? err.message : err);
-      }
+    }).catch((err: unknown) => {
+      console.warn(`[feishu-adapter] 工作流卡更新失败：${toErrorMessage(err)}`);
       return false;
-    }
+    });
+    state.operation = operation;
+    return operation;
   }
 
   /**
@@ -1070,21 +1098,22 @@ export class FeishuAdapter extends BaseChannelAdapter {
    */
   async finalizeWorkflowCard(chatId: string, cardJson: string): Promise<boolean> {
     const state = this.workflowCards.get(chatId);
-    if (!state || !this.restClient) return false;
-
+    const client = this.restClient;
+    if (!state || !client || state.closing) return false;
+    state.closing = true;
+    await state.operation;
     try {
-      const nextSeq = state.sequence + 1;
-      await (this.restClient as any).cardkit.v1.card.update({
+      assertFeishuSuccess(await client.cardkit.v1.card.update({
         path: { card_id: state.cardId },
-        data: { card: { type: 'card_json', data: cardJson }, sequence: nextSeq },
-      });
+        data: { card: { type: 'card_json', data: cardJson }, sequence: ++state.sequence },
+      }));
       console.log(`[feishu-adapter] Workflow card finalized: cardId=${state.cardId}`);
       return true;
     } catch (err) {
       console.warn('[feishu-adapter] Workflow card finalize failed:', err instanceof Error ? err.message : err);
       return false;
     } finally {
-      this.workflowCards.delete(chatId);
+      if (this.workflowCards.get(chatId) === state) this.workflowCards.delete(chatId);
     }
   }
 
@@ -1111,6 +1140,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (message.inlineButtons && message.inlineButtons.length > 0) {
       return this.sendPermissionCard(message.address.chatId, text, message.inlineButtons);
     }
+
+    if (feishuPayloadBytes(text) > MAX_CARD_BYTES) return { ok: false, httpStatus: 413, error: '飞书消息超过字节预算，请通过分块投递发送' };
 
     // Rendering strategy (aligned with Openclaw):
     // - Code blocks / tables → interactive card (schema 2.0 markdown)
@@ -1210,127 +1241,38 @@ export class FeishuAdapter extends BaseChannelAdapter {
       return { ok: false, error: 'Feishu client not initialized' };
     }
 
-    // Convert HTML text from permission-broker to Feishu markdown.
-    // permission-broker sends HTML (<b>, <code>, <pre>, &amp; entities)
-    // but Feishu card markdown elements don't understand HTML.
-    const mdText = text
-      .replace(/<b>(.*?)<\/b>/gi, '**$1**')
-      .replace(/<code>(.*?)<\/code>/gi, '`$1`')
-      .replace(/<pre>([\s\S]*?)<\/pre>/gi, '```\n$1\n```')
-      .replace(/<[^>]+>/g, '')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&amp;/g, '&')
-      .replace(/&quot;/g, '"');
-
-    // Extract permissionRequestId from the first button's callback data
-    const firstBtn = inlineButtons.flat()[0];
-    const permId = firstBtn?.callbackData?.startsWith('perm:')
-      ? firstBtn.callbackData.split(':').slice(2).join(':')
-      : '';
-
-    if (permId) {
-      // Use real card action buttons
-      const cardJson = buildPermissionButtonCard(mdText, permId, chatId);
-
+    const mdText = htmlToFeishuMarkdown(text);
+    const firstButton = inlineButtons.flat()[0];
+    const permissionId = firstButton?.callbackData.startsWith('perm:')
+      ? firstButton.callbackData.split(':').slice(2).join(':') : '';
+    if (permissionId) {
       try {
-        const res = await this.restClient.im.message.create({
+        const response = await this.restClient.im.message.create({
           params: { receive_id_type: 'chat_id' },
-          data: {
-            receive_id: chatId,
-            msg_type: 'interactive',
-            content: cardJson,
-          },
+          data: { receive_id: chatId, msg_type: 'interactive', content: buildPermissionButtonCard(mdText, permissionId, chatId) },
         });
-        if (res?.data?.message_id) {
-          return { ok: true, messageId: res.data.message_id };
-        }
-        console.warn('[feishu-adapter] Permission button card send failed:', JSON.stringify({ code: (res as any)?.code, msg: res?.msg }));
+        assertFeishuSuccess(response);
+        if (response.data?.message_id) return { ok: true, messageId: response.data.message_id };
       } catch (err) {
-        console.warn('[feishu-adapter] Permission button card error, falling back to text:', err instanceof Error ? err.message : err);
+        console.warn(`[feishu-adapter] 审批卡发送失败，改用文本命令：${toErrorMessage(err)}`);
       }
     }
-
-    // Fallback: text-based permission commands (same as before, for backward compat)
-    const permCommands = inlineButtons.flat().map((btn) => {
-      if (btn.callbackData.startsWith('perm:')) {
-        const parts = btn.callbackData.split(':');
-        const action = parts[1];
-        const id = parts.slice(2).join(':');
-        return `\`/perm ${action} ${id}\``;
-      }
-      return btn.text;
+    // 卡片能力不可用时直接发送等价命令，避免重复尝试同一类卡片。
+    const commands = inlineButtons.flat().map(button => {
+      const [prefix, action, ...id] = button.callbackData.split(':');
+      return prefix === 'perm' ? `${button.text}：/perm ${action} ${id.join(':')}` : button.text;
     });
-
-    const cardContent = [
-      mdText,
-      '',
-      '---',
-      '**Reply:**',
-      '`1` - Allow once',
-      '`2` - Allow session',
-      '`3` - Deny',
-      '',
-      'Or use full commands:',
-      ...permCommands,
-    ].join('\n');
-
-    const cardJson = JSON.stringify({
-      schema: '2.0',
-      config: { wide_screen_mode: true },
-      header: {
-        template: 'orange',
-        title: { tag: 'plain_text', content: '🔐 Permission Required' },
-      },
-      body: {
-        elements: [
-          { tag: 'markdown', content: cardContent },
-        ],
-      },
-    });
-
     try {
-      const res = await this.restClient.im.message.create({
+      const response = await this.restClient.im.message.create({
         params: { receive_id_type: 'chat_id' },
-        data: {
-          receive_id: chatId,
-          msg_type: 'interactive',
-          content: cardJson,
-        },
+        data: { receive_id: chatId, msg_type: 'text', content: JSON.stringify({ text: [mdText, '', ...commands].join('\n') }) },
       });
-      if (res?.data?.message_id) {
-        return { ok: true, messageId: res.data.message_id };
-      }
-      console.warn('[feishu-adapter] Fallback card also failed:', res?.msg);
+      assertFeishuSuccess(response);
+      return response.data?.message_id
+        ? { ok: true, messageId: response.data.message_id }
+        : { ok: false, error: '审批消息发送后缺少消息 ID' };
     } catch (err) {
-      console.warn('[feishu-adapter] Fallback card error, sending plain text:', err instanceof Error ? err.message : err);
-    }
-
-    // Last resort: plain text message (works even without card permissions)
-    const plainText = [
-      mdText,
-      '',
-      '---',
-      'Reply: 1 = Allow once | 2 = Allow session | 3 = Deny',
-      '',
-      ...permCommands,
-    ].join('\n');
-
-    try {
-      const res = await this.restClient.im.message.create({
-        params: { receive_id_type: 'chat_id' },
-        data: {
-          receive_id: chatId,
-          msg_type: 'text',
-          content: JSON.stringify({ text: plainText }),
-        },
-      });
-      if (res?.data?.message_id) {
-        return { ok: true, messageId: res.data.message_id };
-      }
-      return { ok: false, error: res?.msg || 'Send failed' };
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : 'Send failed' };
+      return { ok: false, error: toErrorMessage(err) };
     }
   }
 
@@ -1369,14 +1311,18 @@ export class FeishuAdapter extends BaseChannelAdapter {
   // ── Incoming event handler ──────────────────────────────────
 
   private async handleIncomingEvent(data: FeishuMessageEventData): Promise<void> {
+    const id = data.message.message_id;
+    if (this.seenMessageIds.has(id) || this.incomingInFlight.has(id)) return;
+    this.incomingInFlight.add(id);
     try {
       await this.processIncomingEvent(data);
+      this.addToDedup(id);
     } catch (err) {
       console.error(
         '[feishu-adapter] Unhandled error in event handler:',
         err instanceof Error ? err.stack || err.message : err,
       );
-    }
+    } finally { this.incomingInFlight.delete(id); }
   }
 
   private async processIncomingEvent(data: FeishuMessageEventData): Promise<void> {
@@ -1388,7 +1334,6 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
     // Dedup by message_id
     if (this.seenMessageIds.has(msg.message_id)) return;
-    this.addToDedup(msg.message_id);
 
     const chatId = msg.chat_id;
     // [P2] Complete sender ID fallback chain: open_id > user_id > union_id
@@ -1451,65 +1396,26 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
     if (messageType === 'text') {
       text = this.parseTextContent(msg.content);
-    } else if (messageType === 'image') {
-      // [P1] Download image with failure fallback
-      console.log('[feishu-adapter] Image message received, content:', msg.content);
-      const fileKey = this.extractFileKey(msg.content);
-      console.log('[feishu-adapter] Extracted fileKey:', fileKey);
-      if (fileKey) {
-        const attachment = await this.downloadResource(msg.message_id, fileKey, 'image');
-        if (attachment) {
-          attachments.push(attachment);
-        } else {
-          text = '[image download failed]';
-          try {
-            getBridgeContext().store.insertAuditLog({
-              channelType: 'feishu',
-              chatId,
-              direction: 'inbound',
-              messageId: msg.message_id,
-              summary: `[ERROR] Image download failed for key: ${fileKey}`,
-            });
-          } catch { /* best effort */ }
-        }
-      }
-    } else if (messageType === 'file' || messageType === 'audio' || messageType === 'video' || messageType === 'media') {
-      // [P2] Support file/audio/video/media downloads
-      const fileKey = this.extractFileKey(msg.content);
-      if (fileKey) {
-        const resourceType = messageType === 'audio' || messageType === 'video' || messageType === 'media'
-          ? messageType
-          : 'file';
-        const attachment = await this.downloadResource(msg.message_id, fileKey, resourceType);
-        if (attachment) {
-          attachments.push(attachment);
-        } else {
-          text = `[${messageType} download failed]`;
-          try {
-            getBridgeContext().store.insertAuditLog({
-              channelType: 'feishu',
-              chatId,
-              direction: 'inbound',
-              messageId: msg.message_id,
-              summary: `[ERROR] ${messageType} download failed for key: ${fileKey}`,
-            });
-          } catch { /* best effort */ }
-        }
-      }
-    } else if (messageType === 'post') {
-      // [P2] Extract text and image keys from rich text (post) messages
-      const { extractedText, imageKeys } = this.parsePostContent(msg.content);
-      text = extractedText;
-      for (const key of imageKeys) {
+    } else if (['image', 'post'].includes(messageType)) {
+      const parsed = messageType === 'post' ? this.parsePostContent(msg.content) : { extractedText: '', imageKeys: [this.extractFileKey(msg.content)].filter((key): key is string => Boolean(key)) };
+      text = parsed.extractedText;
+      const failed: number[] = [];
+      for (const [index, key] of parsed.imageKeys.entries()) {
         const attachment = await this.downloadResource(msg.message_id, key, 'image');
-        if (attachment) {
-          attachments.push(attachment);
-        }
-        // Don't add fallback text for individual post images — the text already carries context
+        if (attachment && /^image\/(png|jpeg|gif|webp)$/.test(attachment.type)) attachments.push(attachment);
+        else failed.push(index + 1);
+      }
+      if (!parsed.imageKeys.length && messageType === 'image') failed.push(1);
+      if (failed.length) {
+        const warning = `图片 ${failed.join('、')} 未能读取（下载失败或格式不支持）。${attachments.length ? '仅使用已成功读取的图片继续处理。' : '本条未交给模型，请重新发送 PNG/JPEG/GIF/WebP 图片。'}`;
+        const notice = await this.send({ address: { channelType: 'feishu', chatId, userId }, text: warning, parseMode: 'plain' });
+        if (!notice.ok) throw new Error(notice.error || '附件失败提示发送失败');
+        if (!attachments.length) return;
+        text += `\n[附件接收提示] ${warning}`;
       }
     } else {
-      // Unsupported type — log and skip
-      console.log(`[feishu-adapter] Unsupported message type: ${messageType}, msgId: ${msg.message_id}`);
+      const notice = await this.send({ address: { channelType: 'feishu', chatId, userId }, text: `暂不支持读取 ${messageType} 类型附件，请发送文本或 PNG/JPEG/GIF/WebP 图片。`, parseMode: 'plain' });
+      if (!notice.ok) throw new Error(notice.error || '附件类型提示发送失败');
       return;
     }
 

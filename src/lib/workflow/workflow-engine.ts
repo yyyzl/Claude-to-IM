@@ -82,6 +82,8 @@ function generateRunId(): string {
 
 export class WorkflowEngine {
   private abortController: AbortController | null = null;
+  private activeRunId: string | null = null;
+  private activeExecution: Promise<void> | null = null;
   private listeners: Map<WorkflowEventType, Array<(e: WorkflowEvent) => void>> = new Map();
 
   constructor(
@@ -151,6 +153,7 @@ export class WorkflowEngine {
       run_id: runId,
       workflow_type: profile.type,
       status: 'running',
+      execution_lock_version: 1,
       current_round: 1,
       current_step: 'codex_review',
       created_at: now,
@@ -160,23 +163,24 @@ export class WorkflowEngine {
       termination_state: { consecutive_parse_failures: 0, zero_progress_rounds: 0, claude_consecutive_failures: 0 },
     };
 
-    // Persist initial state (order: meta -> spec -> plan -> ledger -> snapshot)
-    await this.store.createRun(meta);
-    await this.store.saveSpec(runId, params.spec, 1);
-    await this.store.savePlan(runId, params.plan, 1);
-    await this.store.saveLedger(runId, { run_id: runId, issues: [] });
-    if (params.snapshot) {
-      await this.store.saveSnapshot(runId, params.snapshot);
-    }
+    await this.executeOwned(runId, async () => {
+      // Persist initial state (order: meta -> spec -> plan -> ledger -> snapshot)
+      await this.store.createRun(meta);
+      await this.store.saveSpec(runId, params.spec, 1);
+      await this.store.savePlan(runId, params.plan, 1);
+      await this.store.saveLedger(runId, { run_id: runId, issues: [] });
+      if (params.snapshot) {
+        await this.store.saveSnapshot(runId, params.snapshot);
+      }
 
-    // Emit workflow_started event
-    await this.emit(runId, 1, 'workflow_started', {
-      workflow_type: profile.type,
+      // Emit workflow_started event
+      await this.emit(runId, 1, 'workflow_started', {
+        workflow_type: profile.type,
+      });
+
+      // Initialize abort controller and enter the main loop
+      await this.runLoop(runId, meta, profile);
     });
-
-    // Initialize abort controller and enter the main loop
-    this.abortController = new AbortController();
-    await this.runLoop(runId, meta, profile);
 
     return runId;
   }
@@ -196,35 +200,40 @@ export class WorkflowEngine {
    * @throws If the run does not exist or is not in a resumable state.
    */
   async resume(runId: string, profile?: WorkflowProfile): Promise<void> {
-    const meta = await this.store.getMeta(runId);
-    if (!meta) {
-      throw new Error(`[WorkflowEngine] Run not found: ${runId}`);
-    }
+    if (!await this.store.getMeta(runId)) throw new Error(`[WorkflowEngine] Run not found: ${runId}`);
+    await this.executeOwned(runId, async () => {
+      const meta = await this.store.getMeta(runId);
+      if (!meta) {
+        throw new Error(`[WorkflowEngine] Run not found: ${runId}`);
+      }
 
-    const resumableStatuses = new Set(['paused', 'failed', 'human_review']);
-    if (!resumableStatuses.has(meta.status)) {
-      throw new Error(
-        `[WorkflowEngine] Cannot resume run ${runId} in status '${meta.status}'. ` +
-        `Expected one of: ${[...resumableStatuses].join(', ')}`,
-      );
-    }
+      const resumableStatuses = new Set(['paused', 'failed', 'human_review', 'running']);
+      if (meta.status === 'running' && meta.execution_lock_version !== 1) {
+        throw new Error('旧版本 running 任务没有执行者记录，无法确认是否失联；请确认旧进程退出后显式恢复为 paused。');
+      }
+      if (!resumableStatuses.has(meta.status)) {
+        throw new Error(
+          `[WorkflowEngine] Cannot resume run ${runId} in status '${meta.status}'. ` +
+          `Expected one of: ${[...resumableStatuses].join(', ')}`,
+        );
+      }
 
-    // Resolve profile: explicit > lookup by workflow_type > default
-    const resolvedProfile = profile ?? resolveProfileFromType(meta.workflow_type);
+      // Resolve profile: explicit > lookup by workflow_type > default
+      const resolvedProfile = profile ?? resolveProfileFromType(meta.workflow_type);
 
-    // Transition to running
-    meta.status = 'running';
-    await this.store.updateMeta(runId, { status: 'running' });
+      // Transition to running
+      meta.status = 'running';
+      await this.store.updateMeta(runId, { status: 'running', execution_lock_version: 1 });
 
-    // Emit workflow_resumed event
-    await this.emit(runId, meta.current_round, 'workflow_resumed', {
-      resumed_from_step: meta.current_step,
-      resumed_from_round: meta.current_round,
+      // Emit workflow_resumed event
+      await this.emit(runId, meta.current_round, 'workflow_resumed', {
+        resumed_from_step: meta.current_step,
+        resumed_from_round: meta.current_round,
+      });
+
+      // Initialize abort controller and enter the main loop
+      await this.runLoop(runId, meta, resolvedProfile);
     });
-
-    // Initialize abort controller and enter the main loop
-    this.abortController = new AbortController();
-    await this.runLoop(runId, meta, resolvedProfile);
   }
 
   /**
@@ -238,17 +247,11 @@ export class WorkflowEngine {
    * @param runId - The workflow run to pause.
    */
   async pause(runId: string): Promise<void> {
-    // Signal the abort controller -- this will cause the model invoker
-    // to throw AbortError, which is caught in the runLoop and triggers
-    // a checkpoint save before exiting.
-    if (this.abortController) {
-      this.abortController.abort();
+    if (this.activeRunId !== runId || !this.activeExecution) {
+      throw new Error('此执行者没有运行指定工作流，不能覆盖其他执行者的状态');
     }
-
-    // Update meta to paused status. The checkpoint has already been
-    // saved by the runLoop's AbortError handler by the time we get here,
-    // or will be saved shortly. We update meta as a safety net.
-    await this.store.updateMeta(runId, { status: 'paused' });
+    this.abortController?.abort();
+    await this.activeExecution;
   }
 
   /**
@@ -265,6 +268,27 @@ export class WorkflowEngine {
     const existing = this.listeners.get(event) ?? [];
     existing.push(cb);
     this.listeners.set(event, existing);
+  }
+
+  private async executeOwned(runId: string, operation: () => Promise<void>): Promise<void> {
+    if (this.activeRunId) throw new Error('此引擎已有运行中的工作流');
+    this.activeRunId = runId;
+    this.abortController = new AbortController();
+    const execution = (async () => {
+      const release = await this.store.acquireExecution(runId);
+      try { await operation(); }
+      finally {
+        try {
+          if (this.abortController?.signal.aborted) {
+            const meta = await this.store.getMeta(runId);
+            if (meta?.status === 'running') await this.store.updateMeta(runId, { status: 'paused' });
+          }
+        } finally { await release(); }
+      }
+    })();
+    this.activeExecution = execution;
+    try { await execution; }
+    finally { this.activeRunId = null; this.activeExecution = null; this.abortController = null; }
   }
 
   // ── Private: Main Round Loop ────────────────────────────────────
@@ -312,6 +336,10 @@ export class WorkflowEngine {
     const CLAUDE_FAILURE_THRESHOLD = 2; // Skip Claude after 2 consecutive failures
 
     while (round <= config.max_rounds) {
+      if (this.abortController?.signal.aborted) {
+        await this.saveCheckpoint(runId, round, meta.current_step);
+        return;
+      }
       // Emit round_started (only when starting the first step of the round)
       if (meta.current_step === 'codex_review') {
         await this.emit(runId, round, 'round_started', { round });
@@ -388,35 +416,9 @@ export class WorkflowEngine {
               return;
             }
             if (err instanceof TimeoutError) {
-              console.error(
-                `[WorkflowEngine] Codex review TIMEOUT (run=${runId}, round=${round}, ` +
-                `retries=${err.retriesExhausted}). Skipping to next round.`,
-              );
-              await this.emit(runId, round, 'codex_review_timeout', {
-                round,
-                retries_exhausted: err.retriesExhausted,
-                message: err.message,
-              });
-
-              // TIMEOUT GUARD: skip to next round
-              round++;
-              if (round > config.max_rounds) {
-                console.error(
-                  `[WorkflowEngine] Max rounds (${config.max_rounds}) reached after Codex timeout. Terminating workflow.`,
-                );
-                await this.terminateWorkflow(runId, round - 1, 'max_rounds_reached');
-                return;
-              }
-              // Timeout round: DO NOT modify previousRoundHadNewHighCritical
-              // Skipped rounds should not affect the "2 consecutive no-high" termination logic
-              step = 'codex_review';
-              meta.current_round = round;
-              meta.current_step = 'codex_review';
-              await this.store.updateMeta(runId, {
-                current_round: round,
-                current_step: 'codex_review',
-              });
-              continue;
+              await this.emit(runId, round, 'codex_review_timeout', { round, retries_exhausted: err.retriesExhausted, message: err.message });
+              await this.saveCheckpoint(runId, round, 'codex_review');
+              return; // 当前步骤重试已耗尽，恢复时复用此前成功产物。
             }
             // Unexpected error -- mark workflow as failed
             const errMsg = err instanceof Error ? err.message : String(err);
@@ -708,43 +710,9 @@ export class WorkflowEngine {
               continue;
             }
             if (err instanceof TimeoutError) {
-              // Timeouts are transient — do NOT increment the permanent degradation
-              // counter. Only ModelInvocationError (deterministic auth/config failures)
-              // should trigger Codex-only degradation. Skip this round's Claude decision
-              // but allow future rounds to try Claude again.
-              console.error(
-                `[WorkflowEngine] Claude decision TIMEOUT (run=${runId}, round=${round}, ` +
-                `retries=${err.retriesExhausted}). Skipping to next round.` +
-                ` [consecutive API failures: ${claudeConsecutiveFailures}]`,
-              );
-              await this.emit(runId, round, 'claude_decision_timeout', {
-                round,
-                retries_exhausted: err.retriesExhausted,
-                message: err.message,
-                consecutive_failures: claudeConsecutiveFailures,
-              });
-
-              // TIMEOUT GUARD: skip Claude decision, advance to next round
-              round++;
-              if (round > config.max_rounds) {
-                console.error(
-                  `[WorkflowEngine] Max rounds (${config.max_rounds}) reached after Claude timeout. Terminating workflow.`,
-                );
-                await this.terminateWorkflow(runId, round - 1, 'max_rounds_reached');
-                return;
-              }
-              // Timeout round: DO NOT modify previousRoundHadNewHighCritical
-              // Skipped rounds should not affect the "2 consecutive no-high" termination logic
-              step = 'codex_review';
-              meta.current_round = round;
-              meta.current_step = 'codex_review';
-              // No need to persist claude_consecutive_failures — timeouts don't
-              // count toward permanent degradation (only ModelInvocationError does).
-              await this.store.updateMeta(runId, {
-                current_round: round,
-                current_step: 'codex_review',
-              });
-              continue;
+              await this.emit(runId, round, 'claude_decision_timeout', { round, retries_exhausted: err.retriesExhausted, message: err.message });
+              await this.saveCheckpoint(runId, round, 'claude_decision');
+              return; // 当前步骤重试已耗尽，恢复时复用此前成功产物。
             }
             // Unexpected error
             const errMsg = err instanceof Error ? err.message : String(err);

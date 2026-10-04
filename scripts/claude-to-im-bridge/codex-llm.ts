@@ -1,1118 +1,417 @@
-import { open, readdir, stat } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-
-import type { InMemoryPermissionGateway } from "./permissions.ts";
-import type { LLMProvider, StreamChatParams } from "./llm.ts";
-import { JsonRpcAppServerClient, type JsonRpcMessage } from "./codex-jsonrpc.ts";
-import { buildTurnSandboxPolicy, resolveCodexBinary, selectCodexModel } from "./codex-utils.ts";
-
-type TokenUsage = {
-  input_tokens: number;
-  output_tokens: number;
-  cache_read_input_tokens?: number;
-  cache_creation_input_tokens?: number;
-  cost_usd?: number;
-};
-
-type CodexUsagePair = {
-  last: TokenUsage | null;
-  total: TokenUsage | null;
-  contextWindow: number | null;
-};
-
-const ROLLOUT_TAIL_CHUNK_BYTES = 128 * 1024;
-const ROLLOUT_TAIL_MAX_BYTES = 2 * 1024 * 1024;
-
-function redactSensitive(text: string): string {
-  let out = text;
-  out = out.replace(/sk-[A-Za-z0-9_-]{10,}/g, "sk-***");
-  out = out.replace(/\bBearer\s+\S+/gi, "Bearer ***");
-  out = out.replace(
-    /(api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|token|secret)\s*[:=]\s*([^\s,;]+)/gi,
-    "$1=***",
-  );
-  return out;
-}
-
-function safeStringify(obj: unknown): string {
-  try {
-    return redactSensitive(JSON.stringify(obj));
-  } catch {
-    return redactSensitive(String(obj));
-  }
-}
-
-type ModelListResult = {
-  data?: unknown[];
-  [k: string]: unknown;
-};
-
-type ThreadStartResult = {
-  thread?: { id?: string };
-  [k: string]: unknown;
-};
-
-type TurnStartResult = {
-  turn?: { id?: string };
-  [k: string]: unknown;
-};
-
-function emit(controller: ReadableStreamDefaultController<string>, type: string, data: unknown): void {
-  const payload = {
-    type,
-    data: typeof data === "string" ? data : JSON.stringify(data),
-  };
-  controller.enqueue(`data: ${JSON.stringify(payload)}\n`);
-}
-
-function toErrorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
-}
-
-function isThreadNotFoundError(err: unknown): boolean {
-  const msg = toErrorMessage(err);
-  // Fast path
-  if (/thread not found/i.test(msg)) return true;
-
-  // Try parse trailing JSON-RPC error object from our JsonRpcAppServerClient message:
-  // "请求失败: turn/start: {\"code\":-32600,\"message\":\"thread not found: ...\"}"
-  const m = msg.match(/\{.*\}\s*$/);
-  if (!m) return false;
-  try {
-    const obj = JSON.parse(m[0]) as any;
-    const inner = typeof obj?.message === "string" ? obj.message : "";
-    return /thread not found/i.test(inner);
-  } catch {
-    return false;
-  }
-}
-
-function abortError(message = "Task stopped by user"): Error {
-  const e = new Error(message);
-  (e as any).name = "AbortError";
-  return e;
-}
-
-function pickString(v: unknown): string | null {
-  return typeof v === "string" && v.trim() ? v.trim() : null;
-}
-
-function toSafeNonNegativeNumber(value: unknown): number | null {
-  const n = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(n)) return null;
-  return n >= 0 ? n : null;
-}
-
-function normalizeTokenUsage(raw: unknown): TokenUsage | null {
-  if (!raw || typeof raw !== "object") return null;
-  const obj = raw as any;
-
-  const input = toSafeNonNegativeNumber(
-    obj.input_tokens ?? obj.prompt_tokens ?? obj.inputTokens ?? obj.promptTokens,
-  );
-  const output = toSafeNonNegativeNumber(
-    obj.output_tokens ?? obj.completion_tokens ?? obj.outputTokens ?? obj.completionTokens,
-  );
-
-  const inputTokens = input ?? 0;
-  const outputTokens = output ?? 0;
-  if (inputTokens + outputTokens <= 0) return null;
-
-  const usage: TokenUsage = { input_tokens: inputTokens, output_tokens: outputTokens };
-
-  const cacheRead = toSafeNonNegativeNumber(
-    obj.cache_read_input_tokens
-      ?? obj.cacheReadInputTokens
-      ?? obj.cached_input_tokens
-      ?? obj.cachedInputTokens,
-  );
-  const cacheCreate = toSafeNonNegativeNumber(obj.cache_creation_input_tokens ?? obj.cacheCreationInputTokens);
-  const costUsd = toSafeNonNegativeNumber(obj.cost_usd ?? obj.costUsd);
-
-  if (cacheRead != null) usage.cache_read_input_tokens = cacheRead;
-  if (cacheCreate != null) usage.cache_creation_input_tokens = cacheCreate;
-  if (costUsd != null) usage.cost_usd = costUsd;
-
-  return usage;
-}
-
-function tryParseJsonLikeString(value: unknown): unknown | null {
-  if (typeof value !== "string") return null;
-  const t = value.trim();
-  if (!t) return null;
-  // 保守限制：避免解析超大字符串造成阻塞
-  if (t.length > 20_000) return null;
-  if (!(t.startsWith("{") || t.startsWith("["))) return null;
-  try {
-    return JSON.parse(t);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * 专门解析 Codex app-server 的 `token_count`-style notification payload。
- *
- * 比 {@link findTokenUsageInAny} 更精确：
- * - **显式按 key 名识别** `last_token_usage` / `total_token_usage` / `model_context_window`，
- *   不再依赖 BFS 的遍历顺序"中彩"
- * - 一次遍历同时捞出三样：本轮最后一次 API 调用的 usage、turn 累计 usage、模型窗口
- *
- * 语义参考 (Codex rollout 格式)：
- * ```json
- * { "info": {
- *     "last_token_usage":  { "input_tokens": 6708,  ... },
- *     "total_token_usage": { "input_tokens": 12529, ... },
- *     "model_context_window": 258400
- * }}
- * ```
- * 下游 ctx footer 需要的是 `last_token_usage.input_tokens`；
- * `total_token_usage` 保留给 daily summary（累计统计）；
- * `model_context_window` 作为 Codex 真实窗口直通分母。
- */
-function extractCodexUsagePair(value: unknown): CodexUsagePair {
-  const out: CodexUsagePair = {
-    last: null,
-    total: null,
-    contextWindow: null,
-  };
-  if (!value || typeof value !== "object") return out;
-
-  const queue: unknown[] = [value];
-  let scanned = 0;
-  while (queue.length > 0 && scanned < 200) {
-    const cur = queue.shift();
-    scanned += 1;
-    if (!cur || typeof cur !== "object") continue;
-    if (Array.isArray(cur)) {
-      for (const item of cur) queue.push(item);
-      continue;
-    }
-    const obj = cur as Record<string, unknown>;
-    for (const [k, v] of Object.entries(obj)) {
-      if (k === "last_token_usage") {
-        const u = normalizeTokenUsage(v);
-        if (u) out.last = u;   // 不断覆盖 — 一个 turn 内可能多次 token_count，保留最后一次
-      } else if (k === "total_token_usage") {
-        const u = normalizeTokenUsage(v);
-        if (u) out.total = u;
-      } else if (k === "model_context_window") {
-        if (typeof v === "number" && Number.isFinite(v) && v > 0) {
-          out.contextWindow = v;
-        }
-      }
-      if (v && typeof v === "object") queue.push(v);
-    }
-  }
-  return out;
-}
-
-function resolveCodexHomeDir(): string {
-  return pickString(process.env.CODEX_HOME) || path.join(os.homedir(), ".codex");
-}
-
-function resolveCodexSessionsDir(): string {
-  return path.join(resolveCodexHomeDir(), "sessions");
-}
-
-async function safeReadDir(dir: string) {
-  try {
-    return await readdir(dir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-}
-
-async function findLatestRolloutFileForSession(sessionId: string): Promise<string | null> {
-  if (!sessionId) return null;
-
-  const sessionsDir = resolveCodexSessionsDir();
-  let latest: { path: string; mtimeMs: number } | null = null;
-
-  for (const year of await safeReadDir(sessionsDir)) {
-    if (!year.isDirectory()) continue;
-    const yearDir = path.join(sessionsDir, year.name);
-    for (const month of await safeReadDir(yearDir)) {
-      if (!month.isDirectory()) continue;
-      const monthDir = path.join(yearDir, month.name);
-      for (const day of await safeReadDir(monthDir)) {
-        if (!day.isDirectory()) continue;
-        const dayDir = path.join(monthDir, day.name);
-        for (const file of await safeReadDir(dayDir)) {
-          if (!file.isFile()) continue;
-          if (!file.name.startsWith("rollout-") || !file.name.endsWith(`${sessionId}.jsonl`)) continue;
-
-          const filePath = path.join(dayDir, file.name);
-          try {
-            const meta = await stat(filePath);
-            if (!latest || meta.mtimeMs > latest.mtimeMs) {
-              latest = { path: filePath, mtimeMs: meta.mtimeMs };
-            }
-          } catch {
-            // Ignore races / transient filesystem errors and continue scanning.
-          }
-        }
-      }
-    }
-  }
-
-  return latest?.path ?? null;
-}
-
-function tryExtractCodexUsagePairFromJsonLine(line: string): CodexUsagePair | null {
-  if (!line.includes("token_count")) return null;
-  const parsed = tryParseJsonLikeString(line);
-  if (!parsed || typeof parsed !== "object") return null;
-  const payload = (parsed as { payload?: unknown }).payload;
-  if (!payload || typeof payload !== "object") return null;
-  if (pickString((payload as { type?: unknown }).type) !== "token_count") return null;
-
-  const pair = extractCodexUsagePair(payload);
-  if (pair.last || pair.total || pair.contextWindow != null) return pair;
-  return null;
-}
-
-async function readLatestCodexUsageFromRollout(sessionId: string): Promise<CodexUsagePair | null> {
-  const rolloutPath = await findLatestRolloutFileForSession(sessionId);
-  if (!rolloutPath) return null;
-
-  const fh = await open(rolloutPath, "r");
-  try {
-    const info = await fh.stat();
-    let offset = info.size;
-    let scannedBytes = 0;
-    let carry = "";
-
-    while (offset > 0 && scannedBytes < ROLLOUT_TAIL_MAX_BYTES) {
-      const chunkSize = Math.min(ROLLOUT_TAIL_CHUNK_BYTES, offset, ROLLOUT_TAIL_MAX_BYTES - scannedBytes);
-      offset -= chunkSize;
-      scannedBytes += chunkSize;
-
-      const buffer = Buffer.alloc(chunkSize);
-      await fh.read(buffer, 0, chunkSize, offset);
-
-      const text = buffer.toString("utf8") + carry;
-      const lines = text.split(/\r?\n/);
-      carry = offset > 0 ? (lines.shift() ?? "") : "";
-
-      for (let i = lines.length - 1; i >= 0; i -= 1) {
-        const pair = tryExtractCodexUsagePairFromJsonLine(lines[i]);
-        if (pair) return pair;
-      }
-    }
-
-    if (carry) return tryExtractCodexUsagePairFromJsonLine(carry);
-    return null;
-  } finally {
-    await fh.close();
-  }
-}
-
-function findTokenUsageInAny(value: unknown): TokenUsage | null {
-  // direct
-  const direct = normalizeTokenUsage(value);
-  if (direct) return direct;
-
-  // BFS (depth-limited)
-  const queue: unknown[] = [value];
-  let scanned = 0;
-  while (queue.length > 0 && scanned < 200) {
-    const cur = queue.shift();
-    scanned += 1;
-    if (!cur || typeof cur !== "object") {
-      const parsed = tryParseJsonLikeString(cur);
-      if (parsed) queue.push(parsed);
-      continue;
-    }
-
-    if (Array.isArray(cur)) {
-      for (const item of cur) queue.push(item);
-      continue;
-    }
-
-    const obj = cur as Record<string, unknown>;
-    for (const [k, v] of Object.entries(obj)) {
-      // 常见字段名优先
-      if (k === "usage" || k === "tokenUsage" || k === "token_usage") {
-        const u = normalizeTokenUsage(v) || normalizeTokenUsage(tryParseJsonLikeString(v));
-        if (u) return u;
-      }
-
-      const u = normalizeTokenUsage(v) || normalizeTokenUsage(tryParseJsonLikeString(v));
-      if (u) return u;
-
-      if (v && typeof v === "object") queue.push(v);
-    }
-  }
-
-  return null;
-}
-
-function isTransientReconnectNotification(errObj: unknown): boolean {
-  const msg = pickString((errObj as any)?.message);
-  if (!msg) return false;
-  // Codex app-server 在自动重连 responses SSE 时会抛出类似：
-  // "Reconnecting... 1/5"。这通常是“可恢复的中间状态”，不应直接判定 turn 失败。
-  return /^Reconnecting\.\.\.\s*\d+\s*\/\s*\d+$/i.test(msg);
-}
-
-function parseCodexCliConfigOverrides(raw: string | undefined): string[] {
-  const text = (raw || "").trim();
-  if (!text) return [];
-
-  const splitByNewline = text.includes("\n") || text.includes("\r");
-  const parts = splitByNewline ? text.split(/\r?\n/) : text.split(";");
-
-  const overrides = parts
-    .map((p) => p.trim())
-    .filter(Boolean)
-    .filter((p) => !p.startsWith("#"));
-
-  for (const item of overrides) {
-    const eq = item.indexOf("=");
-    if (eq <= 0) {
-      throw new Error(
-        [
-          "bridge_codex_cli_config 配置不合法：每一项必须是 key=value",
-          `收到：${item}`,
-          "",
-          "示例：",
-          "  bridge_codex_cli_config=model_provider=openai",
-          "  bridge_codex_cli_config=\"model_provider=openai\\nfeatures.some_flag=true\"",
-        ].join("\n"),
-      );
-    }
-  }
-
-  return overrides;
-}
-
-function extractHttpStatusFromTurnError(errObj: unknown): number | null {
-  const e = errObj as any;
-  const candidates = [
-    e?.httpStatusCode,
-    e?.status,
-    e?.codexErrorInfo?.responseStreamDisconnected?.httpStatusCode,
-    e?.codexErrorInfo?.responseStreamErrored?.httpStatusCode,
-  ];
-  for (const c of candidates) {
-    if (typeof c === "number" && Number.isFinite(c)) return c;
-    if (typeof c === "string" && /^\d{3}$/.test(c)) return parseInt(c, 10);
-  }
-  return null;
-}
-
-function extractUrlFromTurnError(errObj: unknown): string | null {
-  const e = errObj as any;
-  const direct = pickString(e?.url);
-  if (direct) return direct;
-
-  const details = pickString(e?.additionalDetails);
-  if (!details) return null;
-  const m = details.match(/url:\s*(https?:\/\/\S+)/i);
-  if (!m) return null;
-  return m[1]?.replace(/[),.]+$/, "") || null;
-}
-
-function formatTurnErrorForHumans(errObj: unknown): string {
-  const e = errObj as any;
-  const message = pickString(e?.message);
-  const additionalDetails = pickString(e?.additionalDetails);
-  const httpStatus = extractHttpStatusFromTurnError(errObj);
-  const url = extractUrlFromTurnError(errObj);
-
-  const lines: string[] = ["turn 执行失败（Codex 后端报错）"];
-  if (message) lines.push(`- message: ${message}`);
-  if (httpStatus) lines.push(`- httpStatus: ${httpStatus}`);
-  if (url) lines.push(`- url: ${url}`);
-  if (additionalDetails && additionalDetails !== message) lines.push(`- details: ${redactSensitive(additionalDetails)}`);
-
-  // 常见：自定义 base_url/代理网关 502
-  if (httpStatus === 502 && url && !url.includes("api.openai.com")) {
-    lines.push("");
-    lines.push("排查建议：");
-    lines.push("1) 你当前的 Codex CLI 很可能配置了自定义 model_provider/base_url（代理网关）");
-    lines.push("2) 该网关返回 502（Bad Gateway），属于上游不可用/被拦截/不兼容 responses API");
-    lines.push("3) 解决方式（二选一）：");
-    lines.push("   - 修复/更换你的代理网关；或");
-    lines.push("   - 在运行桥接的项目里加 .env.bridge.local，覆盖 Codex 配置，例如：");
-    lines.push("       bridge_codex_cli_config=model_provider=openai");
-    lines.push("");
-    lines.push("提示：Codex 全局配置文件通常在 `~/.codex/config.toml`。");
-  }
-
-  lines.push("");
-  lines.push(`原始错误（已脱敏）：${safeStringify(errObj)}`);
-  return lines.join("\n");
-}
-
-function getNotifThreadId(msg: JsonRpcMessage): string | null {
-  const params = (msg.params || {}) as Record<string, unknown>;
-  return pickString(params.threadId);
-}
-
-function getNotifTurnId(msg: JsonRpcMessage): string | null {
-  const params = (msg.params || {}) as Record<string, unknown>;
-  const direct = pickString(params.turnId);
-  if (direct) return direct;
-  const turn = params.turn as Record<string, unknown> | undefined;
-  return turn ? pickString(turn.id) : null;
-}
-
-export type CodexAppServerLLMProviderOptions = {
+/** 将锁定版本 Codex app-server 的公开双向协议适配为桥接 SSE。 */
+import { randomUUID } from 'node:crypto';
+import path from 'node:path';
+import type { LLMProvider, StreamChatParams, TokenUsage, UserInputQuestion } from '../../src/lib/bridge/host.js';
+import type { InMemoryPermissionGateway } from './permissions.ts';
+import { JsonRpcAppServerClient, redactSensitive } from './codex-jsonrpc.ts';
+import type { JsonRpcMessage } from './codex-jsonrpc.ts';
+import { buildTurnSandboxPolicy, resolveCodexBinary, selectCodexEffort, selectCodexModel } from './codex-utils.ts';
+import type { CodexModelListItem } from './codex-utils.ts';
+
+type CodexTransport = Pick<JsonRpcAppServerClient, 'request' | 'notify' | 'respond' | 'respondError' | 'onServerRequest' | 'onNotification' | 'onDisconnect' | 'drainBacklog' | 'stop' | 'isRunning'>;
+type SendEvent = (type: string, data: unknown) => void;
+type ActiveTurn = { emit: SendEvent; abort: AbortController; turnId?: string; onStatus?: (status: string) => void };
+type TurnPolicy = { sandbox: string; approvalPolicy: string };
+type ModelSelection = { model: CodexModelListItem; effort?: string };
+type TurnResult = { text: string; usage: TokenUsage | null; lastUsage: TokenUsage | null; contextWindow: number | null; contextTokens: number | null; emittedFinalText: boolean };
+
+export interface CodexAppServerLLMProviderOptions {
   projectRoot: string;
   permissions: InMemoryPermissionGateway;
   codexBin?: string;
-  /**
-   * 传给 `codex app-server -c key=value` 的配置覆盖项。
-   *
-   * 格式：每行一条（或用 ; 分隔），例如：
-   * - model_provider=openai
-   * - model_providers.openai.base_url="https://api.openai.com/v1"
-   */
   cliConfig?: string;
   modelId?: string;
   modelHint?: string;
-  sandboxMode?: string; // danger-full-access | workspace-write | read-only
-  approvalPolicy?: string; // 暂按 app-server 约定透传（默认 never）
-  /**
-   * turn 等待超时（毫秒）。
-   *
-   * - 默认 90 分钟（适配长时间工具执行/构建）
-   * - 设为 0 或负数：不做超时（不推荐，除非你明确需要）
-   */
+  sandboxMode?: string;
+  approvalPolicy?: string;
   turnTimeoutMs?: number;
-  /**
-   * turn “无事件”超时（毫秒）。
-   *
-   * 用于处理一种常见卡死形态：turn 已启动，但长时间收不到任何与该 turn 相关的通知
-   * （例如网络/代理阻塞、后端挂起、流式连接断了但未触发错误等）。
-   *
-   * 说明：
-   * - 这是“静默超时”，与 turnTimeoutMs（总超时）不同；
-   * - 默认 0：关闭（保持历史行为）。建议在 IM 远程驱动场景配置一个更小值，
-   *   例如 10-20 分钟，以便更快失败并提示用户重试。
-   */
   turnIdleTimeoutMs?: number;
-  /**
-   * SSE keep_alive 间隔（毫秒）。
-   *
-   * - 默认 15 秒
-   * - 设为 0 或负数：禁用 keep_alive
-   */
   keepAliveMs?: number;
   debug?: boolean;
-};
+  /** 可注入纯内存传输，测试不得调用已登录的真实运行时。 */
+  client?: CodexTransport;
+}
 
-/**
- * 使用 Codex CLI 的 app-server 作为后端的 LLMProvider。
- *
- * 说明：
- * - 目前先打通“飞书→Codex→文本回复”最小闭环；
- * - tool/approval 事件映射留作下一步（需要 experimentalRawEvents + 事件对齐）。
- */
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+function pickString(value: unknown): string | null { return typeof value === 'string' && value.trim() ? value.trim() : null; }
+function number(value: unknown): number { return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0; }
+function abortError(): Error { const error = new Error('任务已停止'); error.name = 'AbortError'; return error; }
+function toErrorMessage(error: unknown): string { return redactSensitive(error instanceof Error ? error.message : String(error)); }
+function normalizeTokenUsage(value: unknown): TokenUsage | null {
+  const raw = record(value);
+  if (typeof raw.inputTokens !== 'number' && typeof raw.outputTokens !== 'number') return null;
+  const cached = number(raw.cachedInputTokens);
+  const written = number(raw.cacheWriteInputTokens);
+  return {
+    input_tokens: Math.max(0, number(raw.inputTokens) - cached - written),
+    output_tokens: number(raw.outputTokens),
+    ...(cached ? { cache_read_input_tokens: cached } : {}),
+    ...(written ? { cache_creation_input_tokens: written } : {}),
+  };
+}
+function subtractUsage(total: TokenUsage, baseline: TokenUsage): TokenUsage {
+  const result: TokenUsage = { input_tokens: 0, output_tokens: 0 };
+  for (const key of ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'] as const) {
+    const value = Math.max(0, (total[key] ?? 0) - (baseline[key] ?? 0));
+    if (value || key === 'input_tokens' || key === 'output_tokens') result[key] = value;
+  }
+  return result;
+}
+function getNotifThreadId(message: JsonRpcMessage): string | null { return pickString(message.params?.threadId); }
+function getNotifTurnId(message: JsonRpcMessage): string | null { return pickString(message.params?.turnId) ?? pickString(record(message.params?.turn).id); }
+function parseCodexCliConfigOverrides(raw?: string): string[] {
+  const values = (raw ?? '').split(/[\r\n;]+/).map(value => value.trim()).filter(value => value && !value.startsWith('#'));
+  if (values.some(value => value.indexOf('=') <= 0)) throw new Error('bridge_codex_cli_config 每项必须是 key=value');
+  return values;
+}
+
 export class CodexAppServerLLMProvider implements LLMProvider {
-  private projectRoot: string;
-  private permissions: InMemoryPermissionGateway;
-  private client: JsonRpcAppServerClient;
-
+  private readonly client: CodexTransport;
+  private readonly permissions: InMemoryPermissionGateway;
+  private readonly options: CodexAppServerLLMProviderOptions;
   private initialized = false;
   private initPromise: Promise<void> | null = null;
-  private selectedModelId: string | null = null;
-  private selectedModelLabel: string | null = null;
+  private models: CodexModelListItem[] = [];
+  private activeTurns = new Map<string, ActiveTurn>();
+  private serverRequests = new Map<string | number, { permissionId: string; resolved: boolean }>();
+  private previousUsage = new Map<string, TokenUsage>();
+  private configuredEffort?: string;
 
-  private modelId?: string;
-  private modelHint?: string;
-  private sandboxMode: string;
-  private approvalPolicy: string;
-  private turnTimeoutMs: number;
-  private turnIdleTimeoutMs: number;
-  private keepAliveMs: number;
-
-  constructor(opts: CodexAppServerLLMProviderOptions) {
-    this.projectRoot = opts.projectRoot;
-    this.permissions = opts.permissions;
-    this.modelId = opts.modelId;
-    this.modelHint = opts.modelHint;
-    this.sandboxMode = opts.sandboxMode || "danger-full-access";
-    this.approvalPolicy = opts.approvalPolicy || "never";
-    this.turnTimeoutMs = Number.isFinite(opts.turnTimeoutMs as number) ? (opts.turnTimeoutMs as number) : 90 * 60_000;
-    this.turnIdleTimeoutMs = Number.isFinite(opts.turnIdleTimeoutMs as number) ? (opts.turnIdleTimeoutMs as number) : 0;
-    {
-      const ka = Number.isFinite(opts.keepAliveMs as number) ? (opts.keepAliveMs as number) : 15_000;
-      this.keepAliveMs = ka > 0 ? ka : 0;
+  constructor(options: CodexAppServerLLMProviderOptions) {
+    this.options = options;
+    this.permissions = options.permissions;
+    const overrides = parseCodexCliConfigOverrides(options.cliConfig);
+    this.configuredEffort = overrides.find(value => /^model_reasoning_effort\s*=/.test(value))?.split('=').slice(1).join('=').trim().replace(/^['"]|['"]$/g, '');
+    if (options.client) {
+      this.client = options.client;
+    } else {
+      const binary = resolveCodexBinary(options.codexBin);
+      const command = /\.[cm]?js$/i.test(binary) ? [process.execPath, binary] : [binary];
+      command.push('app-server', '--listen', 'stdio://');
+      for (const override of overrides) command.push('-c', override);
+      this.client = new JsonRpcAppServerClient({ command, cwd: options.projectRoot, debug: options.debug });
     }
-
-    const codexBin = resolveCodexBinary(opts.codexBin);
-    const cmd = [codexBin, "app-server"];
-
-    const overrides = parseCodexCliConfigOverrides(opts.cliConfig);
-    for (const item of overrides) cmd.push("-c", item);
-
-    cmd.push("--listen", "stdio://");
-    this.client = new JsonRpcAppServerClient({
-      command: cmd,
-      cwd: this.projectRoot,
-      debug: Boolean(opts.debug),
+    this.client.onDisconnect(() => {
+      this.initialized = false; this.initPromise = null;
+      for (const pending of this.serverRequests.values()) {
+        pending.resolved = true;
+        this.permissions.resolvePendingPermission(pending.permissionId, { behavior: 'deny', message: 'Codex 连接已断开' });
+      }
+    });
+    this.client.onServerRequest(message => { void this.handleServerRequest(message).catch(error => console.warn('[codex-llm] 服务端请求已结束:', toErrorMessage(error))); });
+    this.client.onNotification(message => {
+      if (message.method !== 'serverRequest/resolved') return;
+      const id = message.params?.requestId;
+      if (typeof id !== 'string' && typeof id !== 'number') return;
+      const pending = this.serverRequests.get(id);
+      if (pending) {
+        pending.resolved = true;
+        this.permissions.resolvePendingPermission(pending.permissionId, { behavior: 'deny', message: '请求已由服务端结束' });
+      }
     });
   }
 
   stop(): void {
+    for (const active of this.activeTurns.values()) active.abort.abort();
     this.client.stop();
     this.initialized = false;
     this.initPromise = null;
-    this.selectedModelId = null;
+    this.models = [];
+    this.previousUsage.clear();
   }
 
   streamChat(params: StreamChatParams): ReadableStream<string> {
-    const abortController = params.abortController ?? new AbortController();
-    const signal = abortController.signal;
-
+    const abort = new AbortController();
+    const externalSignal = params.abortController?.signal;
+    const onAbort = () => abort.abort(externalSignal?.reason);
+    if (externalSignal?.aborted) onAbort();
+    else externalSignal?.addEventListener('abort', onAbort, { once: true });
+    let cancelled = false;
     return new ReadableStream<string>({
-      start: async (controller) => {
-        let keepAliveTimer: NodeJS.Timeout | null = null;
+      start: async controller => {
+        const send: SendEvent = (type, data) => {
+          if (!cancelled) controller.enqueue(`data: ${JSON.stringify({ type, data: typeof data === 'string' ? data : JSON.stringify(data) })}\n`);
+        };
+        let threadId: string | undefined;
+        let keepAlive: NodeJS.Timeout | undefined;
         try {
-          if (this.keepAliveMs > 0) {
-            // 避免部分 SSE/反代链路因“长时间无输出”触发 idle timeout。
-            keepAliveTimer = setInterval(() => {
-              if (signal.aborted) return;
-              try { emit(controller, "keep_alive", ""); } catch { /* ignore */ }
-            }, this.keepAliveMs);
-          }
-
+          if (abort.signal.aborted) throw abortError();
+          const keepAliveMs = this.options.keepAliveMs ?? 15_000;
+          if (keepAliveMs > 0) keepAlive = setInterval(() => send('keep_alive', ''), keepAliveMs);
           await this.ensureInitialized();
-
-          const resumedThreadId = params.sdkSessionId && params.sdkSessionId.trim()
-            ? params.sdkSessionId.trim()
-            : null;
-
-          const threadId = resumedThreadId || await this.startThread({
-            systemPrompt: params.systemPrompt,
-            cwd: params.workingDirectory,
-          });
-
-          emit(controller, "status", {
-            session_id: threadId,
-            model: this.selectedModelLabel || this.selectedModelId || "",
-          });
-
-          const prompt = this.buildTurnPrompt(params.prompt, params.workingDirectory);
-
-          // ── Tool event bridge: forward Codex tool calls to SSE stream ──
-          const onToolEvent = (toolId: string, toolName: string, status: 'running' | 'complete' | 'error') => {
-            if (status === "running" && toolName) {
-              emit(controller, "tool_use", { id: toolId, name: toolName, input: {} });
-            } else {
-              emit(controller, "tool_result", {
-                tool_use_id: toolId,
-                content: "",
-                is_error: status === "error",
-              });
-            }
-          };
-
-          let turnId: string;
-          try {
-            turnId = await this.startTurn({
-              threadId,
-              prompt,
-              cwd: params.workingDirectory,
-            });
-          } catch (e) {
-            // 常见场景：runner 重启导致 Codex app-server 内存态丢失，旧 threadId 无效。
-            // 这时 turn/start 会返回 "thread not found"，需要自动回退到新 thread。
-            if (isThreadNotFoundError(e)) {
-              console.warn("[codex-llm] thread not found, starting a new thread and retrying turn/start...");
-              const freshThreadId = await this.startThread({
-                systemPrompt: params.systemPrompt,
-                cwd: params.workingDirectory,
-              });
-
-              emit(controller, "status", {
-                session_id: freshThreadId,
-                model: this.selectedModelLabel || this.selectedModelId || "",
-              });
-
-              turnId = await this.startTurn({
-                threadId: freshThreadId,
-                prompt,
-                cwd: params.workingDirectory,
-              });
-
-              const { text, usage, lastUsage, contextWindow, emittedFinalText } = await this.collectTurnText({
-                threadId: freshThreadId,
-                turnId,
-                onDelta: (delta) => emit(controller, "text", delta),
-                onToolEvent,
-                signal,
-              });
-
-              if (text && !emittedFinalText) {
-                emit(controller, "text", text);
-              }
-
-              emit(controller, "result", {
-                usage,
-                last_usage: lastUsage,
-                context_window: contextWindow,
-                is_error: false,
-                session_id: freshThreadId,
-              });
-              return;
-            }
-            throw e;
+          if (abort.signal.aborted) throw abortError();
+          const selection = this.selectModel(params.model, params.reasoningEffort);
+          const policy = this.turnPolicy(params.permissionMode);
+          const input = this.buildInput(params, selection.model);
+          if (params.sdkSessionId?.trim()) {
+            threadId = params.sdkSessionId.trim();
+            await this.client.request('thread/resume', {
+              threadId, excludeTurns: true, model: selection.model.model || selection.model.id,
+              cwd: params.workingDirectory || this.options.projectRoot, ...policy,
+            }, 30_000);
+          } else {
+            threadId = await this.startThread(params, selection, policy);
           }
-
-          const { text, usage, lastUsage, contextWindow, emittedFinalText } = await this.collectTurnText({
-            threadId,
-            turnId,
-            onDelta: (delta) => emit(controller, "text", delta),
-            onToolEvent,
-            signal,
+          send('status', { session_id: threadId, model: selection.model.model || selection.model.id, reasoning_effort: selection.effort });
+          if (abort.signal.aborted) throw abortError();
+          const active: ActiveTurn = { emit: send, abort, onStatus: params.onRuntimeStatusChange };
+          this.activeTurns.set(threadId, active);
+          params.onRuntimeStatusChange?.('running');
+          const turnId = await this.startTurn({ threadId, input, params, selection, policy });
+          active.turnId = turnId;
+          const result = await this.collectTurnText({
+            threadId, turnId, signal: abort.signal, onDelta: delta => send('text', delta), onProgress: text => send('progress', text),
+            onToolEvent: (id, name, status, item) => {
+              if (status === 'running') send('tool_use', { id, name, input: item ?? {} });
+              else send('tool_result', { tool_use_id: id, content: pickString(item?.aggregatedOutput) ?? '', is_error: status === 'error' });
+            },
           });
-
-          // 某些情况下只有 completed 才有 final_answer 文本；这里补发一次。
-          if (text && !emittedFinalText) {
-            emit(controller, "text", text);
-          }
-
-          emit(controller, "result", {
-            usage,
-            last_usage: lastUsage,
-            context_window: contextWindow,
-            is_error: false,
-            session_id: threadId,
-          });
-        } catch (err) {
-          const isAbort = err instanceof Error && err.name === "AbortError";
-          const msg = isAbort ? "Task stopped by user" : toErrorMessage(err);
-          emit(controller, "error", msg);
-          emit(controller, "result", {
-            usage: null,
-            last_usage: null,
-            context_window: null,
-            is_error: true,
-            session_id: null,
-          });
+          if (result.text && !result.emittedFinalText) send('text', result.text);
+          send('result', { usage: result.usage, last_usage: result.lastUsage, context_window: result.contextWindow, context_tokens: result.contextTokens, is_error: false, session_id: threadId });
+        } catch (error) {
+          send('error', toErrorMessage(error));
+          send('result', { is_error: true, error_code: error instanceof Error && error.name === 'AbortError' ? 'abort' : 'error', session_id: threadId ?? null });
         } finally {
-          if (keepAliveTimer) clearInterval(keepAliveTimer);
-          controller.close();
+          if (keepAlive) clearInterval(keepAlive);
+          abort.abort();
+          externalSignal?.removeEventListener('abort', onAbort);
+          if (threadId) this.activeTurns.delete(threadId);
+          params.onRuntimeStatusChange?.('idle');
+          if (!cancelled) controller.close();
         }
       },
-      cancel: () => {
-        abortController.abort();
-      },
+      cancel: () => { cancelled = true; abort.abort(); },
     });
   }
 
-  private buildTurnPrompt(userText: string, workingDirectory?: string): string {
-    const cwd = workingDirectory && workingDirectory.trim() ? workingDirectory.trim() : "";
-    if (!cwd) return userText;
+  private selectModel(explicit?: string, effort?: string): ModelSelection {
+    const selection = explicit?.trim() && explicit.trim() !== 'default' ? explicit : this.options.modelId || this.options.modelHint;
+    const model = selectCodexModel(this.models, { explicitId: selection });
+    if (!model) throw new Error('Codex model/list 返回空目录；请检查本机登录、网络或运行时配置。');
+    return { model, effort: selectCodexEffort(model, selection, effort || this.configuredEffort) };
+  }
 
-    // 提醒 Codex 当前工作目录，尽量减少“相对路径漂移”
-    const normalized = cwd.replace(/\//g, path.sep);
-    return `当前工作目录：${normalized}\n\n用户消息：\n${userText}`;
+  private turnPolicy(mode?: string): TurnPolicy {
+    if (mode === 'plan') return { sandbox: 'read-only', approvalPolicy: 'on-request' };
+    if (mode === 'default' || mode === 'acceptEdits') return { sandbox: 'workspace-write', approvalPolicy: 'on-request' };
+    if (mode === 'bypassPermissions') return { sandbox: 'danger-full-access', approvalPolicy: 'never' };
+    return { sandbox: this.options.sandboxMode || 'workspace-write', approvalPolicy: this.options.approvalPolicy || (mode === 'dontAsk' ? 'never' : 'on-request') };
+  }
+
+  private buildInput(params: StreamChatParams, model: CodexModelListItem): Record<string, unknown>[] {
+    let prompt = params.prompt;
+    if (!params.sdkSessionId && params.conversationHistory?.length) {
+      prompt = `以下是之前的对话记录（作为上下文）：\n${params.conversationHistory.map(message => `${message.role}: ${message.content}`).join('\n\n')}\n\n当前用户消息：\n${prompt}`;
+    }
+    const input: Record<string, unknown>[] = [{ type: 'text', text: prompt, text_elements: [] }];
+    for (const file of params.files ?? []) {
+      if (!/^image\/(png|jpeg|webp|gif)$/.test(file.type)) throw new Error(`Codex 暂不支持附件类型 ${file.type}（${file.name}）`);
+      if (model.inputModalities && !model.inputModalities.includes('image')) throw new Error(`模型 ${model.model || model.id} 不支持图片输入`);
+      if (!file.data && !file.filePath) throw new Error(`图片 ${file.name} 没有可用内容`);
+      input.push(file.data ? { type: 'image', url: `data:${file.type};base64,${file.data}` } : { type: 'localImage', path: path.resolve(file.filePath!) });
+    }
+    return input;
   }
 
   private async ensureInitialized(): Promise<void> {
-    if (this.initialized) return;
-    if (this.initPromise) return await this.initPromise;
-
+    if (this.initialized && this.client.isRunning()) return;
+    if (this.initPromise) return this.initPromise;
     this.initPromise = (async () => {
-      // 1) initialize
-      await this.client.request(
-        "initialize",
-        {
-          clientInfo: {
-            name: "claude-to-im-bridge-codex-runner",
-            title: "Claude-to-IM Codex Runner",
-            version: "1.0.0",
-          },
-          capabilities: null,
-        },
-        30_000,
-      );
-
-      // 2) model/list
-      const modelsRaw = await this.client.request(
-        "model/list",
-        { limit: 200, includeHidden: true },
-        30_000,
-      );
-
-      const models = (modelsRaw as ModelListResult | undefined)?.data;
-      const list = Array.isArray(models) ? models : [];
-      if (list.length === 0) {
-        const tail = this.client.getRecentLogs?.(30) || "";
-        throw new Error(
-          [
-            "Codex model/list 返回为空，无法选择模型。",
-            "",
-            "常见原因：",
-            "1) 本机尚未登录 Codex：请在运行桥接的机器上执行 `codex login`",
-            "2) 未设置 OPENAI_API_KEY（可写入 .env.bridge.local）",
-            "3) 当前账号/网络环境下无可用模型权限或被代理拦截",
-            "",
-            this.modelHint ? `当前 modelHint: ${this.modelHint}` : "",
-            tail ? `最近 codex 输出（已脱敏）：\n${tail}` : "",
-          ].filter(Boolean).join("\n"),
-        );
-      }
-      const selected = selectCodexModel(list as any, { explicitId: this.modelId, hint: this.modelHint });
-      const id = pickString(selected?.id);
-      if (!id) {
-        const tail = this.client.getRecentLogs?.(30) || "";
-        throw new Error(
-          [
-            "Codex model/list 返回了模型，但未能解析到可用的 model id。",
-            "",
-            this.modelHint ? `当前 modelHint: ${this.modelHint}` : "",
-            tail ? `最近 codex 输出（已脱敏）：\n${tail}` : "",
-          ].filter(Boolean).join("\n"),
-        );
-      }
-
-      this.selectedModelId = id;
-      this.selectedModelLabel = pickString(selected?.displayName) || pickString(selected?.model) || id;
+      await this.client.request('initialize', { clientInfo: { name: 'claude-to-im', version: '1.0.0' }, capabilities: { experimentalApi: true } }, 30_000);
+      this.client.notify('initialized');
+      const models: CodexModelListItem[] = [];
+      let cursor: string | null = null;
+      const cursors = new Set<string>();
+      do {
+        const response = record(await this.client.request('model/list', { limit: 100, includeHidden: false, ...(cursor ? { cursor } : {}) }, 30_000));
+        for (const value of Array.isArray(response.data) ? response.data : []) {
+          const item = record(value);
+          if (typeof item.id === 'string') models.push(item as unknown as CodexModelListItem);
+        }
+        cursor = pickString(response.nextCursor);
+        if (cursor && cursors.has(cursor)) throw new Error('Codex 模型目录返回重复分页游标');
+        if (cursor) cursors.add(cursor);
+      } while (cursor);
+      this.models = models;
       this.initialized = true;
     })();
+    try { await this.initPromise; } catch (error) {
+      // 初始化成功后目录失败也必须重新建连接，服务端不接受重复 initialize。
+      this.client.stop(); this.initialized = false; this.models = [];
+      throw error;
+    } finally { this.initPromise = null; }
+  }
 
+  private async startThread(params: StreamChatParams, selection: ModelSelection, policy: TurnPolicy): Promise<string> {
+    const response = record(await this.client.request('thread/start', {
+      model: selection.model.model || selection.model.id, cwd: params.workingDirectory || this.options.projectRoot, ...policy,
+      ...(params.systemPrompt ? { baseInstructions: params.systemPrompt } : {}),
+    }, 30_000));
+    const id = pickString(record(response.thread).id);
+    if (!id) throw new Error('thread/start 未返回 thread.id');
+    return id;
+  }
+
+  private async startTurn(opts: { threadId: string; input: Record<string, unknown>[]; params: StreamChatParams; selection: ModelSelection; policy: TurnPolicy }): Promise<string> {
+    const response = record(await this.client.request('turn/start', {
+      threadId: opts.threadId, input: opts.input, model: opts.selection.model.model || opts.selection.model.id,
+      effort: opts.selection.effort, cwd: opts.params.workingDirectory || this.options.projectRoot,
+      approvalPolicy: opts.policy.approvalPolicy, sandboxPolicy: buildTurnSandboxPolicy(opts.policy.sandbox),
+    }, 30_000));
+    const id = pickString(record(response.turn).id);
+    if (!id) throw new Error('turn/start 未返回 turn.id');
+    return id;
+  }
+
+  private async handleServerRequest(message: JsonRpcMessage & { id: string | number }): Promise<void> {
+    const params = message.params ?? {};
+    const active = this.activeTurns.get(pickString(params.threadId) ?? '');
+    const method = message.method;
+    const supported = ['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'item/tool/requestUserInput', 'item/permissions/requestApproval', 'mcpServer/elicitation/request'];
+    if (!supported.includes(method ?? '')) { this.client.respondError(message.id, -32601, `不支持的服务端请求: ${method}`); return; }
+    // 精细权限和 MCP elicitation 需要更专门的界面，明确拒绝而不是挂起或扩大授权。
+    if (method === 'item/permissions/requestApproval') { this.client.respond(message.id, { permissions: {}, scope: 'turn' }); active?.emit('progress', '精细权限请求已拒绝，请在本地 Codex 完成授权。'); return; }
+    if (method === 'mcpServer/elicitation/request') { this.client.respond(message.id, { action: 'decline', content: null }); active?.emit('progress', '此 MCP 交互需要在本地 Codex 完成。'); return; }
+    if (!active || active.abort.signal.aborted || (active.turnId && params.turnId !== active.turnId)) {
+      this.client.respond(message.id, method === 'item/tool/requestUserInput' ? { answers: {} } : { decision: 'cancel' }); return;
+    }
+    const pending = { permissionId: randomUUID(), resolved: false };
+    this.serverRequests.set(message.id, pending);
     try {
-      await this.initPromise;
+      const resolutionPromise = this.permissions.waitFor(pending.permissionId, active.abort.signal);
+      active.onStatus?.('waiting_for_input');
+      if (method === 'item/tool/requestUserInput') {
+        const questions: UserInputQuestion[] = [];
+        for (const value of Array.isArray(params.questions) ? params.questions : []) {
+          const question = record(value);
+          const id = pickString(question.id); const text = pickString(question.question);
+          if (!id || !text) continue;
+          questions.push({ id, question: text, header: pickString(question.header) ?? undefined, allowOther: question.isOther === true, isSecret: question.isSecret === true,
+            options: Array.isArray(question.options) ? question.options.flatMap(value => { const option = record(value); return typeof option.label === 'string' ? [{ label: option.label, description: pickString(option.description) ?? undefined }] : []; }) : undefined });
+        }
+        if (!questions.length) this.permissions.resolvePendingPermission(pending.permissionId, { behavior: 'deny', message: '服务端问题格式无效' });
+        else active.emit('user_input_request', { requestId: pending.permissionId, questions });
+        const resolution = await resolutionPromise;
+        const supplied = record(resolution.updatedInput?.answers);
+        const answers: Record<string, { answers: string[] }> = {};
+        if (resolution.behavior === 'allow') for (const question of questions) {
+          const values = supplied[question.id];
+          if (Array.isArray(values) && values.every(value => typeof value === 'string')) answers[question.id] = { answers: values };
+        }
+        if (!pending.resolved) this.client.respond(message.id, { answers });
+      } else {
+        active.emit('permission_request', { permissionRequestId: pending.permissionId, toolName: method === 'item/fileChange/requestApproval' ? 'fileChange' : 'commandExecution', toolInput: params });
+        const resolution = await resolutionPromise;
+        const decision = resolution.behavior === 'allow' ? resolution.scope === 'session' ? 'acceptForSession' : 'accept' : active.abort.signal.aborted ? 'cancel' : 'decline';
+        if (!pending.resolved) this.client.respond(message.id, { decision });
+      }
+    } catch (error) {
+      this.permissions.resolvePendingPermission(pending.permissionId, { behavior: 'deny', message: '交互请求失败' });
+      if (!pending.resolved && this.client.isRunning()) this.client.respondError(message.id, -32603, toErrorMessage(error));
     } finally {
-      // allow retry after failure
-      if (!this.initialized) this.initPromise = null;
+      this.serverRequests.delete(message.id);
+      active.onStatus?.('running');
     }
-  }
-
-  private async startThread(opts: { systemPrompt?: string; cwd?: string }): Promise<string> {
-    const system = opts.systemPrompt && opts.systemPrompt.trim() ? opts.systemPrompt.trim() : "";
-
-    const payload: Record<string, unknown> = {
-      model: this.selectedModelId,
-      approvalPolicy: this.approvalPolicy,
-      sandbox: this.sandboxMode,
-      experimentalRawEvents: false,
-      persistExtendedHistory: false,
-    };
-
-    const cwd = (opts.cwd || "").trim();
-    if (cwd) {
-      // 让 Codex app-server 在该 thread 下以指定 cwd 运行（用于 /cwd 或默认工作目录）
-      payload.cwd = cwd;
-    }
-
-    if (system) {
-      payload.baseInstructions = system;
-    }
-
-    const res = await this.client.request("thread/start", payload, 30_000);
-    const threadId = pickString((res as ThreadStartResult | undefined)?.thread?.id) || pickString((res as any)?.id);
-    if (!threadId) throw new Error("thread/start 未返回 thread.id");
-    return threadId;
-  }
-
-  private async startTurn(opts: { threadId: string; prompt: string; cwd?: string }): Promise<string> {
-    const turnPayload: Record<string, unknown> = {
-      threadId: opts.threadId,
-      approvalPolicy: this.approvalPolicy,
-      sandboxPolicy: buildTurnSandboxPolicy(this.sandboxMode),
-      input: [
-        {
-          type: "text",
-          text: opts.prompt,
-          text_elements: [],
-        },
-      ],
-    };
-
-    const cwd = (opts.cwd || "").trim();
-    if (cwd) {
-      // 允许每个 turn 指定 cwd，确保后续工具/命令在正确目录执行
-      turnPayload.cwd = cwd;
-    }
-
-    const res = await this.client.request("turn/start", turnPayload, 30_000);
-    const turnId = pickString((res as TurnStartResult | undefined)?.turn?.id) || pickString((res as any)?.id);
-    if (!turnId) throw new Error("turn/start 未返回 turn.id");
-    return turnId;
   }
 
   private async collectTurnText(opts: {
-    threadId: string;
-    turnId: string;
-    onDelta: (delta: string) => void;
-    /** Callback for tool call lifecycle events (start / complete / error). */
-    onToolEvent?: (toolId: string, toolName: string, status: 'running' | 'complete' | 'error') => void;
-    signal: AbortSignal;
-  }): Promise<{
-    text: string;
-    usage: TokenUsage | null;
-    lastUsage: TokenUsage | null;
-    contextWindow: number | null;
-    emittedFinalText: boolean;
-  }> {
-    const timeoutMs = this.turnTimeoutMs;
-    const deadlineMs = timeoutMs > 0 ? Date.now() + timeoutMs : Number.POSITIVE_INFINITY;
-    const idleTimeoutMs = this.turnIdleTimeoutMs;
-    let legacyMerged = "";
-    let finalMerged = "";
-    let finalCompletedText: string | null = null;
-    let lastAgentMessageText: string | null = null;
-    let emittedFinalText = false;
-    let turnCompleted = false;
-    let usage: TokenUsage | null = null;
-    let lastUsage: TokenUsage | null = null;        // 本 turn 最后一次 token_count.last_token_usage
-    let contextWindow: number | null = null;        // Codex 自报 model_context_window
-    let lastRelevantEventMs = Date.now();
-    /** De-dup set for streaming tool notifications (commandExecution, mcpToolCall)
-     *  that fire per-delta rather than once per tool invocation. */
-    const seenToolIds = new Set<string>();
-    const agentMessagePhaseById = new Map<string, string>();
-    const pendingAgentMessageDeltaById = new Map<string, string>();
-
-    const flushPendingAgentMessageDelta = (itemId: string): void => {
-      const buffered = pendingAgentMessageDeltaById.get(itemId);
-      if (!buffered) return;
-
-      pendingAgentMessageDeltaById.delete(itemId);
-      legacyMerged += buffered;
-
-      if (agentMessagePhaseById.get(itemId) === "final_answer") {
-        finalMerged += buffered;
-        emittedFinalText = true;
-        opts.onDelta(buffered);
-      }
-    };
-
-    const handle = (msg: JsonRpcMessage): void => {
-      const msgThreadId = getNotifThreadId(msg);
-      const msgTurnId = getNotifTurnId(msg);
-      if (msgThreadId !== opts.threadId || msgTurnId !== opts.turnId) return;
-      lastRelevantEventMs = Date.now();
-
-      const method = msg.method || "";
-      const params = (msg.params || {}) as Record<string, unknown>;
-
-      // 显式识别 Codex token_count payload (last_token_usage / total_token_usage / model_context_window)。
-      // 比通用 BFS 稳定得多 — 不再依赖对象键插入顺序。
-      const pair = extractCodexUsagePair(params);
-      if (pair.last) lastUsage = pair.last;                      // 单次：覆盖为最新
-      if (pair.total) usage = pair.total;                        // 累计：覆盖为最新（一个 turn 内多次 token_count 时保留最终值）
-      if (pair.contextWindow != null) contextWindow = pair.contextWindow;
-
-      // 兜底：非 token_count 的 notification（如 turn.completed 里的 usage 字段），
-      // 仍用旧的 BFS 深搜，避免老 Codex 版本 / 未知 payload 的用量完全丢失。
-      if (!usage && !lastUsage) {
-        const maybe = findTokenUsageInAny(params);
-        if (maybe) usage = maybe;
-      }
-
-      if (method === "item/agentMessage/delta") {
-        const itemId = pickString(params.itemId);
-        const delta = String(params.delta ?? "");
-        if (itemId && delta) {
-          pendingAgentMessageDeltaById.set(itemId, (pendingAgentMessageDeltaById.get(itemId) || "") + delta);
-          if (agentMessagePhaseById.has(itemId)) {
-            flushPendingAgentMessageDelta(itemId);
-          }
-        }
-        return;
-      }
-
-      // ── Tool call lifecycle ─────────────────────────────────────
-      // Codex app-server (v0.115+) notifications for tool activity:
-      //   item/started              — new item begins (item.type identifies kind)
-      //   item/tool/call            — explicit tool invocation notification
-      //   item/commandExecution/*   — shell command execution
-      //   item/mcpToolCall/progress — MCP tool progress
-      //   item/completed            — item finished
-
-      if (method === "item/started") {
-        const item = (params.item || {}) as Record<string, unknown>;
-        const itemType = String(item.type || "");
-        if (itemType === "agentMessage") {
-          const itemId = pickString(item.id);
-          if (itemId) {
-            agentMessagePhaseById.set(itemId, pickString((item as any).phase) || "");
-            flushPendingAgentMessageDelta(itemId);
-          }
-          return;
-        }
-        if ((itemType === "function_call" || itemType === "tool_call") && opts.onToolEvent) {
-          const toolId = pickString(item.id) || `tool-${Date.now()}`;
-          const toolName = pickString(item.name)
-            || pickString((item as any).function?.name)
-            || "codex_tool";
-          opts.onToolEvent(toolId, toolName, "running");
-        }
-        return;
-      }
-
-      // item/tool/call — explicit tool invocation (alternative to item/started)
-      if (method === "item/tool/call" && opts.onToolEvent) {
-        const toolId = pickString(params.id) || pickString((params as any).callId) || `tool-${Date.now()}`;
-        const toolName = pickString(params.toolName as string)
-          || pickString(params.name as string)
-          || "codex_tool";
-        opts.onToolEvent(toolId, toolName, "running");
-        return;
-      }
-
-      // item/commandExecution/outputDelta — shell command is running
-      if (method === "item/commandExecution/outputDelta" && opts.onToolEvent) {
-        const itemId = pickString(params.itemId as string) || pickString((params as any).item?.id);
-        if (itemId && !seenToolIds.has(itemId)) {
-          seenToolIds.add(itemId);
-          opts.onToolEvent(itemId, "shell", "running");
-        }
-        return;
-      }
-
-      // item/mcpToolCall/progress — MCP tool is executing
-      if (method === "item/mcpToolCall/progress" && opts.onToolEvent) {
-        const itemId = pickString(params.itemId as string) || pickString((params as any).item?.id);
-        const toolName = pickString(params.toolName as string) || "mcp_tool";
-        if (itemId && !seenToolIds.has(itemId)) {
-          seenToolIds.add(itemId);
-          opts.onToolEvent(itemId, toolName, "running");
-        }
-        return;
-      }
-
-      if (method === "item/completed") {
-        const item = (params.item || {}) as Record<string, unknown>;
-        const itemType = String(item.type || "");
-        if (itemType === "agentMessage") {
-          const itemId = pickString(item.id);
-          if (itemId) {
-            agentMessagePhaseById.set(itemId, pickString((item as any).phase) || "");
-            flushPendingAgentMessageDelta(itemId);
-          }
-          const txt = pickString(item.text);
-          if (txt) {
-            lastAgentMessageText = txt;
-            if (pickString((item as any).phase) === "final_answer") {
-              finalCompletedText = txt;
-            }
-          }
-        } else if ((itemType === "function_call" || itemType === "tool_call") && opts.onToolEvent) {
-          // Tool call finished executing
-          const toolId = pickString(item.id) || "";
-          const toolName = pickString(item.name) || pickString((item as any).function?.name) || "";
-          if (toolId) opts.onToolEvent(toolId, toolName, "complete");
-        } else if ((itemType === "function_call_output" || itemType === "tool_call_output") && opts.onToolEvent) {
-          // Tool result arrived
-          const callId = pickString((item as any).call_id) || pickString((item as any).tool_use_id) || "";
-          if (callId) opts.onToolEvent(callId, "", (item as any).is_error ? "error" : "complete");
-        }
-        return;
-      }
-
-      if (method === "error") {
-        const errObj = params.error;
-        if (isTransientReconnectNotification(errObj)) {
-          const msg = pickString((errObj as any)?.message);
-          if (msg) console.warn(`[codex-llm] ${msg}`);
-          return;
-        }
-        throw new Error(formatTurnErrorForHumans(errObj));
-      }
-
-      if (method === "turn/completed") {
-        turnCompleted = true;
-      }
-    };
-
-    // 先消费 backlog，避免“通知早于 turn/start 返回”导致丢失
-    let lastError: unknown = null;
-    for (const msg of this.client.drainBacklog((m) =>
-      getNotifThreadId(m) === opts.threadId && getNotifTurnId(m) === opts.turnId
-    )) {
-      try {
-        handle(msg);
-      } catch (e) {
-        lastError = e;
-      }
-    }
-
-    const off = this.client.onNotification((m) => {
-      try {
-        // 复用同一个 handle，但把异常捕获出来供外层 await 检查
-        handle(m);
-      } catch (e) {
-        lastError = e;
-      }
-    });
-
+    threadId: string; turnId: string; signal: AbortSignal; onDelta: (delta: string) => void;
+    onProgress?: (text: string) => void;
+    onToolEvent?: (id: string, name: string, status: 'running' | 'complete' | 'error', item?: Record<string, unknown>) => void;
+  }): Promise<TurnResult> {
+    let text = ''; let emittedFinalText = false;
+    let usage: TokenUsage | null = null; let lastUsage: TokenUsage | null = null; let contextWindow: number | null = null; let contextTokens: number | null = null;
+    let baseline = this.previousUsage.get(opts.threadId) ?? null;
+    let finalTotal: TokenUsage | null = null;
+    const items = new Map<string, { phase: string; buffered: string; emitted: string }>();
+    const toolIds = new Set<string>();
+    let completed = false;
+    let timeout: NodeJS.Timeout | undefined; let idleTimer: NodeJS.Timeout | undefined;
+    let off = () => {}; let offDisconnect = () => {};
+    let rejectTurn: (error: Error) => void = () => {};
+    const onAbort = () => rejectTurn(abortError());
+    const matches = (message: JsonRpcMessage) => getNotifThreadId(message) === opts.threadId && getNotifTurnId(message) === opts.turnId;
     try {
-      while (true) {
-        if (opts.signal.aborted) throw abortError();
-        if (lastError) throw lastError;
-
-        if (turnCompleted) {
-          for (const itemId of pendingAgentMessageDeltaById.keys()) {
-            flushPendingAgentMessageDelta(itemId);
-          }
-
-          // Codex rollout JSONL persists token_count as an out-of-band event_msg with
-          // no threadId / turnId. That means the live notification filter above cannot
-          // safely associate it with this turn. After turn completion, read the latest
-          // token_count from this session's rollout file and use it as authoritative
-          // ctx data when the in-memory stream did not provide it.
-          if (!lastUsage || !usage || contextWindow == null) {
-            try {
-              const rolloutPair = await readLatestCodexUsageFromRollout(opts.threadId);
-              if (!lastUsage && rolloutPair?.last) lastUsage = rolloutPair.last;
-              if (!usage && rolloutPair?.total) usage = rolloutPair.total;
-              if (contextWindow == null && rolloutPair?.contextWindow != null) {
-                contextWindow = rolloutPair.contextWindow;
-              }
-            } catch (err) {
-              console.warn(
-                `[codex-llm] Failed to read rollout token_count for ${opts.threadId}: ${toErrorMessage(err)}`,
-              );
+      await new Promise<void>((resolve, reject) => {
+        rejectTurn = reject;
+        const idleMs = this.options.turnIdleTimeoutMs ?? 0;
+        const refreshIdle = () => { if (idleTimer) clearTimeout(idleTimer); if (idleMs > 0) idleTimer = setTimeout(() => reject(new Error('Codex 长时间没有进展，已请求中断')), idleMs); };
+        const flush = (id: string) => {
+          const item = items.get(id);
+          if (!item?.buffered || !item.phase) return;
+          const delta = item.buffered; item.buffered = ''; item.emitted += delta;
+          if (item.phase === 'commentary') opts.onProgress?.(item.emitted);
+          else { text += delta; emittedFinalText = true; opts.onDelta(delta); }
+        };
+        const handle = (message: JsonRpcMessage) => {
+          if (!matches(message) || completed) return;
+          refreshIdle();
+          const params = message.params ?? {}; const item = record(params.item);
+          if (message.method === 'thread/tokenUsage/updated') {
+            const raw = record(params.tokenUsage);
+            lastUsage = normalizeTokenUsage(raw.last);
+            const total = normalizeTokenUsage(raw.total);
+            if (total) {
+              if (!baseline) baseline = lastUsage ? subtractUsage(total, lastUsage) : total;
+              usage = subtractUsage(total, baseline); finalTotal = total;
             }
+            contextWindow = number(raw.modelContextWindow) || null;
+            const last = record(raw.last);
+            if (typeof last.totalTokens === 'number' && last.totalTokens >= 0) contextTokens = last.totalTokens;
+          } else if (message.method === 'item/agentMessage/delta') {
+            const id = pickString(params.itemId); if (!id) return;
+            const state = items.get(id) ?? { phase: '', buffered: '', emitted: '' };
+            state.buffered += typeof params.delta === 'string' ? params.delta : '';
+            items.set(id, state); flush(id);
+          } else if (message.method === 'item/started' || message.method === 'item/completed') {
+            const id = pickString(item.id); if (!id) return;
+            const done = message.method === 'item/completed';
+            if (item.type === 'agentMessage') {
+              const state = items.get(id) ?? { phase: '', buffered: '', emitted: '' };
+              state.phase = pickString(item.phase) ?? (done ? 'final_answer' : ''); items.set(id, state); flush(id);
+              if (done && typeof item.text === 'string') {
+                if (state.phase === 'commentary') { if (item.text !== state.emitted) opts.onProgress?.(item.text); }
+                else if (!state.emitted && item.text) { text += item.text; emittedFinalText = true; opts.onDelta(item.text); }
+                else if (item.text.startsWith(state.emitted) && item.text.length > state.emitted.length) { const delta = item.text.slice(state.emitted.length); text += delta; opts.onDelta(delta); }
+              }
+            } else if (['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'webSearch', 'imageView', 'collabAgentToolCall'].includes(String(item.type))) {
+              const name = pickString(item.tool) ?? pickString(item.command) ?? String(item.type);
+              if (!toolIds.has(id)) { toolIds.add(id); opts.onToolEvent?.(id, name, 'running', item); }
+              if (done) opts.onToolEvent?.(id, name, item.status === 'failed' || item.status === 'declined' || number(item.exitCode) > 0 || Boolean(item.error) ? 'error' : 'complete', item);
+            }
+          } else if (message.method === 'item/mcpToolCall/progress') {
+            if (typeof params.message === 'string') opts.onProgress?.(params.message);
+          } else if (message.method === 'error' && params.willRetry !== true) {
+            reject(new Error(toErrorMessage(pickString(record(params.error).message) ?? JSON.stringify(params.error))));
+          } else if (message.method === 'turn/completed') {
+            const turn = record(params.turn); completed = true;
+            if (turn.status === 'failed') reject(new Error(toErrorMessage(pickString(record(turn.error).message) ?? 'Codex turn 执行失败')));
+            else if (turn.status === 'interrupted') reject(abortError());
+            else resolve();
           }
-
-          const completedFinal = finalCompletedText ?? "";
-          const lastAgentMessage = lastAgentMessageText ?? "";
-          let text = finalMerged.trim();
-          if (!text && completedFinal) {
-            text = completedFinal.trim();
-          }
-          if (!text) {
-            text = legacyMerged.trim();
-          }
-          if (!text && lastAgentMessage) {
-            text = lastAgentMessage.trim();
-          }
-
-          return { text, usage, lastUsage, contextWindow, emittedFinalText };
-        }
-
-        // “无事件”超时：只统计本 turn 的相关通知（其它 turn 的噪声不算进展）。用于尽快发现卡死/网络阻塞。
-        if (idleTimeoutMs > 0 && Date.now() - lastRelevantEventMs > idleTimeoutMs) {
-          const mins = Math.max(1, Math.ceil(idleTimeoutMs / 60_000));
-          throw new Error(
-            `等待 turn 输出超过 ${mins} 分钟无任何进展（可能网络/代理阻塞或后端挂起），已中断：${opts.turnId}\n` +
-            `可通过 bridge_codex_turn_idle_timeout_ms 调整（设为 0 关闭）。`,
-          );
-        }
-
-        if (Date.now() > deadlineMs) {
-          const mins = timeoutMs > 0 ? Math.ceil(timeoutMs / 60_000) : 0;
-          const hint = timeoutMs > 0 ? `（超过 ${mins} 分钟，可通过 bridge_codex_turn_timeout_ms 调整）` : "";
-          throw new Error(`等待 turn 输出超时${hint}: ${opts.turnId}`);
-        }
-
-        // 让出事件循环，等待更多 notification
-        await new Promise((r) => setTimeout(r, 100));
+        };
+        off = this.client.onNotification(message => { try { handle(message); } catch (error) { reject(error); } });
+        offDisconnect = this.client.onDisconnect(error => reject(error));
+        opts.signal.addEventListener('abort', onAbort, { once: true });
+        if (opts.signal.aborted) { reject(abortError()); return; }
+        const timeoutMs = this.options.turnTimeoutMs ?? 90 * 60_000;
+        if (timeoutMs > 0) timeout = setTimeout(() => reject(new Error('Codex turn 执行超时，已请求中断')), timeoutMs);
+        refreshIdle();
+        for (const message of this.client.drainBacklog(matches)) handle(message);
+      });
+      if (finalTotal) this.previousUsage.set(opts.threadId, finalTotal);
+      return { text, usage, lastUsage, contextWindow, contextTokens, emittedFinalText };
+    } catch (error) {
+      if (!completed && this.client.isRunning()) {
+        try { await this.client.request('turn/interrupt', { threadId: opts.threadId, turnId: opts.turnId }, 5000); } catch { /* 保留原始错误 */ }
       }
+      throw error;
     } finally {
-      off();
+      off(); offDisconnect(); opts.signal.removeEventListener('abort', onAbort);
+      if (timeout) clearTimeout(timeout); if (idleTimer) clearTimeout(idleTimer);
+      this.client.drainBacklog(matches);
     }
   }
 }

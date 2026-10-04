@@ -1,0 +1,390 @@
+{
+  "target": {
+    "id": "Method:src/lib/workflow/workflow-store.ts:WorkflowStore.runDir#1",
+    "name": "runDir",
+    "type": "Method",
+    "filePath": "src/lib/workflow/workflow-store.ts"
+  },
+  "direction": "upstream",
+  "impactedCount": 29,
+  "risk": "CRITICAL",
+  "summary": {
+    "direct": 17,
+    "processes_affected": 15,
+    "modules_affected": 2
+  },
+  "affected_processes": [
+    {
+      "name": "handleStatus",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 8,
+      "total_hits": 14,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "handleReport",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 9,
+      "total_hits": 11,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "handleResume",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 9,
+      "total_hits": 9,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "handleWorkflowCommand",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 7,
+      "total_hits": 7,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "handleStartReviewFix",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 7,
+      "total_hits": 7,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "handleResume",
+      "type": "Function",
+      "filePath": "src/lib/workflow/cli.ts",
+      "affected_process_count": 5,
+      "total_hits": 7,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "applyFixes",
+      "type": "Function",
+      "filePath": "src/lib/workflow/auto-fixer.ts",
+      "affected_process_count": 3,
+      "total_hits": 5,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "deliverRunStatus",
+      "type": "Function",
+      "filePath": "src/lib/bridge/internal/workflow-command.ts",
+      "affected_process_count": 5,
+      "total_hits": 5,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "main",
+      "type": "Function",
+      "filePath": "src/lib/workflow/cli.ts",
+      "affected_process_count": 5,
+      "total_hits": 5,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "updateMeta",
+      "type": "Function",
+      "filePath": "src/lib/workflow/workflow-store.ts",
+      "affected_process_count": 2,
+      "total_hits": 4,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "loadSpec",
+      "type": "Function",
+      "filePath": "src/lib/workflow/workflow-store.ts",
+      "affected_process_count": 2,
+      "total_hits": 4,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "loadPlan",
+      "type": "Function",
+      "filePath": "src/lib/workflow/workflow-store.ts",
+      "affected_process_count": 2,
+      "total_hits": 4,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "savePlan",
+      "type": "Function",
+      "filePath": "src/lib/workflow/workflow-store.ts",
+      "affected_process_count": 2,
+      "total_hits": 4,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "saveSpec",
+      "type": "Function",
+      "filePath": "src/lib/workflow/workflow-store.ts",
+      "affected_process_count": 2,
+      "total_hits": 4,
+      "earliest_broken_step": 1
+    },
+    {
+      "name": "loadRoundArtifact",
+      "type": "Function",
+      "filePath": "src/lib/workflow/workflow-store.ts",
+      "affected_process_count": 1,
+      "total_hits": 2,
+      "earliest_broken_step": 1
+    }
+  ],
+  "affected_modules": [
+    {
+      "name": "Workflow",
+      "hits": 24,
+      "impact": "direct"
+    },
+    {
+      "name": "Internal",
+      "hits": 5,
+      "impact": "indirect"
+    }
+  ],
+  "byDepth": {
+    "1": [
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/workflow-store.ts:WorkflowStore.roundsDir#1",
+        "name": "roundsDir",
+        "filePath": "src/lib/workflow/workflow-store.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/workflow-store.ts:WorkflowStore.createRun#1",
+        "name": "createRun",
+        "filePath": "src/lib/workflow/workflow-store.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/workflow-store.ts:WorkflowStore.getMeta#1",
+        "name": "getMeta",
+        "filePath": "src/lib/workflow/workflow-store.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/workflow-store.ts:WorkflowStore.updateMeta#2",
+        "name": "updateMeta",
+        "filePath": "src/lib/workflow/workflow-store.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/workflow-store.ts:WorkflowStore.saveSpec#3",
+        "name": "saveSpec",
+        "filePath": "src/lib/workflow/workflow-store.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/workflow-store.ts:WorkflowStore.loadSpec#2",
+        "name": "loadSpec",
+        "filePath": "src/lib/workflow/workflow-store.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/workflow-store.ts:WorkflowStore.savePlan#3",
+        "name": "savePlan",
+        "filePath": "src/lib/workflow/workflow-store.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/workflow-store.ts:WorkflowStore.loadPlan#2",
+        "name": "loadPlan",
+        "filePath": "src/lib/workflow/workflow-store.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/workflow-store.ts:WorkflowStore.saveLedger#2",
+        "name": "saveLedger",
+        "filePath": "src/lib/workflow/workflow-store.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/workflow-store.ts:WorkflowStore.loadLedger#1",
+        "name": "loadLedger",
+        "filePath": "src/lib/workflow/workflow-store.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/workflow-store.ts:WorkflowStore.saveSnapshot#2",
+        "name": "saveSnapshot",
+        "filePath": "src/lib/workflow/workflow-store.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/workflow-store.ts:WorkflowStore.loadSnapshot#1",
+        "name": "loadSnapshot",
+        "filePath": "src/lib/workflow/workflow-store.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/workflow-store.ts:WorkflowStore.saveRunArtifact#3",
+        "name": "saveRunArtifact",
+        "filePath": "src/lib/workflow/workflow-store.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/workflow-store.ts:WorkflowStore.loadRunArtifact#2",
+        "name": "loadRunArtifact",
+        "filePath": "src/lib/workflow/workflow-store.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/workflow-store.ts:WorkflowStore.appendEvent#1",
+        "name": "appendEvent",
+        "filePath": "src/lib/workflow/workflow-store.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/workflow-store.ts:WorkflowStore.loadEvents#1",
+        "name": "loadEvents",
+        "filePath": "src/lib/workflow/workflow-store.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Method:src/lib/workflow/workflow-store.ts:WorkflowStore.findLatestVersion#2",
+        "name": "findLatestVersion",
+        "filePath": "src/lib/workflow/workflow-store.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "2": [
+      {
+        "depth": 2,
+        "id": "Method:src/lib/workflow/workflow-store.ts:WorkflowStore.saveRoundArtifact#4",
+        "name": "saveRoundArtifact",
+        "filePath": "src/lib/workflow/workflow-store.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 2,
+        "id": "Method:src/lib/workflow/workflow-store.ts:WorkflowStore.loadRoundArtifact#3",
+        "name": "loadRoundArtifact",
+        "filePath": "src/lib/workflow/workflow-store.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 2,
+        "id": "Method:src/lib/workflow/auto-fixer.ts:AutoFixer.applyFixes#2",
+        "name": "applyFixes",
+        "filePath": "src/lib/workflow/auto-fixer.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      },
+      {
+        "depth": 2,
+        "id": "Function:src/lib/workflow/cli.ts:handleResume",
+        "name": "handleResume",
+        "filePath": "src/lib/workflow/cli.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      },
+      {
+        "depth": 2,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleReport",
+        "name": "handleReport",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      },
+      {
+        "depth": 2,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleResume",
+        "name": "handleResume",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      },
+      {
+        "depth": 2,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:deliverRunStatus",
+        "name": "deliverRunStatus",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      }
+    ],
+    "3": [
+      {
+        "depth": 3,
+        "id": "Function:src/lib/workflow/cli.ts:handleCodeReview",
+        "name": "handleCodeReview",
+        "filePath": "src/lib/workflow/cli.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      },
+      {
+        "depth": 3,
+        "id": "Function:src/lib/workflow/cli.ts:main",
+        "name": "main",
+        "filePath": "src/lib/workflow/cli.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 3,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleWorkflowCommand",
+        "name": "handleWorkflowCommand",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 3,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleStartReviewFix",
+        "name": "handleStartReviewFix",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.5
+      },
+      {
+        "depth": 3,
+        "id": "Function:src/lib/bridge/internal/workflow-command.ts:handleStatus",
+        "name": "handleStatus",
+        "filePath": "src/lib/bridge/internal/workflow-command.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ]
+  }
+}

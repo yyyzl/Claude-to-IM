@@ -1,10 +1,10 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { EventEmitter } from "node:events";
 import path from "node:path";
 
 export type JsonRpcMessage = {
   jsonrpc?: string;
-  id?: number;
+  id?: number | string;
   method?: string;
   params?: Record<string, unknown>;
   result?: unknown;
@@ -14,6 +14,7 @@ export type JsonRpcMessage = {
 
 const MAX_RECENT_LOG_LINES = 200;
 const MAX_RECENT_LOG_LINE_LEN = 800;
+export type AppServerProcessFactory = (command: string, args: string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams;
 
 type PendingRequest = {
   method: string;
@@ -22,19 +23,18 @@ type PendingRequest = {
   timer: NodeJS.Timeout;
 };
 
-function redactSensitive(text: string): string {
+export function redactSensitive(text: string): string {
   let out = text;
 
   // Common OpenAI-style keys
   out = out.replace(/sk-[A-Za-z0-9_-]{10,}/g, "sk-***");
 
   // Bearer tokens
-  out = out.replace(/(Authorization:\\s*Bearer)\\s+\\S+/gi, "$1 ***");
-  out = out.replace(/\\bBearer\\s+\\S+/gi, "Bearer ***");
+  out = out.replace(/\bBearer\s+[^\s"',;]+/gi, "Bearer ***");
 
   // Generic key/value secrets in logs
   out = out.replace(
-    /(api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|token|secret)\\s*[:=]\\s*([^\\s,;]+)/gi,
+    /(api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|token|secret)["']?\s*[:=]\s*["']?[^\s,;"'}]+/gi,
     "$1=***",
   );
 
@@ -71,6 +71,7 @@ export class JsonRpcAppServerClient {
   private command: string[];
   private cwd?: string;
   private debug: boolean;
+  private spawnProcess: AppServerProcessFactory;
 
   private proc: ChildProcessWithoutNullStreams | null = null;
   private requestId = 0;
@@ -82,10 +83,14 @@ export class JsonRpcAppServerClient {
   private stderrBuffer = "";
   private recentLogs: string[] = [];
 
-  constructor(opts: { command: string[]; cwd?: string; debug?: boolean }) {
+  constructor(opts: { command: string[]; cwd?: string; debug?: boolean; spawnProcess?: AppServerProcessFactory }) {
     this.command = opts.command;
     this.cwd = opts.cwd;
     this.debug = Boolean(opts.debug);
+    this.spawnProcess = opts.spawnProcess ?? ((command, args, options) => {
+      if (process.env.NODE_TEST_CONTEXT) throw new Error('测试禁止启动真实 Codex 进程，请注入内存 transport/process factory');
+      return spawn(command, args, options);
+    });
     this.emitter.setMaxListeners(50);
   }
 
@@ -100,6 +105,9 @@ export class JsonRpcAppServerClient {
 
   start(): void {
     if (this.isRunning()) return;
+    this.stdoutBuffer = "";
+    this.stderrBuffer = "";
+    this.backlog = [];
 
     const rawBin = this.command[0];
     const rawArgs = this.command.slice(1);
@@ -115,17 +123,25 @@ export class JsonRpcAppServerClient {
       ? ["/d", "/s", "/c", rawBin, ...rawArgs]
       : rawArgs;
 
-    this.proc = spawn(spawnBin, spawnArgs, {
+    this.proc = this.spawnProcess(spawnBin, spawnArgs, {
       cwd: this.cwd,
       stdio: "pipe",
       windowsHide: true,
     });
+    const currentProcess = this.proc;
 
     this.proc.stdin.setDefaultEncoding("utf8");
+    this.proc.stdin.on("error", (error) => {
+      if (this.proc !== currentProcess) return;
+      const safeError = new Error(redactSensitive(error.message));
+      this.rejectAllPending(safeError);
+      this.emitter.emit("disconnect", safeError);
+    });
     this.proc.stdout.setEncoding("utf8");
     this.proc.stderr.setEncoding("utf8");
 
     this.proc.stdout.on("data", (chunk: string) => {
+      if (this.proc !== currentProcess) return;
       this.stdoutBuffer += chunk;
       const { lines, rest } = extractLines(this.stdoutBuffer);
       this.stdoutBuffer = rest;
@@ -133,6 +149,7 @@ export class JsonRpcAppServerClient {
     });
 
     this.proc.stderr.on("data", (chunk: string) => {
+      if (this.proc !== currentProcess) return;
       this.stderrBuffer += chunk;
       const { lines, rest } = extractLines(this.stderrBuffer);
       this.stderrBuffer = rest;
@@ -147,17 +164,24 @@ export class JsonRpcAppServerClient {
     });
 
     this.proc.on("error", (err) => {
-      this.rejectAllPending(new Error(`codex app-server 启动失败: ${err instanceof Error ? err.message : String(err)}`));
+      if (this.proc !== currentProcess) return;
+      const safeError = new Error(redactSensitive(`codex app-server 启动失败: ${err instanceof Error ? err.message : String(err)}`));
+      this.rejectAllPending(safeError);
+      this.emitter.emit("disconnect", safeError);
     });
 
     this.proc.on("exit", (code, signal) => {
+      if (this.proc !== currentProcess) return;
       const msg = `[codex-app-server] exited: code=${code ?? "null"} signal=${signal ?? "null"}`;
       this.rejectAllPending(new Error(msg));
+      this.emitter.emit("disconnect", new Error(msg));
+      this.proc = null;
     });
   }
 
   stop(): void {
     if (!this.proc) return;
+    this.rejectAllPending(new Error("codex app-server 已停止"));
     try {
       if (this.proc.exitCode === null && !this.proc.killed) {
         this.proc.kill();
@@ -172,6 +196,33 @@ export class JsonRpcAppServerClient {
   onNotification(listener: (msg: JsonRpcMessage) => void): () => void {
     this.emitter.on("notification", listener);
     return () => this.emitter.off("notification", listener);
+  }
+
+  onDisconnect(listener: (error: Error) => void): () => void {
+    this.emitter.on("disconnect", listener);
+    return () => this.emitter.off("disconnect", listener);
+  }
+
+  onServerRequest(listener: (msg: JsonRpcMessage & { id: number | string }) => void): () => void {
+    this.emitter.on("serverRequest", listener);
+    return () => this.emitter.off("serverRequest", listener);
+  }
+
+  notify(method: string, params?: Record<string, unknown>): void {
+    this.write({ method, ...(params ? { params } : {}) });
+  }
+
+  respond(id: number | string, result: unknown): void {
+    this.write({ id, result });
+  }
+
+  respondError(id: number | string, code: number, message: string): void {
+    this.write({ id, error: { code, message } });
+  }
+
+  private write(payload: JsonRpcMessage): void {
+    if (!this.proc || !this.isRunning()) throw new Error("app-server 尚未启动");
+    this.proc.stdin.write(JSON.stringify(payload) + "\n");
   }
 
   drainBacklog(predicate: (msg: JsonRpcMessage) => boolean): JsonRpcMessage[] {
@@ -191,7 +242,6 @@ export class JsonRpcAppServerClient {
 
     const id = this.nextRequestId();
     const payload = {
-      jsonrpc: "2.0",
       id,
       method,
       params,
@@ -206,7 +256,7 @@ export class JsonRpcAppServerClient {
       this.pending.set(id, { method, resolve, reject, timer });
 
       try {
-        this.proc!.stdin.write(JSON.stringify(payload) + "\n");
+        this.write(payload);
       } catch (err) {
         clearTimeout(timer);
         this.pending.delete(id);
@@ -236,13 +286,22 @@ export class JsonRpcAppServerClient {
 
   private handleMessage(msg: JsonRpcMessage): void {
     const id = msg.id;
+    // 双向 RPC 的两个 ID 空间互相独立，必须先区分 method。
+    if (typeof msg.method === "string" && (typeof id === "number" || typeof id === "string")) {
+      if (this.emitter.listenerCount("serverRequest") === 0) {
+        this.respondError(id, -32601, `不支持的服务端请求: ${msg.method}`);
+      } else {
+        this.emitter.emit("serverRequest", msg);
+      }
+      return;
+    }
     if (typeof id === "number") {
       const pending = this.pending.get(id);
       if (!pending) return;
       clearTimeout(pending.timer);
       this.pending.delete(id);
       if (msg.error) {
-        pending.reject(new Error(`请求失败: ${pending.method}: ${JSON.stringify(msg.error)}`));
+        pending.reject(new Error(`请求失败: ${pending.method}: ${redactSensitive(JSON.stringify(msg.error))}`));
       } else {
         pending.resolve(msg.result);
       }

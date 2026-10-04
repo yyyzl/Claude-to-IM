@@ -14,6 +14,8 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
+import * as fs from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import type {
   ReviewScope,
   ReviewSnapshot,
@@ -102,21 +104,15 @@ export class DiffReader {
       throw new Error(`[DiffReader] Not a git repository: ${this.cwd}`);
     }
 
-    // Get HEAD commit SHA
-    const headCommit = await this.getHeadCommit();
-
-    // Determine base ref
-    const baseRef = this.resolveBaseRef(scope);
-
-    // Get diff args for this scope
-    const diffArgs = this.buildDiffArgs(scope);
+    const { headCommit, headTree, baseRef } = await this.freezeBaseline(scope);
+    const diffArgs = [baseRef, headTree, '--'];
 
     // Get full diff text
     const { stdout: diff } = await this.git(['diff', ...diffArgs]);
 
     // Get name-status for change type parsing
     const { stdout: nameStatusRaw } = await this.git([
-      'diff', ...diffArgs, '--name-status',
+      'diff', '--name-status', ...diffArgs,
     ]);
 
     if (!nameStatusRaw.trim()) {
@@ -125,7 +121,7 @@ export class DiffReader {
 
     // Get numstat for binary detection and stats
     const { stdout: numstatRaw } = await this.git([
-      'diff', ...diffArgs, '--numstat',
+      'diff', '--numstat', ...diffArgs,
     ]);
 
     // Parse changed files
@@ -172,7 +168,7 @@ export class DiffReader {
 
       // Path traversal protection
       const resolved = path.resolve(this.cwd, filePath);
-      if (!resolved.startsWith(path.resolve(this.cwd))) {
+      if (path.relative(path.resolve(this.cwd), resolved).startsWith('..') || path.isAbsolute(path.relative(path.resolve(this.cwd), resolved))) {
         excludedFiles.push({ path: filePath, reason: 'path_traversal' });
         continue;
       }
@@ -184,11 +180,11 @@ export class DiffReader {
       try {
         if (entry.changeType === 'deleted') {
           // Deleted file: get blob from base
-          blobSha = await this.getBlobSha(entry.path, baseRef, scope);
+          blobSha = await this.getBlobShaFromRef(entry.path, baseRef);
           baseBlobSha = blobSha;
         } else {
           // A/M/R/C: get blob from head side
-          blobSha = await this.getBlobSha(filePath, 'HEAD', scope);
+          blobSha = await this.getBlobShaFromRef(filePath, headTree);
         }
       } catch {
         // Cannot resolve blob — skip file
@@ -219,6 +215,7 @@ export class DiffReader {
     return {
       created_at: new Date().toISOString(),
       head_commit: headCommit,
+      head_tree: headTree,
       base_ref: baseRef,
       scope,
       diff: filteredDiff,
@@ -309,93 +306,50 @@ export class DiffReader {
   // ── Private: git helpers ──────────────────────────────────────
 
   /** Execute a git command in this.cwd. */
-  private async git(args: string[]): Promise<{ stdout: string; stderr: string }> {
+  private async git(args: string[], env?: NodeJS.ProcessEnv): Promise<{ stdout: string; stderr: string }> {
+    if (process.env.NODE_TEST_CONTEXT) throw new Error('Tests must inject an explicit fake Git boundary');
     return execFileAsync('git', args, {
       cwd: this.cwd,
+      env,
       maxBuffer: 50 * 1024 * 1024, // 50 MB for large diffs
       encoding: 'utf-8',
     });
   }
 
-  /** Get HEAD commit SHA. */
-  private async getHeadCommit(): Promise<string> {
-    const { stdout } = await this.git(['rev-parse', 'HEAD']);
-    return stdout.trim();
+  private async resolveCommit(ref: string): Promise<string> {
+    return (await this.git(['rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`])).stdout.trim();
   }
 
-  /** Resolve the base ref from scope. */
-  private resolveBaseRef(scope: ReviewScope): string {
-    switch (scope.type) {
-      case 'staged':
-        return 'HEAD';
-      case 'unstaged':
-        return 'HEAD';
-      case 'commit':
-        return `${scope.base_ref ?? 'HEAD'}~1`;
-      case 'commit_range':
-        return scope.base_ref ?? 'HEAD~1';
-      case 'branch':
-        return scope.base_ref ?? 'main';
-      default:
-        return 'HEAD';
+  private async freezeBaseline(scope: ReviewScope): Promise<{ headCommit: string; headTree: string; baseRef: string }> {
+    const headCommit = await this.resolveCommit(scope.type === 'commit' ? (scope.base_ref ?? 'HEAD') : (scope.head_ref ?? 'HEAD'));
+    let baseRef: string;
+    let headTree: string;
+    if (scope.type === 'staged' || scope.type === 'unstaged') {
+      const indexTree = (await this.git(['write-tree'])).stdout.trim();
+      baseRef = scope.type === 'staged' ? headCommit : indexTree;
+      headTree = scope.type === 'staged' ? indexTree : await this.freezeWorkingTree(indexTree);
+    } else {
+      const requestedBase = await this.resolveCommit(scope.type === 'commit' ? `${headCommit}^` : (scope.base_ref ?? 'HEAD~1'));
+      baseRef = scope.type === 'branch'
+        ? (await this.git(['merge-base', requestedBase, headCommit])).stdout.trim()
+        : requestedBase;
+      headTree = (await this.git(['rev-parse', `${headCommit}^{tree}`])).stdout.trim();
     }
+    return { headCommit, headTree, baseRef };
   }
 
-  /** Build diff args array from scope. */
-  private buildDiffArgs(scope: ReviewScope): string[] {
-    switch (scope.type) {
-      case 'staged':
-        return ['--cached'];
-      case 'unstaged':
-        return [];
-      case 'commit': {
-        const ref = scope.base_ref ?? 'HEAD';
-        return [`${ref}~1..${ref}`];
-      }
-      case 'commit_range':
-        return [`${scope.base_ref}..${scope.head_ref}`];
-      case 'branch':
-        return [`${scope.base_ref}...${scope.head_ref}`];
-      default:
-        return ['--cached'];
+  private async freezeWorkingTree(indexTree: string): Promise<string> {
+    // 独立索引捕获所有已跟踪文件，不触碰用户真实暂存区。
+    const directory = await fs.mkdtemp(path.join(tmpdir(), 'workflow-snapshot-'));
+    const indexFile = path.join(directory, 'index');
+    try {
+      const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+      await this.git(['read-tree', indexTree], env);
+      await this.git(['add', '-u', '--', '.'], env);
+      return (await this.git(['write-tree'], env)).stdout.trim();
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
     }
-  }
-
-  /** Get blob SHA for a file using appropriate strategy for the scope. */
-  private async getBlobSha(
-    filePath: string,
-    ref: string,
-    scope: ReviewScope,
-  ): Promise<string> {
-    if (scope.type === 'staged' && ref === 'HEAD') {
-      // Staged mode: read from index (not worktree)
-      return this.getBlobShaFromIndex(filePath);
-    }
-
-    if (scope.type === 'unstaged' && ref === 'HEAD') {
-      // Unstaged mode: hash the working tree file into git objects
-      return this.getBlobShaFromWorkTree(filePath);
-    }
-
-    // All other cases: read from the specified ref
-    return this.getBlobShaFromRef(filePath, ref);
-  }
-
-  /** Get blob SHA from git index (staged files). */
-  private async getBlobShaFromIndex(filePath: string): Promise<string> {
-    const { stdout } = await this.git(['ls-files', '-s', filePath]);
-    // Format: "100644 <blob_sha> 0\tpath"
-    const match = /^\d+\s+([0-9a-f]+)\s+\d+\t/.exec(stdout.trim());
-    if (!match) {
-      throw new Error(`[DiffReader] Cannot resolve blob SHA from index for: ${filePath}`);
-    }
-    return match[1];
-  }
-
-  /** Get blob SHA from working tree (unstaged files). */
-  private async getBlobShaFromWorkTree(filePath: string): Promise<string> {
-    const { stdout } = await this.git(['hash-object', '-w', filePath]);
-    return stdout.trim();
   }
 
   /** Get blob SHA from a specific ref. */

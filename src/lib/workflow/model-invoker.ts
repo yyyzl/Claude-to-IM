@@ -12,6 +12,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import type { query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { TimeoutError, AbortError, ModelInvocationError } from './types.js';
 
 // ── Public types ──────────────────────────────────────────────────
@@ -28,8 +29,10 @@ export interface ModelInvokerOptions {
   signal?: AbortSignal;
   /** System prompt for Claude (used as the `system` parameter in messages.create). */
   systemPrompt?: string;
-  /** Maximum output tokens for Claude (default: 200_000). */
+  /** Maximum output tokens for Claude; unset uses the runtime/model default. */
   maxOutputTokens?: number;
+  /** 隔离执行目录；自动修复必须指向所创建的 worktree。 */
+  cwd?: string;
   /** Backend name for Codex CLI (default: 'codex'). Passed as --backend <value>. */
   backend?: string;
 }
@@ -38,12 +41,14 @@ export interface ModelInvokerOptions {
 
 /** Command invoked for Codex CLI calls. */
 const CODEX_COMMAND = 'codeagent-wrapper';
+type ClaudeQuery = (args: Parameters<typeof query>[0]) => AsyncIterable<SDKMessage> & { close?: () => void };
 
 // ── ModelInvoker ──────────────────────────────────────────────────
 
 export class ModelInvoker {
   constructor(
     private readonly spawnImpl: typeof spawn = spawn,
+    private readonly claudeQuery?: ClaudeQuery,
   ) {}
 
   // ── Public API ────────────────────────────────────────────────
@@ -67,7 +72,7 @@ export class ModelInvoker {
     const maxRetries = opts.maxRetries ?? 1;
 
     return this.withRetry('codex', maxRetries, opts.signal, () =>
-      this.executeCodexProcess(prompt, opts.timeoutMs, opts.signal, opts.backend),
+      this.executeCodexProcess(prompt, opts.timeoutMs, opts.signal, opts.backend, opts.cwd),
     );
   }
 
@@ -216,7 +221,11 @@ export class ModelInvoker {
     timeoutMs: number,
     signal?: AbortSignal,
     backend?: string,
+    cwd?: string,
   ): Promise<string> {
+    if (process.env.NODE_TEST_CONTEXT && this.spawnImpl === spawn) {
+      return Promise.reject(new Error('单元测试必须注入 fake spawn，禁止启动真实模型进程'));
+    }
     return new Promise<string>((resolve, reject) => {
       // `-` is required for codeagent-wrapper stdin mode; without it the wrapper
       // exits early with "task required" and large prompts can trigger pipe EOFs.
@@ -232,6 +241,7 @@ export class ModelInvoker {
         stdio: ['pipe', 'pipe', 'pipe'],
         // Ensure the child process inherits PATH so codeagent-wrapper is found
         env: process.env,
+        cwd,
       });
 
       const stdoutChunks: Buffer[] = [];
@@ -424,12 +434,14 @@ export class ModelInvoker {
     prompt: string,
     opts: ModelInvokerOptions,
   ): Promise<string> {
+    if (process.env.NODE_TEST_CONTEXT && !this.claudeQuery) {
+      throw new Error('单元测试必须注入 fake query，禁止调用真实 Claude SDK');
+    }
     // Dynamic import — loaded at runtime to keep the dependency lazy.
-    const sdk = await import('@anthropic-ai/claude-agent-sdk');
-    const queryFn = sdk.query;
+    const queryFn = this.claudeQuery ?? (await import('@anthropic-ai/claude-agent-sdk')).query;
 
     const startTime = Date.now();
-    const model = opts.model ?? 'claude-sonnet-4-20250514';
+    const model = opts.model ?? 'sonnet';
 
     // Create an internal AbortController for timeout management.
     // If the caller also provides an external signal, we link them so
@@ -466,9 +478,18 @@ export class ModelInvoker {
     // Clean env: prevent "nested session" detection when running inside Claude Code
     const cleanEnv: Record<string, string | undefined> = { ...process.env };
     delete cleanEnv.CLAUDECODE;
+    if (opts.maxOutputTokens !== undefined) {
+      if (!Number.isSafeInteger(opts.maxOutputTokens) || opts.maxOutputTokens <= 0) {
+        clearTimeout(timeoutTimer);
+        opts.signal?.removeEventListener('abort', onExternalAbort);
+        throw new ModelInvocationError('claude', undefined, undefined, 'maxOutputTokens must be a positive integer');
+      }
+      cleanEnv.CLAUDE_CODE_MAX_OUTPUT_TOKENS = String(opts.maxOutputTokens);
+    }
 
+    let q: ReturnType<ClaudeQuery> | undefined;
     try {
-      const q = queryFn({
+      q = queryFn({
         prompt,
         options: {
           model,
@@ -478,6 +499,8 @@ export class ModelInvoker {
           persistSession: false,    // Ephemeral: no session persistence needed
           maxTurns: 1,              // Single-turn: send prompt, get response
           settingSources: [],       // SDK isolation: don't load filesystem settings
+          permissionMode: 'default',
+          cwd: opts.cwd,
           env: cleanEnv,
         },
       });
@@ -490,12 +513,10 @@ export class ModelInvoker {
       for await (const msg of q) {
         if (!msg || typeof msg !== 'object') continue;
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const m = msg as any;
-
-        if (m.type === 'result') {
+        if (msg.type === 'result') {
+          const m = msg;
           hasResult = true;
-          if (m.subtype === 'success') {
+          if (m.subtype === 'success' && !m.is_error) {
             resultText = typeof m.result === 'string' ? m.result : '';
             const elapsed = Date.now() - startTime;
             console.log(
@@ -505,7 +526,7 @@ export class ModelInvoker {
             );
           } else {
             // result.subtype === 'error'
-            const errors: string[] = Array.isArray(m.errors) ? m.errors : [];
+            const errors: string[] = m.subtype === 'success' ? [m.result] : m.errors;
             const errMsg = errors.length > 0
               ? errors.join('\n')
               : 'Claude Agent SDK returned error result';
@@ -549,6 +570,7 @@ export class ModelInvoker {
       // All other errors — retryable (transient SDK/process failures)
       throw err;
     } finally {
+      try { q?.close?.(); } catch { /* 会话可能已自行结束。 */ }
       clearTimeout(timeoutTimer);
       if (opts.signal) {
         opts.signal.removeEventListener('abort', onExternalAbort);

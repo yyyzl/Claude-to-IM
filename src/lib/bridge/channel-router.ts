@@ -20,6 +20,13 @@ function getCurrentBackend(): string {
   return (store.getSetting('bridge_llm_backend') || 'claude').trim().toLowerCase();
 }
 
+function getBackendDefaultModel(backend: string): string {
+  const { store } = getBridgeContext();
+  return backend === 'codex'
+    ? (store.getSetting('bridge_codex_model_id') || store.getSetting('bridge_codex_model_hint') || '')
+    : (store.getSetting('bridge_default_model') || '');
+}
+
 function hasBackendChanged(binding: ChannelBinding | null, currentBackend: string): boolean {
   // backend 为 undefined（旧数据无此字段）视为"未知"，不触发切换逻辑，保持向后兼容。
   return (binding?.backend != null) && (binding.backend !== currentBackend);
@@ -52,9 +59,7 @@ export function startNewSession(
   // codex  → bridge_codex_model_id / bridge_codex_model_hint（不 fallback 到
   //          bridge_default_model，因为那通常是 Claude 模型名；
   //          为空时 Codex provider 会用自己的内置默认值）
-  const backendDefaultModel = currentBackend === 'codex'
-    ? (store.getSetting('bridge_codex_model_id') || store.getSetting('bridge_codex_model_hint') || '')
-    : (store.getSetting('bridge_default_model') || '');
+  const backendDefaultModel = getBackendDefaultModel(currentBackend);
   const effectiveModel = opts.model || backendDefaultModel || '';
   const effectiveMode = opts.mode
     || existing?.mode
@@ -87,6 +92,7 @@ export function startNewSession(
   // 同时补齐 upsert 可能没更新到的列（mode/active/backend 等），保证行为一致。
   store.updateChannelBinding(binding.id, {
     sdkSessionId: '',
+    reasoningEffort: '',
     mode: effectiveMode,
     active: true,
     workingDirectory: effectiveCwd,
@@ -132,7 +138,7 @@ export function createBinding(
     || store.getSetting('bridge_default_work_dir')
     || homedir()
     || '';
-  const defaultModel = store.getSetting('bridge_default_model') || '';
+  const defaultModel = getBackendDefaultModel(currentBackend);
   const defaultProviderId = store.getSetting('bridge_default_provider_id') || '';
 
   const displayName = address.displayName || address.chatId;
@@ -162,6 +168,7 @@ export function createBinding(
   // 新建绑定时务必清空 sdkSessionId，避免恢复到历史 SDK 会话。
   store.updateChannelBinding(binding.id, {
     sdkSessionId: '',
+    reasoningEffort: '',
     mode: 'code',
     active: true,
     workingDirectory: defaultCwd,
@@ -199,6 +206,7 @@ export function bindToSession(
   // 切换会话时也要清空 sdkSessionId，防止恢复到之前的 SDK 上下文。
   store.updateChannelBinding(binding.id, {
     sdkSessionId: '',
+    reasoningEffort: '',
     mode,
     active: true,
     workingDirectory: session.working_directory,

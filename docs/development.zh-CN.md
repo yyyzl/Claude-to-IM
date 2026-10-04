@@ -75,7 +75,7 @@ getSetting(key: string): string | null;
 | `bridge_feishu_app_secret` | `"xxx"` | 飞书 App Secret |
 | `bridge_feishu_enabled` | `"true"` | 启用飞书适配器 |
 | `bridge_default_cwd` | `"/home/user/projects"` | 默认工作目录 |
-| `bridge_model` | `"claude-sonnet-4-20250514"` | 默认模型 |
+| `bridge_model` | `"sonnet"` | 默认模型 |
 | `bridge_{adapter}_stream_enabled` | `"true"` | 启用流式预览 |
 
 **可选的 key（用量统计 /usage）**
@@ -240,7 +240,7 @@ interface StreamChatParams {
   prompt: string;                    // 用户消息文本
   sessionId: string;                 // 内部会话 ID
   sdkSessionId?: string;             // Claude Code SDK 会话 ID，用于恢复
-  model?: string;                    // 使用的模型（如 'claude-sonnet-4-20250514'）
+  model?: string;                    // 使用的模型（如 'sonnet'）
   systemPrompt?: string;             // 系统提示词覆盖
   workingDirectory?: string;         // 代码执行的工作目录
   abortController?: AbortController; // 用于取消

@@ -1,0 +1,756 @@
+[
+  {
+    "symbol": "safeStringify",
+    "risk": "LOW",
+    "status": null,
+    "count": 3,
+    "direct": [
+      {
+        "depth": 1,
+        "id": "Function:scripts/claude-to-im-bridge/codex-llm.ts:formatTurnErrorForHumans",
+        "name": "formatTurnErrorForHumans",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "processes": [
+      {
+        "name": "collectTurnText",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 3,
+        "total_hits": 6,
+        "earliest_broken_step": 1
+      }
+    ]
+  },
+  {
+    "symbol": "emit",
+    "risk": "UNKNOWN",
+    "status": "ambiguous",
+    "count": 0,
+    "direct": null,
+    "processes": null
+  },
+  {
+    "symbol": "toErrorMessage",
+    "risk": "UNKNOWN",
+    "status": "ambiguous",
+    "count": 0,
+    "direct": null,
+    "processes": null
+  },
+  {
+    "symbol": "isThreadNotFoundError",
+    "risk": "LOW",
+    "status": null,
+    "count": 1,
+    "direct": [
+      {
+        "depth": 1,
+        "id": "Method:scripts/claude-to-im-bridge/codex-llm.ts:CodexAppServerLLMProvider.streamChat#1",
+        "name": "streamChat",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "processes": [
+      {
+        "name": "streamChat",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 9,
+        "total_hits": 9,
+        "earliest_broken_step": 1
+      }
+    ]
+  },
+  {
+    "symbol": "abortError",
+    "risk": "LOW",
+    "status": null,
+    "count": 2,
+    "direct": [
+      {
+        "depth": 1,
+        "id": "Method:scripts/claude-to-im-bridge/codex-llm.ts:CodexAppServerLLMProvider.collectTurnText#1",
+        "name": "collectTurnText",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "processes": [
+      {
+        "name": "streamChat",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 9,
+        "total_hits": 9,
+        "earliest_broken_step": 1
+      },
+      {
+        "name": "collectTurnText",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 3,
+        "total_hits": 3,
+        "earliest_broken_step": 1
+      }
+    ]
+  },
+  {
+    "symbol": "pickString",
+    "risk": "UNKNOWN",
+    "status": "ambiguous",
+    "count": 0,
+    "direct": null,
+    "processes": null
+  },
+  {
+    "symbol": "toSafeNonNegativeNumber",
+    "risk": "UNKNOWN",
+    "status": "ambiguous",
+    "count": 0,
+    "direct": null,
+    "processes": null
+  },
+  {
+    "symbol": "normalizeTokenUsage",
+    "risk": "LOW",
+    "status": null,
+    "count": 6,
+    "direct": [
+      {
+        "depth": 1,
+        "id": "Function:scripts/claude-to-im-bridge/codex-llm.ts:extractCodexUsagePair",
+        "name": "extractCodexUsagePair",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Function:scripts/claude-to-im-bridge/codex-llm.ts:findTokenUsageInAny",
+        "name": "findTokenUsageInAny",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "processes": [
+      {
+        "name": "collectTurnText",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 3,
+        "total_hits": 8,
+        "earliest_broken_step": 1
+      },
+      {
+        "name": "readLatestCodexUsageFromRollout",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 2,
+        "total_hits": 4,
+        "earliest_broken_step": 1
+      }
+    ]
+  },
+  {
+    "symbol": "tryParseJsonLikeString",
+    "risk": "LOW",
+    "status": null,
+    "count": 5,
+    "direct": [
+      {
+        "depth": 1,
+        "id": "Function:scripts/claude-to-im-bridge/codex-llm.ts:tryExtractCodexUsagePairFromJsonLine",
+        "name": "tryExtractCodexUsagePairFromJsonLine",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Function:scripts/claude-to-im-bridge/codex-llm.ts:findTokenUsageInAny",
+        "name": "findTokenUsageInAny",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "processes": [
+      {
+        "name": "collectTurnText",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 3,
+        "total_hits": 7,
+        "earliest_broken_step": 1
+      },
+      {
+        "name": "readLatestCodexUsageFromRollout",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 2,
+        "total_hits": 3,
+        "earliest_broken_step": 1
+      }
+    ]
+  },
+  {
+    "symbol": "extractCodexUsagePair",
+    "risk": "HIGH",
+    "status": null,
+    "count": 5,
+    "direct": [
+      {
+        "depth": 1,
+        "id": "Function:scripts/claude-to-im-bridge/codex-llm.ts:tryExtractCodexUsagePairFromJsonLine",
+        "name": "tryExtractCodexUsagePairFromJsonLine",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Function:scripts/claude-to-im-bridge/codex-llm.ts:CodexAppServerLLMProvider.handle",
+        "name": "handle",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "processes": [
+      {
+        "name": "streamChat",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 9,
+        "total_hits": 9,
+        "earliest_broken_step": 1
+      },
+      {
+        "name": "collectTurnText",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 3,
+        "total_hits": 6,
+        "earliest_broken_step": 1
+      },
+      {
+        "name": "readLatestCodexUsageFromRollout",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 2,
+        "total_hits": 3,
+        "earliest_broken_step": 1
+      }
+    ]
+  },
+  {
+    "symbol": "resolveCodexHomeDir",
+    "risk": "LOW",
+    "status": null,
+    "count": 3,
+    "direct": [
+      {
+        "depth": 1,
+        "id": "Function:scripts/claude-to-im-bridge/codex-llm.ts:resolveCodexSessionsDir",
+        "name": "resolveCodexSessionsDir",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "processes": [
+      {
+        "name": "readLatestCodexUsageFromRollout",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 2,
+        "total_hits": 4,
+        "earliest_broken_step": 1
+      }
+    ]
+  },
+  {
+    "symbol": "resolveCodexSessionsDir",
+    "risk": "LOW",
+    "status": null,
+    "count": 3,
+    "direct": [
+      {
+        "depth": 1,
+        "id": "Function:scripts/claude-to-im-bridge/codex-llm.ts:findLatestRolloutFileForSession",
+        "name": "findLatestRolloutFileForSession",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "processes": [
+      {
+        "name": "collectTurnText",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 3,
+        "total_hits": 3,
+        "earliest_broken_step": 1
+      },
+      {
+        "name": "readLatestCodexUsageFromRollout",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 2,
+        "total_hits": 3,
+        "earliest_broken_step": 1
+      }
+    ]
+  },
+  {
+    "symbol": "safeReadDir",
+    "risk": "LOW",
+    "status": null,
+    "count": 3,
+    "direct": [
+      {
+        "depth": 1,
+        "id": "Function:scripts/claude-to-im-bridge/codex-llm.ts:findLatestRolloutFileForSession",
+        "name": "findLatestRolloutFileForSession",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "processes": [
+      {
+        "name": "collectTurnText",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 3,
+        "total_hits": 3,
+        "earliest_broken_step": 1
+      },
+      {
+        "name": "readLatestCodexUsageFromRollout",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 2,
+        "total_hits": 3,
+        "earliest_broken_step": 1
+      }
+    ]
+  },
+  {
+    "symbol": "findLatestRolloutFileForSession",
+    "risk": "HIGH",
+    "status": null,
+    "count": 3,
+    "direct": [
+      {
+        "depth": 1,
+        "id": "Function:scripts/claude-to-im-bridge/codex-llm.ts:readLatestCodexUsageFromRollout",
+        "name": "readLatestCodexUsageFromRollout",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "processes": [
+      {
+        "name": "streamChat",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 9,
+        "total_hits": 9,
+        "earliest_broken_step": 1
+      },
+      {
+        "name": "collectTurnText",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 3,
+        "total_hits": 3,
+        "earliest_broken_step": 1
+      },
+      {
+        "name": "readLatestCodexUsageFromRollout",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 2,
+        "total_hits": 2,
+        "earliest_broken_step": 1
+      }
+    ]
+  },
+  {
+    "symbol": "tryExtractCodexUsagePairFromJsonLine",
+    "risk": "HIGH",
+    "status": null,
+    "count": 3,
+    "direct": [
+      {
+        "depth": 1,
+        "id": "Function:scripts/claude-to-im-bridge/codex-llm.ts:readLatestCodexUsageFromRollout",
+        "name": "readLatestCodexUsageFromRollout",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "processes": [
+      {
+        "name": "streamChat",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 9,
+        "total_hits": 9,
+        "earliest_broken_step": 1
+      },
+      {
+        "name": "collectTurnText",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 3,
+        "total_hits": 3,
+        "earliest_broken_step": 1
+      },
+      {
+        "name": "readLatestCodexUsageFromRollout",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 2,
+        "total_hits": 2,
+        "earliest_broken_step": 1
+      }
+    ]
+  },
+  {
+    "symbol": "readLatestCodexUsageFromRollout",
+    "risk": "LOW",
+    "status": null,
+    "count": 2,
+    "direct": [
+      {
+        "depth": 1,
+        "id": "Method:scripts/claude-to-im-bridge/codex-llm.ts:CodexAppServerLLMProvider.collectTurnText#1",
+        "name": "collectTurnText",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "processes": [
+      {
+        "name": "streamChat",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 9,
+        "total_hits": 9,
+        "earliest_broken_step": 1
+      },
+      {
+        "name": "collectTurnText",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 3,
+        "total_hits": 3,
+        "earliest_broken_step": 1
+      }
+    ]
+  },
+  {
+    "symbol": "findTokenUsageInAny",
+    "risk": "LOW",
+    "status": null,
+    "count": 3,
+    "direct": [
+      {
+        "depth": 1,
+        "id": "Function:scripts/claude-to-im-bridge/codex-llm.ts:CodexAppServerLLMProvider.handle",
+        "name": "handle",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "processes": [
+      {
+        "name": "streamChat",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 9,
+        "total_hits": 9,
+        "earliest_broken_step": 1
+      },
+      {
+        "name": "collectTurnText",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 3,
+        "total_hits": 6,
+        "earliest_broken_step": 1
+      }
+    ]
+  },
+  {
+    "symbol": "isTransientReconnectNotification",
+    "risk": "LOW",
+    "status": null,
+    "count": 3,
+    "direct": [
+      {
+        "depth": 1,
+        "id": "Function:scripts/claude-to-im-bridge/codex-llm.ts:CodexAppServerLLMProvider.handle",
+        "name": "handle",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "processes": [
+      {
+        "name": "streamChat",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 9,
+        "total_hits": 9,
+        "earliest_broken_step": 1
+      },
+      {
+        "name": "collectTurnText",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 3,
+        "total_hits": 6,
+        "earliest_broken_step": 1
+      }
+    ]
+  },
+  {
+    "symbol": "parseCodexCliConfigOverrides",
+    "risk": "LOW",
+    "status": null,
+    "count": 1,
+    "direct": [
+      {
+        "depth": 1,
+        "id": "Method:scripts/claude-to-im-bridge/codex-llm.ts:CodexAppServerLLMProvider.constructor#1",
+        "name": "constructor",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "processes": [
+      {
+        "name": "constructor",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 1,
+        "total_hits": 1,
+        "earliest_broken_step": 1
+      }
+    ]
+  },
+  {
+    "symbol": "extractHttpStatusFromTurnError",
+    "risk": "LOW",
+    "status": null,
+    "count": 3,
+    "direct": [
+      {
+        "depth": 1,
+        "id": "Function:scripts/claude-to-im-bridge/codex-llm.ts:formatTurnErrorForHumans",
+        "name": "formatTurnErrorForHumans",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "processes": [
+      {
+        "name": "collectTurnText",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 3,
+        "total_hits": 6,
+        "earliest_broken_step": 1
+      }
+    ]
+  },
+  {
+    "symbol": "extractUrlFromTurnError",
+    "risk": "LOW",
+    "status": null,
+    "count": 3,
+    "direct": [
+      {
+        "depth": 1,
+        "id": "Function:scripts/claude-to-im-bridge/codex-llm.ts:formatTurnErrorForHumans",
+        "name": "formatTurnErrorForHumans",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "processes": [
+      {
+        "name": "collectTurnText",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 3,
+        "total_hits": 6,
+        "earliest_broken_step": 1
+      }
+    ]
+  },
+  {
+    "symbol": "formatTurnErrorForHumans",
+    "risk": "LOW",
+    "status": null,
+    "count": 3,
+    "direct": [
+      {
+        "depth": 1,
+        "id": "Function:scripts/claude-to-im-bridge/codex-llm.ts:CodexAppServerLLMProvider.handle",
+        "name": "handle",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "processes": [
+      {
+        "name": "streamChat",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 9,
+        "total_hits": 9,
+        "earliest_broken_step": 1
+      },
+      {
+        "name": "collectTurnText",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 3,
+        "total_hits": 6,
+        "earliest_broken_step": 1
+      }
+    ]
+  },
+  {
+    "symbol": "getNotifThreadId",
+    "risk": "LOW",
+    "status": null,
+    "count": 3,
+    "direct": [
+      {
+        "depth": 1,
+        "id": "Method:scripts/claude-to-im-bridge/codex-llm.ts:CodexAppServerLLMProvider.collectTurnText#1",
+        "name": "collectTurnText",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Function:scripts/claude-to-im-bridge/codex-llm.ts:CodexAppServerLLMProvider.handle",
+        "name": "handle",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "processes": [
+      {
+        "name": "streamChat",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 9,
+        "total_hits": 9,
+        "earliest_broken_step": 1
+      },
+      {
+        "name": "collectTurnText",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 3,
+        "total_hits": 6,
+        "earliest_broken_step": 1
+      }
+    ]
+  },
+  {
+    "symbol": "getNotifTurnId",
+    "risk": "LOW",
+    "status": null,
+    "count": 3,
+    "direct": [
+      {
+        "depth": 1,
+        "id": "Method:scripts/claude-to-im-bridge/codex-llm.ts:CodexAppServerLLMProvider.collectTurnText#1",
+        "name": "collectTurnText",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      },
+      {
+        "depth": 1,
+        "id": "Function:scripts/claude-to-im-bridge/codex-llm.ts:CodexAppServerLLMProvider.handle",
+        "name": "handle",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "processes": [
+      {
+        "name": "streamChat",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 9,
+        "total_hits": 9,
+        "earliest_broken_step": 1
+      },
+      {
+        "name": "collectTurnText",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 3,
+        "total_hits": 6,
+        "earliest_broken_step": 1
+      }
+    ]
+  },
+  {
+    "symbol": "buildTurnPrompt",
+    "risk": "LOW",
+    "status": null,
+    "count": 1,
+    "direct": [
+      {
+        "depth": 1,
+        "id": "Method:scripts/claude-to-im-bridge/codex-llm.ts:CodexAppServerLLMProvider.streamChat#1",
+        "name": "streamChat",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "relationType": "CALLS",
+        "confidence": 0.95
+      }
+    ],
+    "processes": [
+      {
+        "name": "streamChat",
+        "type": "Function",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+        "affected_process_count": 9,
+        "total_hits": 9,
+        "earliest_broken_step": 1
+      }
+    ]
+  }
+]

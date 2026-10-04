@@ -28,12 +28,17 @@ bridge_llm_backend=codex
 # 你真正要操作的项目根目录（关键）
 bridge_default_work_dir=G:\\RustProject\\push-2-talk
 
-# 强烈建议：锁死一个你网关/账号明确支持的模型，避免自动选到新版本导致 502
-bridge_codex_model_id=gpt-5.5
-# 或：bridge_codex_model_hint=gpt-5.5 xhigh
+# 默认使用 app-server 模型目录的 isDefault 项，不按型号字符串猜最新模型。
+# 可选：填账号/网关支持、且当前 model/list 中存在的精确模型 ID。
+# bridge_codex_model_id=<model-id>
+# 可选：精确模型 ID 后跟目录支持的思考强度（不做模糊评分）。
+# bridge_codex_model_hint=<model-id> <effort>
 
-bridge_codex_sandbox_mode=danger-full-access
-bridge_codex_approval_policy=never
+# /mode ask：workspace-write + on-request；/mode plan：read-only + on-request。
+# /mode code 默认 workspace-write + never（沙箱外操作不会自动提权）。
+# 如需覆盖 code 模式的默认策略，显式配置下列项：
+# bridge_codex_sandbox_mode=workspace-write
+# bridge_codex_approval_policy=never
 
 # 可选：输入合并窗口（毫秒）。用于把“短时间内连发的多条消息”合并成一次 LLM 请求。
 # 例如：你先发一句“帮我改下 X”，紧接着又补充一句“另外要兼容 Y”，希望一次性发给模型。
@@ -194,8 +199,8 @@ powershell -ExecutionPolicy Bypass -File scripts/bridge.ps1 watchdog
 
 排查/解决：
 
-1. 先锁死模型：`bridge_codex_model_id=gpt-5.5`
-2. 再看网关是否对更高版本模型支持不完整（例如某些 `*-codex` 新模型）
+1. 使用 `/model <model-id> [effort]` 或 `bridge_codex_model_id` 指定当前目录中的精确型号。无匹配项会明确报错，模型目录也不等同于账号实际调用权限。
+2. 再检查账号/网关是否支持该型号及 Responses API；不要在升级后继续复制旧版本的固定型号示例。
 
 ### 4.2 先用 `codex debug` 把“上游可用性”跑通
 
@@ -212,6 +217,16 @@ codex debug app-server send-message-v2 "ping"
 现象：飞书侧/Node 侧报 `Error: spawn EINVAL`
 
 根因：Windows 上 Node 不能直接 `spawn` `codex.cmd`（需要 `cmd.exe /c` 包一层）。
+
+当前 runner 默认使用桥接工程固定的 `@openai/codex@0.160.0`，通过 Node 执行包内入口，避免 PATH 上全局版本漂移；`bridge_codex_bin` 显式配置优先。目标项目 `bridge_default_work_dir` 可以是另一仓库，无需在目标仓库安装 Codex。升级后执行 `npm install` 与 `npm run build`，运行中的旧桥接需要在方便时切换到新构建。
+
+### 4.4 新版模型、卡片与交互
+
+- `/model` 查看选择，`/model <id> [effort]` 设置模型及目录支持的强度；`/model default` 恢复后端默认。`/status` 显示已经验证/选择的强度，不从显示名称猜测。
+- app-server 恢复会话使用 `thread/resume`；失败会保留原会话 ID 并报错，用户可通过 `/new` 明确开始新上下文。`/stop` 和执行超时会向后端发送 `turn/interrupt`。
+- 命令执行和文件变更审批支持允许本次、允许会话、拒绝。模型问题通过飞书表单或 `/answer <id> <答案或JSON>` 回传真实答案。敏感问题不在聊天中收集；精细权限申请和 MCP elicitation 目前明确拒绝，并提示在本地 Codex 完成，不会悬挂等待。
+- PNG/JPEG/WebP/GIF 图片按协议传入；其他附件会明确提示不支持，不再静默忽略。模型目录若声明不支持图片，也会在调用前提示。
+- commentary 作为独立进度展示，不混入最终回答和会话历史。用量来自公开 `thread/tokenUsage/updated`；ctx 优先使用后端 `last.totalTokens`（包括压缩后估计），不再读取本机 rollout 文件补数。
 
 ## 5) 安全建议
 

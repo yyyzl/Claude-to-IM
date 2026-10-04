@@ -14,9 +14,11 @@ import type {
   SSEEvent,
   TokenUsage,
   MessageContentBlock,
+  UserInputRequest,
 } from './host.js';
 import { getBridgeContext } from './context.js';
 import crypto from 'crypto';
+import { abortable } from './internal/abort.js';
 
 class BridgeTurnTimeoutError extends Error {
   timeoutMs: number;
@@ -62,6 +64,13 @@ export type OnPartialText = (fullText: string) => void;
  */
 export type OnToolEvent = (toolId: string, toolName: string, status: 'running' | 'complete' | 'error') => void;
 
+export interface InteractionCallbacks {
+  /** 回合仍属于当前绑定代际；迟到事件不得写回或更新新回合。 */
+  isCurrent?: () => boolean;
+  onUserInputRequest?: (request: UserInputRequest) => Promise<void>;
+  onProgress?: (text: string) => void;
+}
+
 export interface ConversationResult {
   responseText: string;
   /**
@@ -83,6 +92,8 @@ export interface ConversationResult {
    * When present, this value is the authoritative denominator for ctx footer.
    */
   contextWindow?: number | null;
+  /** 后端自报上下文占用，包含压缩后的估计值。 */
+  contextTokens?: number | null;
   hasError: boolean;
   errorCode?: 'timeout' | 'abort' | 'busy' | 'error';
   errorMessage: string;
@@ -104,6 +115,7 @@ export async function processMessage(
   files?: FileAttachment[],
   onPartialText?: OnPartialText,
   onToolEvent?: OnToolEvent,
+  interactions?: InteractionCallbacks,
 ): Promise<ConversationResult> {
   const { store, llm } = getBridgeContext();
   const sessionId = binding.codepilotSessionId;
@@ -193,11 +205,12 @@ export async function processMessage(
     }));
 
     const abortController = new AbortController();
+    const forwardAbort = () => abortController.abort(abortSignal?.reason);
     if (abortSignal) {
       if (abortSignal.aborted) {
-        abortController.abort();
+        forwardAbort();
       } else {
-        abortSignal.addEventListener('abort', () => abortController.abort(), { once: true });
+        abortSignal.addEventListener('abort', forwardAbort, { once: true });
       }
     }
 
@@ -211,12 +224,15 @@ export async function processMessage(
       }, timeoutMs);
     }
 
+    let acceptingEvents = true;
     try {
+      abortController.signal.throwIfAborted();
       const stream = llm.streamChat({
         prompt: text,
         sessionId,
         sdkSessionId: binding.sdkSessionId || undefined,
         model: effectiveModel,
+        reasoningEffort: binding.reasoningEffort,
         systemPrompt: session?.system_prompt || undefined,
         workingDirectory: binding.workingDirectory || session?.working_directory || undefined,
         abortController,
@@ -225,6 +241,7 @@ export async function processMessage(
         conversationHistory: historyMsgs,
         files,
         onRuntimeStatusChange: (status: string) => {
+          if (!acceptingEvents || abortController.signal.aborted || interactions?.isCurrent?.() === false) return;
           try { store.setSessionRuntimeStatus(sessionId, status); } catch { /* best effort */ }
         },
       });
@@ -232,8 +249,10 @@ export async function processMessage(
       // Consume the stream server-side (replicate collectStreamResponse pattern).
       // Permission requests are forwarded immediately via the callback during streaming
       // because the stream blocks until permission is resolved — we can't wait until after.
-      return await consumeStream(stream, sessionId, binding, onPermissionRequest, onPartialText, onToolEvent, abortController.signal);
+      return await consumeStream(stream, sessionId, binding, onPermissionRequest, onPartialText, onToolEvent, abortController.signal, interactions);
     } finally {
+      acceptingEvents = false;
+      abortSignal?.removeEventListener('abort', forwardAbort);
       if (timeoutTimer) clearTimeout(timeoutTimer);
     }
   } finally {
@@ -255,6 +274,7 @@ async function consumeStream(
   onPartialText?: OnPartialText,
   onToolEvent?: OnToolEvent,
   abortSignal?: AbortSignal,
+  interactions?: InteractionCallbacks,
 ): Promise<ConversationResult> {
   const { store } = getBridgeContext();
   const reader = stream.getReader();
@@ -265,6 +285,8 @@ async function consumeStream(
   let tokenUsage: TokenUsage | null = null;
   let lastTurnUsage: TokenUsage | null = null;
   let contextWindow: number | null = null;
+  let contextTokens: number | null = null;
+  let resultErrorCode: ConversationResult['errorCode'];
   let hasError = false;
   let errorMessage = '';
   const seenToolResultIds = new Set<string>();
@@ -273,11 +295,15 @@ async function consumeStream(
 
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      abortSignal?.throwIfAborted();
+      const { done, value } = await abortable(reader.read(), abortSignal);
+      abortSignal?.throwIfAborted();
       if (done) break;
 
       const lines = value.split('\n');
       for (const line of lines) {
+        abortSignal?.throwIfAborted();
+        if (interactions?.isCurrent?.() === false) throw new DOMException('旧回合已失效', 'AbortError');
         if (!line.startsWith('data: ')) continue;
 
         let event: SSEEvent;
@@ -288,6 +314,19 @@ async function consumeStream(
         }
 
         switch (event.type) {
+          case 'progress':
+            try { interactions?.onProgress?.(event.data); } catch { /* 展示失败不影响执行 */ }
+            break;
+          case 'user_input_request': {
+            const request = JSON.parse(event.data) as UserInputRequest;
+            try {
+              if (!interactions?.onUserInputRequest) throw new Error('当前客户端不支持交互问答');
+              await abortable(interactions.onUserInputRequest(request), abortSignal);
+            } catch {
+              getBridgeContext().permissions.resolvePendingPermission(request.requestId, { behavior: 'deny', message: '问答消息发送失败' });
+            }
+            break;
+          }
           case 'text':
             currentText += event.data;
             if (onPartialText) {
@@ -378,8 +417,8 @@ async function consumeStream(
               if (statusData.model) {
                 store.updateSessionModel(sessionId, statusData.model);
                 // 同步更新 binding 的 model，避免 /new 继承时显示旧的 hint 字符串
-                if (binding.id) {
-                  store.updateChannelBinding(binding.id, { model: statusData.model });
+                if (binding.id && interactions?.isCurrent?.() !== false) {
+                  store.updateChannelBinding(binding.id, { model: statusData.model, ...(typeof statusData.reasoning_effort === 'string' ? { reasoningEffort: statusData.reasoning_effort } : {}) });
                 }
               }
             } catch { /* skip */ }
@@ -413,6 +452,8 @@ async function consumeStream(
               if (typeof resultData.context_window === 'number' && resultData.context_window > 0) {
                 contextWindow = resultData.context_window;
               }
+              if (typeof resultData.context_tokens === 'number' && Number.isFinite(resultData.context_tokens) && resultData.context_tokens >= 0) contextTokens = resultData.context_tokens;
+              if (resultData.error_code === 'abort' || resultData.error_code === 'timeout') resultErrorCode = resultData.error_code;
               if (resultData.is_error) hasError = true;
               if (resultData.session_id) {
                 capturedSdkSessionId = resultData.session_id;
@@ -462,7 +503,9 @@ async function consumeStream(
       tokenUsage,
       lastTurnUsage,
       contextWindow,
+      contextTokens,
       hasError,
+      errorCode: resultErrorCode,
       errorMessage,
       permissionRequests,
       sdkSessionId: capturedSdkSessionId,
@@ -507,5 +550,9 @@ async function consumeStream(
       permissionRequests,
       sdkSessionId: capturedSdkSessionId,
     };
+  } finally {
+    // 不等待 provider 的 cancel 实现；本地读锁和会话租约必须能结束。
+    try { void reader.cancel(abortSignal?.reason).catch(() => {}); } catch { /* stream 已关闭 */ }
+    try { reader.releaseLock(); } catch { /* cancel 中的 reader */ }
   }
 }

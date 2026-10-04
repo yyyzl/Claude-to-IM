@@ -15,6 +15,7 @@ import { PLATFORM_LIMITS as limits } from './types.js';
 import type { BaseChannelAdapter } from './channel-adapter.js';
 import { getBridgeContext } from './context.js';
 import { ChatRateLimiter } from './security/rate-limiter.js';
+import { splitFeishuMarkdown } from './markdown/feishu.js';
 
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
@@ -24,6 +25,35 @@ const INTER_CHUNK_DELAY_MS = 300;
 
 /** Shared rate limiter instance (20 messages/minute per chat). */
 const rateLimiter = new ChatRateLimiter();
+
+/** 有界等待单次发送；迟到响应不能继续触发上层发送链。 */
+async function boundedSend(adapter: BaseChannelAdapter, message: OutboundMessage): Promise<SendResult> {
+  const configured = Number(getBridgeContext().store.getSetting('bridge_delivery_timeout_ms'));
+  const timeoutMs = Number.isFinite(configured) && configured > 0 ? configured : 15_000;
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => adapter.send(message)).catch((error: unknown) => ({ ok: false, error: error instanceof Error ? error.message : String(error) })),
+      new Promise<SendResult>(resolve => { timer = setTimeout(() => resolve({ ok: false, error: '发送超时，平台结果未知', httpStatus: 408 }), timeoutMs); }),
+    ]);
+  } finally { if (timer) clearTimeout(timer); }
+}
+
+/** 已按平台预算分块的单消息发送，供 durable outbox 逐块记录进度。 */
+export async function deliverSingle(adapter: BaseChannelAdapter, message: OutboundMessage, plainFallback?: string, isCurrent?: () => boolean): Promise<SendResult> {
+  const configured = Number(getBridgeContext().store.getSetting('bridge_delivery_timeout_ms'));
+  let active = true;
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      (async () => {
+        await rateLimiter.acquire(message.address.chatId);
+        return sendWithRetry(adapter, message, plainFallback, () => active && (!isCurrent || isCurrent()));
+      })(),
+      new Promise<SendResult>(resolve => { timer = setTimeout(() => resolve({ ok: false, httpStatus: 408, error: '投递等待超时，平台结果可能未确认；请确认后手动补发' }), configured > 0 ? configured : 15_000); }),
+    ]);
+  } finally { active = false; if (timer) clearTimeout(timer); }
+}
 
 // Periodically clean up idle rate limiter buckets (every 5 minutes).
 // unref() so the timer doesn't prevent Node.js process exit (e.g. in tests).
@@ -157,7 +187,9 @@ export async function deliver(
   }
 
   const limit = limits[adapter.channelType] || 4096;
-  let chunks = chunkText(message.text, limit);
+  let chunks = adapter.channelType === 'feishu' && !message.inlineButtons
+    ? splitFeishuMarkdown(message.text)
+    : chunkText(message.text, limit);
 
   // QQ: limit to max 3 segments to avoid flooding
   if (adapter.channelType === 'qq' && chunks.length > 3) {
@@ -172,6 +204,8 @@ export async function deliver(
   let lastMessageId: string | undefined;
 
   for (let i = 0; i < chunks.length; i++) {
+    const chunkKey = opts?.dedupKey ? `${opts.dedupKey}:chunk:${i}` : undefined;
+    if (chunkKey && store.checkDedup(chunkKey)) continue;
     // Rate limit: wait if this chat is sending too fast
     await rateLimiter.acquire(message.address.chatId);
 
@@ -194,6 +228,7 @@ export async function deliver(
       return result;
     }
     lastMessageId = result.messageId;
+    if (chunkKey) store.insertDedup(chunkKey);
 
     // Track outbound reference
     if (result.messageId && opts?.sessionId) {
@@ -235,24 +270,29 @@ async function sendWithRetry(
   adapter: BaseChannelAdapter,
   message: OutboundMessage,
   plainFallback?: string,
+  isCurrent?: () => boolean,
 ): Promise<SendResult> {
   let lastError: string | undefined;
+  let currentMessage = message;
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const result = await adapter.send(message);
+    if (isCurrent && !isCurrent()) return { ok: false, error: '任务已取消' };
+    let result = await boundedSend(adapter, currentMessage);
     if (result.ok) return result;
 
     lastError = result.error;
-    const category = classifyError(result);
+    let category = classifyError(result);
 
     // HTML parse error: immediately fallback to plain text (no retry needed)
-    if (category === 'parse_error' && message.parseMode === 'HTML') {
+    if (category === 'parse_error' && currentMessage.parseMode === 'HTML') {
       const fallbackText = plainFallback || message.text;
-      const plainResult = await adapter.send({
+      currentMessage = {
         ...message,
         text: fallbackText,
         parseMode: 'plain',
-      });
+      };
+      if (isCurrent && !isCurrent()) return { ok: false, error: '任务已取消' };
+      const plainResult = await boundedSend(adapter, currentMessage);
       if (plainResult.ok) return plainResult;
       lastError = plainResult.error;
       // If plain text also fails, classify that error and continue
@@ -260,6 +300,8 @@ async function sendWithRetry(
       if (!shouldRetry(plainCategory)) {
         return plainResult;
       }
+      result = plainResult;
+      category = plainCategory;
     }
 
     // Don't retry client errors (except 429 which is rate_limit)
@@ -302,6 +344,8 @@ export async function deliverRendered(
   let failedCount = 0;
 
   for (let i = 0; i < chunks.length; i++) {
+    const chunkKey = opts?.dedupKey ? `${opts.dedupKey}:chunk:${i}` : undefined;
+    if (chunkKey && store.checkDedup(chunkKey)) continue;
     await rateLimiter.acquire(address.chatId);
     if (i > 0) {
       await new Promise(r => setTimeout(r, INTER_CHUNK_DELAY_MS));
@@ -326,6 +370,7 @@ export async function deliverRendered(
       continue;
     }
     lastMessageId = result.messageId;
+    if (chunkKey) store.insertDedup(chunkKey);
 
     if (result.messageId && opts?.sessionId) {
       try {
@@ -343,10 +388,10 @@ export async function deliverRendered(
   // Notify user about incomplete delivery
   if (failedCount > 0 && lastMessageId) {
     const notice = `[${failedCount}/${chunks.length} part(s) failed to send — response may be incomplete]`;
-    await adapter.send({ address, text: notice, parseMode: 'plain' }).catch(() => {});
+    await boundedSend(adapter, { address, text: notice, parseMode: 'plain' });
   }
 
-  if (opts?.dedupKey) {
+  if (opts?.dedupKey && failedCount === 0) {
     try { store.insertDedup(opts.dedupKey); } catch { /* best effort */ }
   }
 

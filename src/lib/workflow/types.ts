@@ -330,7 +330,7 @@ export interface WorkflowConfig {
   claude_max_retries: number;
   /** Token budget for the Codex context window (used by the context compressor). */
   codex_context_window_tokens: number;
-  /** Claude model identifier (e.g. 'claude-sonnet-4-20250514'). */
+  /** Claude model identifier or runtime alias (e.g. 'sonnet'). */
   claude_model: string;
   /** Maximum output tokens for Claude API calls. */
   claude_max_output_tokens: number;
@@ -347,6 +347,8 @@ export interface WorkflowConfig {
  * to support crash-safe resume.
  */
 export interface WorkflowMeta {
+  /** 声明该运行受本机独占执行者锁保护。 */
+  execution_lock_version?: 1;
   /** Unique identifier for this workflow run. */
   run_id: string;
   /** The kind of workflow being executed. */
@@ -500,7 +502,7 @@ export const DEFAULT_CONFIG: WorkflowConfig = {
   codex_max_retries: 2,
   claude_max_retries: 2,
   codex_context_window_tokens: 1_000_000,
-  claude_model: 'claude-sonnet-4-20250514',
+  claude_model: 'sonnet',
   claude_max_output_tokens: 64_000,
   codex_backend: 'codex',
   context_files: [],
@@ -769,6 +771,8 @@ export interface ClaudeCodeReviewInput {
  * 2. Resume mode: prevents reading user modifications after pause
  */
 export interface ReviewSnapshot {
+  /** 审查目标的不可变 Git tree，用于正文读取和修复基线重建。 */
+  head_tree?: string;
   /** Snapshot creation timestamp (ISO 8601). */
   created_at: string;
   /** Head commit SHA at snapshot time. */
@@ -956,7 +960,14 @@ export const CODE_REVIEW_PROFILE: WorkflowProfile = {
  * isolated git worktree to apply fix_instructions from accepted issues.
  */
 export interface FixResult {
-  /** Whether all fixes were applied successfully. */
+  attemptId: string;
+  proposedIssueIds: string[];
+  skippedIssueIds: string[];
+  fixBaseSha: string;
+  fixHeadSha: string;
+  commits: string[];
+  validation: Array<{ issueIds: string[]; passed: boolean; summary: string }>;
+  /** 是否为全部目标成功生成候选；不表示问题已经验证修复。 */
   success: boolean;
   /** Total number of accepted issues with fix_instructions. */
   totalCount: number;
@@ -980,6 +991,8 @@ export interface FixResult {
  * Options for the auto-fix process.
  */
 export interface AutoFixOptions {
+  /** 宿主显式提供的问题回归检查；未提供时只生成候选。 */
+  validate?: (cwd: string, issueIds: string[]) => Promise<{ passed: boolean; summary: string }>;
   /** Codex CLI backend name (default: 'codex'). */
   codexBackend?: string;
   /** Timeout for each Codex fix call in ms (default: 300_000 = 5 min). */

@@ -7,11 +7,13 @@
 
 import type {
   ChannelType,
+  ChannelAddress,
   InboundMessage,
   OutboundMessage,
   PreviewCapabilities,
   SendResult,
 } from './types.js';
+import type { UserInputRequest } from './host.js';
 
 export abstract class BaseChannelAdapter {
   /** Which channel type this adapter handles */
@@ -103,6 +105,23 @@ export abstract class BaseChannelAdapter {
    * that support streaming cards (e.g. Feishu CardKit).
    */
   onStreamText?(_chatId: string, _fullText: string): void;
+
+  /** 独立进度文字，不计入最终回答或会话历史。 */
+  onProgress?(_chatId: string, _text: string): void;
+
+  /** 返回消息 ID，供核心校验问答回调来源。 */
+  sendUserInputRequest?(
+    _address: ChannelAddress,
+    _request: UserInputRequest,
+    _replyToMessageId?: string,
+  ): Promise<SendResult>;
+
+  /** 原交互消息的终态；更新失败不改变已经确定的权限结果。 */
+  updateInteractionMessage?(
+    _address: ChannelAddress,
+    _messageId: string,
+    _status: 'allowed' | 'denied' | 'expired' | 'failed' | 'answered',
+  ): Promise<void>;
 
   /**
    * Called when tool_use / tool_result events arrive during streaming.

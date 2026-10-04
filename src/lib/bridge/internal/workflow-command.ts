@@ -657,17 +657,19 @@ async function handleStartReviewFix(
           codexTimeoutMs: configOverrides.codex_timeout_ms,
         });
 
-        if (fixResult.fixedCount > 0) {
+        if (fixResult.proposedIssueIds.length > 0) {
           await deliverText(adapter, msg,
-            `✅ <b>Auto-fix 完成</b>\n` +
-            `修复: ${fixResult.fixedCount}/${fixResult.totalCount} 个问题\n` +
+            `📝 <b>已生成修复候选</b>\n` +
+            `候选: ${fixResult.proposedIssueIds.length}/${fixResult.totalCount}；验证通过: ${fixResult.fixedCount}\n` +
             `Worktree: <code>${esc(fixResult.worktreePath)}</code>\n` +
             `分支: <code>${esc(fixResult.worktreeBranch)}</code>\n\n` +
-            `<i>使用 git merge 合并修复，或直接在 worktree 中检查</i>`,
+            `<i>先检查并验证候选；将原审查中的未提交改动保存并提交到目标仓库，确认目标包含被审查基线且工作区干净，再应用候选提交：</i>\n` +
+            `<code>git cherry-pick ${esc(fixResult.commits.join(' '))}</code>` +
+            (fixResult.errors.length ? `\n⚠️ ${esc(fixResult.errors.join('; '))}` : ''),
           );
         } else if (fixResult.totalCount > 0) {
           await deliverText(adapter, msg,
-            `⚠️ Auto-fix 未能修复任何问题 (共 ${fixResult.totalCount} 个)\n` +
+            `⚠️ Auto-fix 未能生成修复候选 (共 ${fixResult.totalCount} 个)\n` +
             fixResult.errors.map((e) => `  • ${esc(e)}`).join('\n'),
           );
         } else {

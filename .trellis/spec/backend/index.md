@@ -35,6 +35,7 @@
 - 改脚本、配置或宿主接入：读 [集成规范](./integration-guidelines.md)
 - 改测试或补回归：读 [测试规范](./testing-guidelines.md)
 - 做收尾检查或补规范：读 [质量规范](./quality-guidelines.md)
+- 改会话取消、投递、存储恢复或自动修复：读 [可靠性合同](./reliability-contracts.md)
 
 涉及跨层链路时，再读：
 

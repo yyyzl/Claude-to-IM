@@ -14,14 +14,15 @@
  *   Each fix is committed in the worktree for easy rollback.
  * - **Codex-driven**: the fix_instruction is sent as a prompt to Codex,
  *   which has access to the file context and can apply changes intelligently.
- * - **Non-destructive**: if any fix fails, others can still succeed.
- *   The worktree is preserved for manual inspection.
+ * - 失败后停止后续组并保留现场，避免失败残留进入其他候选提交。
+ * - 未配置问题回归验证时，修改只标记为候选，不宣称问题已修复。
  *
  * @module workflow/auto-fixer
  */
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { randomUUID } from 'node:crypto';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { ModelInvoker } from './model-invoker.js';
@@ -70,140 +71,113 @@ export class AutoFixer {
    * @returns FixResult with details of what was fixed.
    */
   async applyFixes(runId: string, opts: AutoFixOptions = {}): Promise<FixResult> {
-    const codexBackend = opts.codexBackend ?? 'codex';
-    const codexTimeoutMs = opts.codexTimeoutMs ?? DEFAULT_FIX_TIMEOUT_MS;
-
-    // 1. Load issue ledger and collect fixable issues
+    if (!/^[a-zA-Z0-9_-]+$/.test(runId)) throw new Error('Invalid workflow run ID');
     const ledger = await this.store.loadLedger(runId);
-    if (!ledger) {
-      throw new Error(`[AutoFixer] Ledger not found for run: ${runId}`);
-    }
-
-    const fixableIssues = ledger.issues.filter(
-      (issue) => issue.status === 'accepted' && issue.fix_instruction,
-    );
-
-    if (fixableIssues.length === 0) {
-      return {
-        success: true,
-        totalCount: 0,
-        fixedCount: 0,
-        fixedIssueIds: [],
-        failedIssueIds: [],
-        errors: [],
-        worktreePath: '',
-        worktreeBranch: '',
-        diffPreview: '',
-      };
-    }
-
-    // 2. Create isolated worktree
-    const branchName = `${WORKTREE_BRANCH_PREFIX}/${runId}`;
-    const worktreePath = path.join(this.repoRoot, '..', `.auto-fix-${runId}`);
-
-    await this.createWorktree(worktreePath, branchName);
-
-    // 3. Group issues by file for efficient fixes
-    const issuesByFile = this.groupByFile(fixableIssues);
-
-    // 4. Apply fixes sequentially
-    const fixedIssueIds: string[] = [];
-    const failedIssueIds: string[] = [];
-    const errors: string[] = [];
-
-    for (const [filePath, issues] of issuesByFile) {
-      try {
-        console.log(`[AutoFixer] Fixing ${issues.length} issue(s) in ${filePath}...`);
-
-        const prompt = this.buildFixPrompt(filePath, issues);
-        const result = await this.modelInvoker.invokeCodex(prompt, {
-          timeoutMs: codexTimeoutMs,
-          maxRetries: 1,
-          backend: codexBackend,
-        });
-
-        // Codex runs in the worktree with file access — it modifies files directly
-        // We just need to verify it made changes
-        const { stdout: diffCheck } = await this.git(worktreePath, ['diff', '--stat']);
-
-        if (diffCheck.trim()) {
-          // Commit the fix
-          await this.git(worktreePath, ['add', '-A']);
-          const commitMsg = `fix: ${issues.map((i) => i.id).join(', ')} — auto-fix via Codex`;
-          await this.git(worktreePath, ['commit', '-m', commitMsg]);
-
-          for (const issue of issues) {
-            fixedIssueIds.push(issue.id);
-          }
-          console.log(`[AutoFixer] ✅ Fixed: ${issues.map((i) => i.id).join(', ')}`);
-        } else {
-          // Codex ran but didn't produce changes — parse its output for a direct patch
-          const applied = await this.tryApplyCodexOutput(worktreePath, filePath, result, issues);
-          if (applied) {
-            for (const issue of issues) {
-              fixedIssueIds.push(issue.id);
-            }
-          } else {
-            for (const issue of issues) {
-              failedIssueIds.push(issue.id);
-            }
-            errors.push(`No changes produced for ${filePath} (${issues.map((i) => i.id).join(', ')})`);
-          }
-        }
-      } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        for (const issue of issues) {
-          failedIssueIds.push(issue.id);
-        }
-        errors.push(`Failed to fix ${filePath}: ${errMsg}`);
-        console.error(`[AutoFixer] ❌ Error fixing ${filePath}: ${errMsg}`);
-      }
-    }
-
-    // 5. Generate diff preview
-    const { stdout: fullDiff } = await this.git(worktreePath, [
-      'diff', 'HEAD~' + String(Math.max(fixedIssueIds.length > 0 ? issuesByFile.size : 0, 1)), 'HEAD',
-    ]).catch(() => ({ stdout: '' }));
-    const diffPreview = fullDiff.length > MAX_DIFF_PREVIEW
-      ? fullDiff.substring(0, MAX_DIFF_PREVIEW) + `\n... (${fullDiff.length - MAX_DIFF_PREVIEW} more chars)`
-      : fullDiff;
-
-    return {
-      success: failedIssueIds.length === 0,
-      totalCount: fixableIssues.length,
-      fixedCount: fixedIssueIds.length,
-      fixedIssueIds,
-      failedIssueIds,
-      errors,
-      worktreePath,
-      worktreeBranch: branchName,
-      diffPreview,
+    if (!ledger) throw new Error(`[AutoFixer] Ledger not found for run: ${runId}`);
+    const issues = ledger.issues.filter(issue => issue.status === 'accepted' && issue.fix_instruction);
+    const attemptId = randomUUID();
+    const result: FixResult = {
+      success: true, totalCount: issues.length, fixedCount: 0, fixedIssueIds: [],
+      proposedIssueIds: [], skippedIssueIds: [], failedIssueIds: [], errors: [],
+      attemptId, commits: [], validation: [], fixBaseSha: '', fixHeadSha: '',
+      worktreePath: '', worktreeBranch: '', diffPreview: '',
     };
+    if (!issues.length) return result;
+    const snapshot = await this.store.loadSnapshot(runId);
+    if (!snapshot?.head_tree) throw new Error('审查快照缺少可重建的冻结 tree；请重新审查后生成修复，旧工作树不会被清理。');
+    if (!/^[a-f0-9]{40,64}$/.test(snapshot.head_tree) || !/^[a-f0-9]{40,64}$/.test(snapshot.head_commit)) throw new Error('Invalid review baseline');
+    const headTree = (await this.git(this.repoRoot, ['rev-parse', `${snapshot.head_commit}^{tree}`])).stdout.trim();
+    const frozenTree = (await this.git(this.repoRoot, ['cat-file', '-t', snapshot.head_tree])).stdout.trim();
+    if (frozenTree !== 'tree') throw new Error('冻结审查基线已不可用，请重新审查');
+    // 暂存/未暂存快照使用独立基线提交；后续输出的范围只包含候选修复提交。
+    const base = headTree === snapshot.head_tree ? snapshot.head_commit : (await this.git(this.repoRoot, [
+      'commit-tree', snapshot.head_tree, '-p', snapshot.head_commit, '-m', `review baseline ${runId}`,
+    ])).stdout.trim();
+    if (!/^[a-f0-9]{40,64}$/.test(base)) throw new Error('无法确认修复基线 commit');
+    result.fixBaseSha = base;
+    result.fixHeadSha = base;
+    result.worktreeBranch = `${WORKTREE_BRANCH_PREFIX}/${runId}/${attemptId}`;
+    result.worktreePath = path.join(this.repoRoot, '..', `.auto-fix-${runId}-${attemptId}`);
+    await this.createWorktree(result.worktreePath, result.worktreeBranch, base);
+    const artifactName = `fix-${attemptId}.json`;
+    await this.store.saveRunArtifact(runId, artifactName, JSON.stringify(result, null, 2));
+    let stopped = false;
+    for (const [filePath, group] of this.groupByFile(issues)) {
+      if (stopped) { result.skippedIssueIds.push(...group.map(issue => issue.id)); continue; }
+      try {
+        if (!snapshot.files.some(file => file.path === filePath && file.change_type !== 'deleted')) throw new Error('目标不在已审查快照中');
+        await this.validateTarget(result.worktreePath, filePath);
+        if ((await this.git(result.worktreePath, ['status', '--porcelain'])).stdout.trim()) throw new Error('修复工作树并非干净状态');
+        const before = result.fixHeadSha;
+        await this.modelInvoker.invokeCodex(this.buildFixPrompt(filePath, group), {
+          timeoutMs: opts.codexTimeoutMs ?? DEFAULT_FIX_TIMEOUT_MS,
+          maxRetries: 0, backend: opts.codexBackend ?? 'codex', cwd: result.worktreePath,
+        });
+        if ((await this.git(result.worktreePath, ['rev-parse', 'HEAD'])).stdout.trim() !== before) throw new Error('模型修改了提交历史，候选需人工检查');
+        const tracked = (await this.git(result.worktreePath, ['diff', '--name-only', '-z', 'HEAD', '--'])).stdout;
+        const untracked = (await this.git(result.worktreePath, ['ls-files', '--others', '--exclude-standard', '-z'])).stdout;
+        const changed = [...new Set((tracked + untracked).split('\0').filter(Boolean))];
+        if (changed.length !== 1 || changed[0] !== filePath) throw new Error('未产生目标文件修改，或修改了审查范围之外的文件');
+        await this.validateTarget(result.worktreePath, filePath);
+        await this.git(result.worktreePath, ['diff', '--check', 'HEAD', '--']);
+        let validated = false;
+        if (opts.validate) {
+          const validation = await opts.validate(result.worktreePath, group.map(issue => issue.id));
+          result.validation.push({ issueIds: group.map(issue => issue.id), ...validation });
+          if (!validation.passed) throw new Error('配置的修复验证未通过：' + validation.summary);
+          validated = true;
+        } else {
+          result.validation.push({ issueIds: group.map(issue => issue.id), passed: false, summary: '仅通过范围与补丁检查，未运行问题回归验证' });
+        }
+        if ((await this.git(result.worktreePath, ['rev-parse', 'HEAD'])).stdout.trim() !== before) throw new Error('验证过程修改了提交历史');
+        await this.validateTarget(result.worktreePath, filePath);
+        const postValidation = (await this.git(result.worktreePath, ['diff', '--name-only', '-z', 'HEAD', '--'])).stdout;
+        const postUntracked = (await this.git(result.worktreePath, ['ls-files', '--others', '--exclude-standard', '-z'])).stdout;
+        const postPaths = [...new Set((postValidation + postUntracked).split('\0').filter(Boolean))];
+        if (postPaths.length !== 1 || postPaths[0] !== filePath) throw new Error('验证过程移除了目标修改或引入范围外修改');
+        await this.git(result.worktreePath, ['add', '--', filePath]);
+        const expectedTree = (await this.git(result.worktreePath, ['write-tree'])).stdout.trim();
+        await this.git(result.worktreePath, ['commit', '-m', `fix candidate: ${group.map(issue => issue.id).join(', ')}`]);
+        const commit = (await this.git(result.worktreePath, ['rev-parse', 'HEAD'])).stdout.trim();
+        if (!/^[a-f0-9]{40,64}$/.test(commit) || commit === before) throw new Error('未生成可确认的候选提交');
+        const parents = (await this.git(result.worktreePath, ['rev-list', '--parents', '-n', '1', commit])).stdout.trim().split(/\s+/);
+        const committedPaths = (await this.git(result.worktreePath, ['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', commit])).stdout.split('\0').filter(Boolean);
+        const committedTree = (await this.git(result.worktreePath, ['rev-parse', `${commit}^{tree}`])).stdout.trim();
+        if (parents.length !== 2 || parents[1] !== before || committedPaths.length !== 1 || committedPaths[0] !== filePath || committedTree !== expectedTree) {
+          throw new Error('提交钩子或外部操作改变了已检查的候选，保留现场供人工检查');
+        }
+        result.commits.push(commit);
+        result.fixHeadSha = commit;
+        result.proposedIssueIds.push(...group.map(issue => issue.id));
+        if (validated) result.fixedIssueIds.push(...group.map(issue => issue.id));
+      } catch (error) {
+        result.success = false;
+        result.failedIssueIds.push(...group.map(issue => issue.id));
+        result.errors.push(`${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+        // 保留失败现场并停止后续组，绝不把残留变更加入下一组提交。
+        stopped = true;
+      }
+      result.fixedCount = result.fixedIssueIds.length;
+      await this.store.saveRunArtifact(runId, artifactName, JSON.stringify(result, null, 2));
+    }
+    const fullDiff = (await this.git(result.worktreePath, ['diff', '--binary', result.fixBaseSha, result.fixHeadSha, '--'])).stdout;
+    result.diffPreview = fullDiff.length > MAX_DIFF_PREVIEW ? fullDiff.slice(0, MAX_DIFF_PREVIEW) + '\n…（预览已截断，完整补丁保存在运行产物）' : fullDiff;
+    await this.store.saveRunArtifact(runId, `fix-${attemptId}.patch`, fullDiff);
+    await this.store.saveRunArtifact(runId, artifactName, JSON.stringify(result, null, 2));
+    return result;
   }
 
-  // ── Private: Worktree Management ────────────────────────────
+  /** 每次尝试创建独立名字；存在的工作树/分支由 git 明确拒绝，不自动删除。 */
+  private async createWorktree(worktreePath: string, branchName: string, base: string): Promise<void> {
+    await this.git(this.repoRoot, ['worktree', 'add', '-b', branchName, worktreePath, base]);
+  }
 
-  /** Create a new git worktree from the current HEAD. */
-  private async createWorktree(worktreePath: string, branchName: string): Promise<void> {
-    // Clean up if worktree already exists (from a previous failed run)
-    try {
-      await fs.access(worktreePath);
-      console.log(`[AutoFixer] Cleaning up existing worktree: ${worktreePath}`);
-      await this.git(this.repoRoot, ['worktree', 'remove', '--force', worktreePath]);
-    } catch {
-      // Does not exist — good
-    }
-
-    // Delete branch if it already exists (from a previous run)
-    try {
-      await this.git(this.repoRoot, ['branch', '-D', branchName]);
-    } catch {
-      // Branch doesn't exist — fine
-    }
-
-    // Create worktree with a new branch from HEAD
-    console.log(`[AutoFixer] Creating worktree: ${worktreePath} (branch: ${branchName})`);
-    await this.git(this.repoRoot, ['worktree', 'add', '-b', branchName, worktreePath, 'HEAD']);
+  private async validateTarget(worktree: string, file: string): Promise<void> {
+    const relative = path.relative(worktree, path.resolve(worktree, file));
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || path.isAbsolute(file)) throw new Error('修复文件路径越界');
+    const [root, actual] = await Promise.all([fs.realpath(worktree), fs.realpath(path.resolve(worktree, file))]);
+    const resolved = path.relative(root, actual);
+    if (resolved.startsWith('..') || path.isAbsolute(resolved)) throw new Error('修复文件符号链接越界');
   }
 
   // ── Private: Fix Prompt Building ────────────────────────────
@@ -254,59 +228,16 @@ ${issueDescriptions}
 1. Read \`@${filePath}\`
 2. Apply each fix instruction above
 3. Write the modified file
-4. Do NOT change anything else
+4. Do NOT change anything else, create commits, or modify Git configuration
 
 Respond with "DONE" after applying all fixes.`;
-  }
-
-  /**
-   * Try to apply Codex output as a direct file modification.
-   *
-   * If Codex returned a code block with the fixed file content,
-   * extract and write it to the worktree.
-   */
-  private async tryApplyCodexOutput(
-    worktreePath: string,
-    filePath: string,
-    codexOutput: string,
-    issues: Issue[],
-  ): Promise<boolean> {
-    // Look for a fenced code block that might be the full file content
-    const codeBlockMatch = /```(?:\w+)?\n([\s\S]+?)\n```/g;
-    let lastBlock = '';
-    let match: RegExpExecArray | null = null;
-
-    // eslint-disable-next-line no-cond-assign
-    while ((match = codeBlockMatch.exec(codexOutput)) !== null) {
-      lastBlock = match[1];
-    }
-
-    if (!lastBlock) return false;
-
-    // Write the extracted content to the file in the worktree
-    const targetPath = path.join(worktreePath, filePath);
-    try {
-      await fs.writeFile(targetPath, lastBlock, 'utf-8');
-
-      // Check if there's actually a diff
-      const { stdout: diff } = await this.git(worktreePath, ['diff', '--stat']);
-      if (!diff.trim()) return false;
-
-      // Commit
-      await this.git(worktreePath, ['add', filePath]);
-      const commitMsg = `fix: ${issues.map((i) => i.id).join(', ')} — auto-fix (extracted output)`;
-      await this.git(worktreePath, ['commit', '-m', commitMsg]);
-      console.log(`[AutoFixer] ✅ Applied extracted output for ${filePath}`);
-      return true;
-    } catch {
-      return false;
-    }
   }
 
   // ── Private: Git Helper ─────────────────────────────────────
 
   /** Execute a git command in the specified directory. */
   private async git(cwd: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+    if (process.env.NODE_TEST_CONTEXT) throw new Error('Tests must inject an explicit fake Git boundary');
     return execFileAsync('git', args, {
       cwd,
       maxBuffer: 50 * 1024 * 1024,

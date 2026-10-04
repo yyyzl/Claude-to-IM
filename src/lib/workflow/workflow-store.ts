@@ -23,6 +23,8 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { atomicWriteFile } from './atomic-file.js';
+import { acquireRunLock } from './run-lock.js';
 import type {
   WorkflowMeta,
   WorkflowEvent,
@@ -72,9 +74,17 @@ export class WorkflowStore {
     }
   }
 
+  private static metaWrites = new Map<string, Promise<void>>();
+
+  async acquireExecution(runId: string): Promise<() => Promise<void>> {
+    await fs.mkdir(this.runDir(runId), { recursive: true });
+    return acquireRunLock(path.join(this.runDir(runId), 'executor.lock'));
+  }
+
   // ── Helper: paths ────────────────────────────────────────────
 
   private runDir(runId: string): string {
+    if (!/^[a-zA-Z0-9_-]+$/.test(runId)) throw new Error('Invalid workflow run ID');
     return path.join(this.runBasePath, 'runs', runId);
   }
 
@@ -91,10 +101,9 @@ export class WorkflowStore {
   async createRun(meta: WorkflowMeta): Promise<void> {
     const dir = this.runDir(meta.run_id);
     await fs.mkdir(path.join(dir, 'rounds'), { recursive: true });
-    await fs.writeFile(
+    await atomicWriteFile(
       path.join(dir, 'meta.json'),
       JSON.stringify(meta, null, 2),
-      'utf-8',
     );
   }
 
@@ -117,20 +126,26 @@ export class WorkflowStore {
    * Always updates `updated_at` to the current ISO timestamp.
    */
   async updateMeta(runId: string, updates: Partial<WorkflowMeta>): Promise<void> {
-    const existing = await this.getMeta(runId);
-    if (!existing) {
-      throw new Error(`[WorkflowStore] Run not found: ${runId}`);
-    }
-    const merged: WorkflowMeta = {
-      ...existing,
-      ...updates,
-      updated_at: new Date().toISOString(),
-    };
-    await fs.writeFile(
-      path.join(this.runDir(runId), 'meta.json'),
-      JSON.stringify(merged, null, 2),
-      'utf-8',
-    );
+    const key = path.resolve(this.runDir(runId));
+    const previous = WorkflowStore.metaWrites.get(key) ?? Promise.resolve();
+    const next = previous.catch(() => {}).then(async () => {
+      const existing = await this.getMeta(runId);
+      if (!existing) {
+        throw new Error(`[WorkflowStore] Run not found: ${runId}`);
+      }
+      const merged: WorkflowMeta = {
+        ...existing,
+        ...updates,
+        updated_at: new Date().toISOString(),
+      };
+      await atomicWriteFile(
+        path.join(this.runDir(runId), 'meta.json'),
+        JSON.stringify(merged, null, 2),
+      );
+    });
+    WorkflowStore.metaWrites.set(key, next);
+    try { await next; }
+    finally { if (WorkflowStore.metaWrites.get(key) === next) WorkflowStore.metaWrites.delete(key); }
   }
 
   // ── Spec / Plan (versioned) ──────────────────────────────────
@@ -143,7 +158,7 @@ export class WorkflowStore {
   async saveSpec(runId: string, content: string, version?: number): Promise<number> {
     const ver = version ?? (await this.findLatestVersion(runId, 'spec')) + 1;
     const filePath = path.join(this.runDir(runId), `spec-v${ver}.md`);
-    await fs.writeFile(filePath, content, 'utf-8');
+    await atomicWriteFile(filePath, content);
     return ver;
   }
 
@@ -171,7 +186,7 @@ export class WorkflowStore {
   async savePlan(runId: string, content: string, version?: number): Promise<number> {
     const ver = version ?? (await this.findLatestVersion(runId, 'plan')) + 1;
     const filePath = path.join(this.runDir(runId), `plan-v${ver}.md`);
-    await fs.writeFile(filePath, content, 'utf-8');
+    await atomicWriteFile(filePath, content);
     return ver;
   }
 
@@ -198,7 +213,7 @@ export class WorkflowStore {
    */
   async saveLedger(runId: string, ledger: IssueLedger): Promise<void> {
     const filePath = path.join(this.runDir(runId), 'issue-ledger.json');
-    await fs.writeFile(filePath, JSON.stringify(ledger, null, 2), 'utf-8');
+    await atomicWriteFile(filePath, JSON.stringify(ledger, null, 2));
   }
 
   /**
@@ -225,7 +240,7 @@ export class WorkflowStore {
    */
   async saveSnapshot(runId: string, snapshot: ReviewSnapshot): Promise<void> {
     const filePath = path.join(this.runDir(runId), 'snapshot.json');
-    await fs.writeFile(filePath, JSON.stringify(snapshot, null, 2), 'utf-8');
+    await atomicWriteFile(filePath, JSON.stringify(snapshot, null, 2));
   }
 
   /**
@@ -258,7 +273,7 @@ export class WorkflowStore {
     const dir = this.roundsDir(runId);
     await fs.mkdir(dir, { recursive: true });
     const filePath = path.join(dir, `R${round}-${name}`);
-    await fs.writeFile(filePath, content, 'utf-8');
+    await atomicWriteFile(filePath, content);
   }
 
   /**
@@ -286,7 +301,7 @@ export class WorkflowStore {
    */
   async saveRunArtifact(runId: string, name: string, content: string): Promise<void> {
     const filePath = path.join(this.runDir(runId), name);
-    await fs.writeFile(filePath, content, 'utf-8');
+    await atomicWriteFile(filePath, content);
   }
 
   /**

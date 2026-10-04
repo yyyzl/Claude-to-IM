@@ -14,6 +14,7 @@ import type { ChannelAddress, OutboundMessage } from './types.js';
 import type { BaseChannelAdapter } from './channel-adapter.js';
 import { deliver } from './delivery-layer.js';
 import { getBridgeContext } from './context.js';
+import { observeInteraction, boundedInteraction } from './interaction-lifecycle.js';
 import { escapeHtml } from './adapters/telegram-utils.js';
 
 /**
@@ -21,6 +22,7 @@ import { escapeHtml } from './adapters/telegram-utils.js';
  * Key: permissionRequestId, value: timestamp. Entries expire after 30s.
  */
 const recentPermissionForwards = new Map<string, number>();
+const interactions = new Map<string, ReturnType<typeof observeInteraction>>();
 
 /**
  * Forward a permission request to an IM channel as an interactive message.
@@ -35,96 +37,110 @@ export async function forwardPermissionRequest(
   suggestions?: unknown[],
   replyToMessageId?: string,
 ): Promise<void> {
-  const { store } = getBridgeContext();
+  const { store, permissions } = getBridgeContext();
 
   // Dedup: prevent duplicate forwarding of the same permission request
   const now = Date.now();
+  for (const [id, ts] of recentPermissionForwards) {
+    if (now - ts > 30_000) recentPermissionForwards.delete(id);
+  }
   if (recentPermissionForwards.has(permissionRequestId)) {
     console.warn(`[permission-broker] Duplicate forward suppressed for ${permissionRequestId}`);
     return;
   }
   recentPermissionForwards.set(permissionRequestId, now);
-  // Clean up old entries
-  for (const [id, ts] of recentPermissionForwards) {
-    if (now - ts > 30_000) recentPermissionForwards.delete(id);
-  }
 
   console.log(`[permission-broker] Forwarding permission request: ${permissionRequestId} tool=${toolName} channel=${adapter.channelType}`);
 
-  // Format the input summary (truncated)
-  const inputStr = JSON.stringify(toolInput, null, 2);
-  const truncatedInput = inputStr.length > 300
-    ? inputStr.slice(0, 300) + '...'
-    : inputStr;
+  const interaction = observeInteraction(adapter, address, permissionRequestId, permissions, false, () => {
+    try { store.markPermissionLinkResolved(permissionRequestId); } catch { /* 未登记时由迟到投递处理。 */ }
+    interactions.delete(permissionRequestId);
+  });
+  if (interaction.settled) return;
+  interactions.set(permissionRequestId, interaction);
+  const configured = Number(store.getSetting('bridge_interaction_timeout_ms'));
+  const timeoutMs = configured > 0 ? configured : 15_000;
+  try {
+    await boundedInteraction((async () => {
+      // Format the input summary (truncated)
+      const inputStr = JSON.stringify(toolInput, null, 2);
+      const truncatedInput = inputStr.length > 300
+        ? inputStr.slice(0, 300) + '...'
+        : inputStr;
 
-  let result: import('./types.js').SendResult;
+      let result: import('./types.js').SendResult;
 
-  if (adapter.channelType === 'qq') {
-    // QQ: plain text permission prompt with copyable /perm commands (no inline buttons)
-    const qqText = [
-      `Permission Required`,
-      ``,
-      `Tool: ${toolName}`,
-      truncatedInput,
-      ``,
-      `Reply:`,
-      `1 - Allow once`,
-      `2 - Allow session`,
-      `3 - Deny`,
-      ``,
-      `Or use full command:`,
-      `/perm allow ${permissionRequestId}`,
-      `/perm allow_session ${permissionRequestId}`,
-      `/perm deny ${permissionRequestId}`,
-    ].join('\n');
+      if (adapter.channelType === 'qq') {
+        // QQ: plain text permission prompt with copyable /perm commands (no inline buttons)
+        const qqText = [
+          `Permission Required`,
+          ``,
+          `Tool: ${toolName}`,
+          truncatedInput,
+          ``,
+          `Reply:`,
+          `1 - Allow once`,
+          `2 - Allow session`,
+          `3 - Deny`,
+          ``,
+          `Or use full command:`,
+          `/perm allow ${permissionRequestId}`,
+          `/perm allow_session ${permissionRequestId}`,
+          `/perm deny ${permissionRequestId}`,
+        ].join('\n');
 
-    const qqMessage: OutboundMessage = {
-      address,
-      text: qqText,
-      parseMode: 'plain',
-      replyToMessageId,
-    };
+        const qqMessage: OutboundMessage = {
+          address,
+          text: qqText,
+          parseMode: 'plain',
+          replyToMessageId,
+        };
 
-    result = await deliver(adapter, qqMessage, { sessionId });
-  } else {
-    const text = [
-      `<b>Permission Required</b>`,
-      ``,
-      `Tool: <code>${escapeHtml(toolName)}</code>`,
-      `<pre>${escapeHtml(truncatedInput)}</pre>`,
-      ``,
-      `Choose an action:`,
-    ].join('\n');
+        result = await deliver(adapter, qqMessage, { sessionId });
+      } else {
+        const text = [
+          `<b>Permission Required</b>`,
+          ``,
+          `Tool: <code>${escapeHtml(toolName)}</code>`,
+          `<pre>${escapeHtml(truncatedInput)}</pre>`,
+          ``,
+          `Choose an action:`,
+        ].join('\n');
 
-    const message: OutboundMessage = {
-      address,
-      text,
-      parseMode: 'HTML',
-      inlineButtons: [
-        [
-          { text: 'Allow', callbackData: `perm:allow:${permissionRequestId}` },
-          { text: 'Allow Session', callbackData: `perm:allow_session:${permissionRequestId}` },
-          { text: 'Deny', callbackData: `perm:deny:${permissionRequestId}` },
-        ],
-      ],
-      replyToMessageId,
-    };
+        const message: OutboundMessage = {
+          address,
+          text,
+          parseMode: 'HTML',
+          inlineButtons: [
+            [
+              { text: 'Allow', callbackData: `perm:allow:${permissionRequestId}` },
+              { text: 'Allow Session', callbackData: `perm:allow_session:${permissionRequestId}` },
+              { text: 'Deny', callbackData: `perm:deny:${permissionRequestId}` },
+            ],
+          ],
+          replyToMessageId,
+        };
 
-    result = await deliver(adapter, message, { sessionId });
-  }
+        result = await deliver(adapter, message, { sessionId });
+      }
 
-  // Record the link so we can match callback queries back to this permission
-  if (result.ok && result.messageId) {
-    try {
+      if (!result.ok || !result.messageId) throw new Error(result.error || '审批消息发送失败或缺少消息 ID');
+      interaction.sent(result.messageId);
+      if (interaction.settled) return;
       store.insertPermissionLink({
-        permissionRequestId,
-        channelType: adapter.channelType,
-        chatId: address.chatId,
-        messageId: result.messageId,
-        toolName,
-        suggestions: suggestions ? JSON.stringify(suggestions) : '',
+        permissionRequestId, channelType: adapter.channelType, chatId: address.chatId,
+        messageId: result.messageId, toolName, suggestions: suggestions ? JSON.stringify(suggestions) : '',
       });
-    } catch { /* best effort */ }
+      if (store.flush) await store.flush();
+      if (interaction.settled) store.markPermissionLinkResolved(permissionRequestId);
+    })(), timeoutMs);
+  } catch (error) {
+    recentPermissionForwards.delete(permissionRequestId);
+    interactions.delete(permissionRequestId);
+    const resolution = { behavior: 'deny' as const, reason: 'delivery_failed' as const, message: error instanceof Error ? error.message : '审批投递失败' };
+    permissions.resolvePendingPermission(permissionRequestId, resolution);
+    interaction.resolve(resolution);
+    try { store.markPermissionLinkResolved(permissionRequestId); } catch { /* 失败请求仍必须拒绝。 */ }
   }
 }
 
@@ -149,6 +165,7 @@ export function handlePermissionCallback(
   if (parts.length < 3 || parts[0] !== 'perm') return false;
 
   const action = parts[1];
+  if (!['allow', 'allow_session', 'deny'].includes(action)) return false;
   const permissionRequestId = parts.slice(2).join(':'); // permId might contain colons
 
   // Look up the permission link to validate origin and check dedup
@@ -211,6 +228,7 @@ export function handlePermissionCallback(
 
       resolved = permissions.resolvePendingPermission(permissionRequestId, {
         behavior: 'allow',
+        scope: 'session',
         ...(updatedPermissions ? { updatedPermissions } : {}),
       });
       break;
@@ -227,5 +245,9 @@ export function handlePermissionCallback(
       return false;
   }
 
+  if (resolved) {
+    interactions.get(permissionRequestId)?.resolve({ behavior: action === 'deny' ? 'deny' : 'allow' });
+    interactions.delete(permissionRequestId);
+  }
   return resolved;
 }

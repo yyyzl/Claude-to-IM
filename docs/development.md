@@ -74,7 +74,7 @@ Returns a configuration value by key. All bridge configuration (bot tokens, allo
 | `bridge_feishu_app_secret` | `"xxx"` | Feishu app secret |
 | `bridge_feishu_enabled` | `"true"` | Enable Feishu adapter |
 | `bridge_default_cwd` | `"/home/user/projects"` | Default working directory |
-| `bridge_model` | `"claude-sonnet-4-20250514"` | Default model |
+| `bridge_model` | `"sonnet"` | Default model |
 | `bridge_{adapter}_stream_enabled` | `"true"` | Enable streaming previews |
 
 **Optional keys (usage stats via /usage)**
@@ -239,7 +239,7 @@ interface StreamChatParams {
   prompt: string;                    // The user's message text
   sessionId: string;                 // Internal session ID
   sdkSessionId?: string;             // Claude Code SDK session ID for resume
-  model?: string;                    // Model to use (e.g., 'claude-sonnet-4-20250514')
+  model?: string;                    // Model to use (e.g., 'sonnet')
   systemPrompt?: string;             // System prompt override
   workingDirectory?: string;         // Working directory for code execution
   abortController?: AbortController; // For cancellation

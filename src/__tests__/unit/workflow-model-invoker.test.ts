@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import type { ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
+import type { query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 
 import { ModelInvoker } from '../../lib/workflow/model-invoker.js';
 import { TimeoutError, ModelInvocationError } from '../../lib/workflow/types.js';
@@ -58,6 +59,17 @@ function createFakeChild(opts?: {
 }
 
 describe('ModelInvoker.invokeCodex', () => {
+  it('spawns the fix backend inside the requested worktree', async () => {
+    let cwd: string | undefined;
+    const spawnImpl = ((_command: string, _args: string[], options: { cwd?: string }) => {
+      cwd = options.cwd;
+      return createFakeChild({ stdout: 'done' });
+    }) as unknown as typeof spawn;
+    await new ModelInvoker(spawnImpl).invokeCodex('fix', {
+      timeoutMs: 1000, maxRetries: 0, cwd: 'G:/project/.auto-fix-test',
+    });
+    assert.equal(cwd, 'G:/project/.auto-fix-test');
+  });
   it('passes backend and stdin marker to codeagent-wrapper', async () => {
     const calls: Array<{ command: string; args: string[] }> = [];
     const spawnImpl = ((command: string, args: string[]) => {
@@ -104,5 +116,41 @@ describe('ModelInvoker.invokeCodex', () => {
         return true;
       },
     );
+  });
+});
+
+describe('ModelInvoker.invokeClaude runtime contract', () => {
+  it('refuses real model execution when a unit test forgets to inject mocks', async () => {
+    const invoker = new ModelInvoker();
+    await assert.rejects(invoker.invokeClaude('test', { timeoutMs: 1000, maxRetries: 0 }), /fake query/);
+    await assert.rejects(invoker.invokeCodex('test', { timeoutMs: 1000, maxRetries: 0 }), /fake spawn/);
+  });
+  it('uses the runtime model alias, isolated settings, and the configured output limit', async () => {
+    let options: Parameters<typeof query>[0]['options'];
+    let closed = false;
+    const fakeQuery = (args: Parameters<typeof query>[0]) => {
+      options = args.options;
+      return Object.assign((async function* () {
+        yield { type: 'result', subtype: 'success', result: 'ok', is_error: false } as SDKMessage;
+      })(), { close: () => { closed = true; } });
+    };
+    const invoker = new ModelInvoker(undefined, fakeQuery);
+    assert.equal(await invoker.invokeClaude('review', { timeoutMs: 1000, maxRetries: 0, maxOutputTokens: 64000 }), 'ok');
+    assert.equal(options?.model, 'sonnet');
+    assert.deepEqual(options?.tools, []);
+    assert.deepEqual(options?.settingSources, []);
+    assert.equal(options?.permissionMode, 'default');
+    assert.equal(options?.persistSession, false);
+    assert.equal(options?.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS, '64000');
+    assert.equal(closed, true);
+  });
+
+  it('treats a success subtype with is_error as failure and closes the SDK', async () => {
+    let closed = false;
+    const fakeQuery = () => Object.assign((async function* () {
+      yield { type: 'result', subtype: 'success', result: 'API refused', is_error: true } as SDKMessage;
+    })(), { close: () => { closed = true; } });
+    await assert.rejects(new ModelInvoker(undefined, fakeQuery).invokeClaude('review', { timeoutMs: 1000, maxRetries: 0 }), ModelInvocationError);
+    assert.equal(closed, true);
   });
 });

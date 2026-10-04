@@ -9,8 +9,10 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { randomUUID } from 'node:crypto';
 import type {
   BridgeStatus,
+  ChannelBinding,
   ChannelAddress,
   InboundMessage,
   OutboundMessage,
@@ -24,14 +26,16 @@ import './adapters/index.js';
 import * as router from './channel-router.js';
 import * as engine from './conversation-engine.js';
 import * as broker from './permission-broker.js';
-import { deliver, deliverRendered } from './delivery-layer.js';
-import { markdownToTelegramChunks } from './markdown/telegram.js';
-import { markdownToDiscordChunks } from './markdown/discord.js';
+import { clearUserInputRequests, forwardUserInputRequest, handleUserInputResponse, handleUserInputText } from './user-input-broker.js';
+import { deliver } from './delivery-layer.js';
+import { deliverResponse, retryResponseDelivery, getResponseDeliveryStatus } from './response-delivery.js';
+import { abortable, settleWithin } from './internal/abort.js';
 import { getBridgeContext } from './context.js';
 import { escapeHtml } from './adapters/telegram-utils.js';
 import {
   processWithSessionLock as processWithSessionLockInternal,
   SessionQueueTimeoutError,
+  SessionQueueCancelledError,
 } from './internal/session-lock.js';
 import { computeSessionQueueTimeoutMs, DEFAULT_CODEX_TURN_TIMEOUT_MS } from './internal/timeouts.js';
 import {
@@ -138,61 +142,6 @@ function flushPreview(
   });
 }
 
-// ── Channel-aware rendering dispatch ──────────────────────────
-
-import type { SendResult } from './types.js';
-
-/**
- * Render response text and deliver via the appropriate channel format.
- * Telegram: Markdown → HTML chunks via deliverRendered.
- * Other channels: plain text via deliver (no HTML).
- */
-async function deliverResponse(
-  adapter: BaseChannelAdapter,
-  address: ChannelAddress,
-  responseText: string,
-  sessionId: string,
-  replyToMessageId?: string,
-): Promise<SendResult> {
-  if (adapter.channelType === 'telegram') {
-    const chunks = markdownToTelegramChunks(responseText, 4096);
-    if (chunks.length > 0) {
-      return deliverRendered(adapter, address, chunks, { sessionId, replyToMessageId });
-    }
-    return { ok: true };
-  }
-  if (adapter.channelType === 'discord') {
-    // Discord: native markdown, chunk at 2000 chars with fence repair
-    const chunks = markdownToDiscordChunks(responseText, 2000);
-    for (let i = 0; i < chunks.length; i++) {
-      const result = await deliver(adapter, {
-        address,
-        text: chunks[i].text,
-        parseMode: 'Markdown',
-        replyToMessageId,
-      }, { sessionId });
-      if (!result.ok) return result;
-    }
-    return { ok: true };
-  }
-  if (adapter.channelType === 'feishu') {
-    // Feishu: pass markdown through for adapter to format as post/card
-    return deliver(adapter, {
-      address,
-      text: responseText,
-      parseMode: 'Markdown',
-      replyToMessageId,
-    }, { sessionId });
-  }
-  // Generic fallback: deliver as plain text (deliver() handles chunking internally)
-  return deliver(adapter, {
-    address,
-    text: responseText,
-    parseMode: 'plain',
-    replyToMessageId,
-  }, { sessionId });
-}
-
 interface AdapterMeta {
   lastMessageAt: string | null;
   lastError: string | null;
@@ -203,6 +152,23 @@ interface InputDebounceBuffer {
   userId: string | undefined;
   messages: InboundMessage[];
   timer: ReturnType<typeof setTimeout> | null;
+  context: TurnContext;
+}
+
+interface TurnContext {
+  turnId: string;
+  binding: ChannelBinding;
+  chatKey: string;
+  generation: number;
+  runEpoch: number;
+  abort: AbortController;
+}
+
+interface QueuedTurn {
+  context: TurnContext;
+  ack: () => void;
+  messageCount: number;
+  started: boolean;
 }
 
 interface GitDraftRecord {
@@ -238,6 +204,7 @@ interface BridgeManagerState {
   loopAborts: Map<string, AbortController>;
   activeTasks: Map<string, AbortController>;
   activeTasksByChat: Map<string, ActiveChatTask>;
+  uiOwners: Map<string, AbortController>;
   activeTaskStartedAt: Map<string, number>;
   /** Per-session processing chains for concurrency control */
   sessionLocks: Map<string, Promise<void>>;
@@ -250,6 +217,11 @@ interface BridgeManagerState {
   recentToolCalls: Map<string, RecentToolCallEntry[]>;
   /** 追加消息缓冲：当 LLM 正忙时，新消息暂存于此，任务完成后自动作为后续轮次处理。key = `${channelType}:${chatId}` */
   pendingAppends: Map<string, InboundMessage[]>;
+  chatGenerations: Map<string, number>;
+  queuedTurns: Set<QueuedTurn>;
+  taskPromises: Set<Promise<void>>;
+  runEpoch: number;
+  stopping: Promise<void> | null;
 }
 
 function getState(): BridgeManagerState {
@@ -263,6 +235,7 @@ function getState(): BridgeManagerState {
       loopAborts: new Map(),
       activeTasks: new Map(),
       activeTasksByChat: new Map(),
+      uiOwners: new Map(),
       activeTaskStartedAt: new Map(),
       sessionLocks: new Map(),
       inputDebounceBuffers: new Map(),
@@ -270,6 +243,11 @@ function getState(): BridgeManagerState {
       autoStartChecked: false,
       recentToolCalls: new Map(),
       pendingAppends: new Map(),
+      chatGenerations: new Map(),
+      queuedTurns: new Set(),
+      taskPromises: new Set(),
+      runEpoch: 0,
+      stopping: null,
     };
   }
   // Backfill sessionLocks for states created before this field existed
@@ -299,6 +277,12 @@ function getState(): BridgeManagerState {
   if (!g[GLOBAL_KEY].pendingAppends) {
     g[GLOBAL_KEY].pendingAppends = new Map();
   }
+  g[GLOBAL_KEY].chatGenerations ??= new Map();
+  g[GLOBAL_KEY].uiOwners ??= new Map();
+  g[GLOBAL_KEY].queuedTurns ??= new Set();
+  g[GLOBAL_KEY].taskPromises ??= new Set();
+  g[GLOBAL_KEY].runEpoch ??= 0;
+  g[GLOBAL_KEY].stopping ??= null;
   return g[GLOBAL_KEY];
 }
 
@@ -335,6 +319,7 @@ function registerActiveTask(address: ChannelAddress, sessionId: string, abort: A
     sessionId,
     startedAt,
   });
+  state.uiOwners.set(getChatTaskKey(address), abort);
 }
 
 function clearActiveTask(address: ChannelAddress, sessionId: string, abort: AbortController): void {
@@ -355,26 +340,117 @@ function getActiveTaskForChat(address: ChannelAddress): ActiveChatTask | null {
   return getState().activeTasksByChat.get(getChatTaskKey(address)) ?? null;
 }
 
-function abortActiveTaskForChat(address: ChannelAddress): boolean {
-  const activeChatTask = getActiveTaskForChat(address);
-  if (!activeChatTask) return false;
-  activeChatTask.abort.abort();
-  return true;
-}
-
 /**
  * Process a function with per-session serialization.
  * Different sessions run concurrently; same-session requests are serialized.
  * If queueing takes too long, rejects with SessionQueueTimeoutError.
  */
-function processWithSessionLock(sessionId: string, fn: () => Promise<void>): Promise<void> {
+function processWithSessionLock(sessionId: string, fn: () => Promise<void>, signal?: AbortSignal): Promise<void> {
   const state = getState();
   const { store } = getBridgeContext();
   const queueTimeoutMs = computeSessionQueueTimeoutMs(
     parsePositiveInt(store.getSetting('bridge_session_queue_timeout_ms')),
     parsePositiveInt(store.getSetting('bridge_codex_turn_timeout_ms')),
   );
-  return processWithSessionLockInternal(state.sessionLocks, sessionId, fn, queueTimeoutMs);
+  return processWithSessionLockInternal(state.sessionLocks, sessionId, fn, queueTimeoutMs, signal);
+}
+
+function captureTurn(address: ChannelAddress): TurnContext {
+  const state = getState();
+  const chatKey = getChatTaskKey(address);
+  return {
+    turnId: randomUUID(), binding: { ...router.resolve(address) }, chatKey,
+    generation: state.chatGenerations.get(chatKey) ?? 0,
+    runEpoch: state.runEpoch, abort: new AbortController(),
+  };
+}
+
+function countWaitingMessages(address: ChannelAddress): number {
+  const state = getState();
+  const key = getChatTaskKey(address);
+  return (state.inputDebounceBuffers.get(key)?.messages.length ?? 0)
+    + (state.pendingAppends.get(key)?.length ?? 0)
+    + [...state.queuedTurns].filter(turn => !turn.started && turn.context.chatKey === key)
+      .reduce((sum, turn) => sum + turn.messageCount, 0);
+}
+
+function ownsTurn(context: TurnContext): boolean {
+  const state = getState();
+  const binding = getBridgeContext().store.getChannelBinding(context.binding.channelType, context.binding.chatId);
+  return !context.abort.signal.aborted && context.runEpoch === state.runEpoch
+    && context.generation === (state.chatGenerations.get(context.chatKey) ?? 0)
+    && binding?.id === context.binding.id
+    && binding.codepilotSessionId === context.binding.codepilotSessionId;
+}
+
+/** 一次取消覆盖 collecting、append、queued、running；旧代际不再操作新 UI。 */
+function cancelChat(adapter: BaseChannelAdapter, address: ChannelAddress): { running: boolean; dropped: number } {
+  const state = getState();
+  const key = getChatTaskKey(address);
+  state.chatGenerations.set(key, (state.chatGenerations.get(key) ?? 0) + 1);
+  let dropped = clearPendingAppends(adapter, key);
+  const collecting = state.inputDebounceBuffers.get(key);
+  if (collecting) {
+    if (collecting.timer) clearTimeout(collecting.timer);
+    state.inputDebounceBuffers.delete(key);
+    collecting.context.abort.abort();
+    dropped += collecting.messages.length;
+    createAckForMergedMessages(adapter, collecting.messages)();
+  }
+  for (const queued of state.queuedTurns) {
+    if (queued.context.chatKey !== key || queued.started) continue;
+    dropped += queued.messageCount;
+    queued.context.abort.abort();
+    queued.ack();
+    state.queuedTurns.delete(queued);
+  }
+  const active = getActiveTaskForChat(address);
+  if (active && !active.abort.signal.aborted) {
+    active.abort.abort();
+    clearUserInputRequests(active.sessionId);
+    // 先提交旧卡终态，完成后仅清理仍归属于旧回合的 UI。
+    const ending = adapter.onStreamEnd?.(address.chatId, 'interrupted', '');
+    const endUi = () => {
+      if (state.uiOwners.get(key) !== active.abort) return;
+      state.uiOwners.delete(key);
+      adapter.onMessageEnd?.(address.chatId);
+    };
+    if (ending) {
+      const cleanup = ending.then(endUi, endUi).finally(() => state.taskPromises.delete(cleanup));
+      state.taskPromises.add(cleanup);
+    } else {
+      endUi();
+    }
+  }
+  return { running: Boolean(active), dropped };
+}
+
+function scheduleMessages(adapter: BaseChannelAdapter, messages: InboundMessage[], context = captureTurn(messages[0].address)): void {
+  const state = getState();
+  const ack = createAckForMergedMessages(adapter, messages);
+  if (!state.running || !adapter.isRunning() || !ownsTurn(context)) { ack(); return; }
+  const queued: QueuedTurn = { context, ack, messageCount: messages.length, started: false };
+  state.queuedTurns.add(queued);
+  const message = mergeInboundMessages(messages);
+  const promise = processWithSessionLock(context.binding.codepilotSessionId, async () => {
+    queued.started = true;
+    if (!state.running || !ownsTurn(context)) { ack(); return; }
+    await handleMessage(adapter, message, { ack, context });
+  }, context.abort.signal).catch(async err => {
+    ack();
+    if (err instanceof SessionQueueCancelledError || context.abort.signal.aborted) return;
+    if (err instanceof SessionQueueTimeoutError) {
+      if (ownsTurn(context)) await deliver(adapter, {
+        address: message.address, text: '消息排队超时，已自动取消。', parseMode: 'plain', replyToMessageId: message.messageId,
+      });
+      return;
+    }
+    console.error('[bridge-manager] 会话任务失败:', err);
+  }).finally(() => {
+    state.queuedTurns.delete(queued);
+    state.taskPromises.delete(promise);
+  });
+  state.taskPromises.add(promise);
 }
 
 function parsePositiveInt(raw: string | null): number | null {
@@ -520,33 +596,7 @@ function clearPendingAppends(adapter: BaseChannelAdapter, chatKey: string): numb
 function flushPendingAppends(adapter: BaseChannelAdapter, chatKey: string): void {
   const messages = drainPendingAppends(chatKey);
   if (messages.length === 0) return;
-  const merged = mergeInboundMessages(messages);
-  const ack = createAckForMergedMessages(adapter, messages);
-  const binding = router.resolve(merged.address);
-  const capturedSessionId = binding.codepilotSessionId;
-  processWithSessionLock(capturedSessionId, async () => {
-    // 执行时校验 session 是否变更（用户可能在排队期间执行了 /new、/bind）。
-    // 若 session 已切换，追加消息对旧会话的上下文已无意义，直接 ack 丢弃。
-    const currentBinding = router.resolve(merged.address);
-    if (currentBinding.codepilotSessionId !== capturedSessionId) {
-      try { ack(); } catch { /* best effort */ }
-      return;
-    }
-    await handleMessage(adapter, merged, { ack });
-  }).catch(err => {
-    if (err instanceof SessionQueueTimeoutError) {
-      void deliver(adapter, {
-        address: merged.address,
-        text: '追加消息处理超时，已自动取消。',
-        parseMode: 'plain',
-        replyToMessageId: merged.messageId,
-      }).catch(() => {});
-      // 超时也要 ack，否则消息会反复重试
-      try { ack(); } catch { /* best effort */ }
-      return;
-    }
-    console.error('[bridge-manager] Append flush error:', err);
-  });
+  scheduleMessages(adapter, messages);
 }
 
 /**
@@ -631,30 +681,7 @@ function flushDebouncedMessages(
     return;
   }
 
-  const messages = entry.messages;
-  const merged = mergeInboundMessages(messages);
-  const ack = createAckForMergedMessages(adapter, messages);
-  const binding = router.resolve(merged.address);
-
-  processWithSessionLock(binding.codepilotSessionId, () =>
-    handleMessage(adapter, merged, { ack }),
-  ).catch(err => {
-    if (err instanceof SessionQueueTimeoutError) {
-      const mins = Math.max(1, Math.ceil(err.timeoutMs / 60_000));
-      void deliver(adapter, {
-        address: merged.address,
-        text: [
-          `当前会话正在处理其他请求，本条消息排队已超时（超过 ${mins} 分钟），已自动取消。`,
-          `如需调整：bridge_session_queue_timeout_ms=${err.timeoutMs}`,
-        ].join('\n'),
-        parseMode: 'plain',
-        replyToMessageId: merged.messageId,
-      }).catch(() => {});
-      try { ack(); } catch { /* best effort */ }
-      return;
-    }
-    console.error(`[bridge-manager] Session ${binding.codepilotSessionId.slice(0, 8)} error:`, err);
-  });
+  scheduleMessages(adapter, entry.messages, entry.context);
 }
 
 function enqueueRegularMessage(
@@ -668,7 +695,7 @@ function enqueueRegularMessage(
   // 保证"处理完成后再提交 offset"的可靠性约束。
   if (isAppendEnabled(adapter.channelType)) {
     const activeTask = getActiveTaskForChat(msg.address);
-    if (activeTask) {
+    if (activeTask && !activeTask.abort.signal.aborted) {
       const chatKey = getChatTaskKey(msg.address);
       // 群聊保护：不同 userId 的消息不混合（与 debounce 路径保持一致）。
       // 遇到不同用户时先 flush 旧 buffer，再开新 buffer。
@@ -702,29 +729,7 @@ function enqueueRegularMessage(
 
   const debounceMs = getInputDebounceMs(adapter.channelType);
   if (debounceMs <= 0) {
-    const binding = router.resolve(msg.address);
-    processWithSessionLock(binding.codepilotSessionId, () =>
-      handleMessage(adapter, msg),
-    ).catch(err => {
-      if (err instanceof SessionQueueTimeoutError) {
-        const mins = Math.max(1, Math.ceil(err.timeoutMs / 60_000));
-        void deliver(adapter, {
-          address: msg.address,
-          text: [
-            `当前会话正在处理其他请求，本条消息排队已超时（超过 ${mins} 分钟），已自动取消。`,
-            `如需调整：bridge_session_queue_timeout_ms=${err.timeoutMs}`,
-          ].join('\n'),
-          parseMode: 'plain',
-          replyToMessageId: msg.messageId,
-        }).catch(() => {});
-
-        if (msg.updateId != null && adapter.acknowledgeUpdate) {
-          try { adapter.acknowledgeUpdate(msg.updateId); } catch { /* best effort */ }
-        }
-        return;
-      }
-      console.error(`[bridge-manager] Session ${binding.codepilotSessionId.slice(0, 8)} error:`, err);
-    });
+    scheduleMessages(adapter, [msg]);
     return;
   }
 
@@ -742,7 +747,7 @@ function enqueueRegularMessage(
   }
 
   const entry = state.inputDebounceBuffers.get(key)
-    || { userId: msg.address.userId, messages: [], timer: null };
+    || { userId: msg.address.userId, messages: [], timer: null, context: captureTurn(msg.address) };
 
   if (!state.inputDebounceBuffers.has(key)) {
     state.inputDebounceBuffers.set(key, entry);
@@ -767,6 +772,7 @@ function enqueueRegularMessage(
  */
 export async function start(): Promise<void> {
   const state = getState();
+  if (state.stopping) await state.stopping;
   if (state.running) return;
 
   const { store, lifecycle } = getBridgeContext();
@@ -810,12 +816,14 @@ export async function start(): Promise<void> {
     console.warn('[bridge-manager] No adapters started successfully, bridge not activated');
     state.adapters.clear();
     state.adapterMeta.clear();
+    state.uiOwners.clear();
     return;
   }
 
   // Mark running BEFORE starting consumer loops — runAdapterLoop checks
   // state.running in its while-condition, so it must be true first.
   state.running = true;
+  state.runEpoch++;
   state.startedAt = new Date().toISOString();
 
   // Notify host that bridge is starting (e.g., suppress competing polling)
@@ -836,45 +844,47 @@ export async function start(): Promise<void> {
  */
 export async function stop(): Promise<void> {
   const state = getState();
+  if (state.stopping) return state.stopping;
   if (!state.running) return;
-
   const { lifecycle } = getBridgeContext();
-
   state.running = false;
-
-  // Clear pending debounce timers
-  for (const [, entry] of state.inputDebounceBuffers) {
-    if (entry.timer) {
-      clearTimeout(entry.timer);
-      entry.timer = null;
+  state.runEpoch++;
+  const stopping = (async () => {
+    for (const abort of state.loopAborts.values()) abort.abort();
+    state.loopAborts.clear();
+    const chats = new Map<string, ChannelAddress>();
+    for (const entry of state.inputDebounceBuffers.values()) {
+      if (entry.messages[0]) chats.set(getChatTaskKey(entry.messages[0].address), entry.messages[0].address);
     }
-  }
-  state.inputDebounceBuffers.clear();
-
-  // Abort all event loops
-  for (const [, abort] of state.loopAborts) {
-    abort.abort();
-  }
-  state.loopAborts.clear();
-
-  // Stop all adapters
-  for (const [type, adapter] of state.adapters) {
-    try {
-      await adapter.stop();
-      console.log(`[bridge-manager] Stopped adapter: ${type}`);
-    } catch (err) {
-      console.error(`[bridge-manager] Error stopping adapter ${type}:`, err);
+    for (const messages of state.pendingAppends.values()) {
+      if (messages[0]) chats.set(getChatTaskKey(messages[0].address), messages[0].address);
     }
-  }
-
-  state.adapters.clear();
-  state.adapterMeta.clear();
-  state.startedAt = null;
-
-  // Notify host that bridge stopped
-  lifecycle.onBridgeStop?.();
-
-  console.log('[bridge-manager] Bridge stopped');
+    for (const queued of state.queuedTurns) chats.set(queued.context.chatKey, queued.context.binding);
+    for (const binding of getBridgeContext().store.listChannelBindings()) {
+      if (state.activeTasksByChat.has(getChatTaskKey(binding))) chats.set(getChatTaskKey(binding), binding);
+    }
+    for (const address of chats.values()) {
+      const adapter = state.adapters.get(address.channelType);
+      if (adapter) cancelChat(adapter, address);
+    }
+    for (const abort of state.activeTasks.values()) abort.abort();
+    const drained = await settleWithin(Promise.allSettled([...state.taskPromises]), 5000);
+    if (!drained) console.warn('[bridge-manager] 本地停止等待超时，仍有任务清理未完成；旧回调已隔离。');
+    await Promise.all([...state.adapters.entries()].map(async ([type, adapter]) => {
+      const settled = await settleWithin(adapter.stop().catch(err => {
+        console.error(`[bridge-manager] Error stopping adapter ${type}:`, err);
+      }), 5000);
+      if (!settled) console.warn(`[bridge-manager] Adapter ${type} 停止超时`);
+    }));
+    state.adapters.clear();
+    state.adapterMeta.clear();
+    state.uiOwners.clear();
+    state.startedAt = null;
+    lifecycle.onBridgeStop?.();
+    console.log('[bridge-manager] Bridge stopped');
+  })();
+  state.stopping = stopping;
+  try { await stopping; } finally { state.stopping = null; }
 }
 
 /**
@@ -935,11 +945,13 @@ function runAdapterLoop(adapter: BaseChannelAdapter): void {
   const state = getState();
   const abort = new AbortController();
   state.loopAborts.set(adapter.channelType, abort);
+  const runEpoch = state.runEpoch;
 
   (async () => {
-    while (state.running && adapter.isRunning()) {
+    while (state.running && adapter.isRunning() && !abort.signal.aborted && state.runEpoch === runEpoch) {
       try {
         const msg = await adapter.consumeOne();
+        if (abort.signal.aborted || state.runEpoch !== runEpoch || !state.running) break;
         if (!msg) continue; // Adapter stopped
 
         // Callback queries, commands, and numeric permission shortcuts are
@@ -952,7 +964,8 @@ function runAdapterLoop(adapter: BaseChannelAdapter): void {
         // deadlocks (permission waits for "1", "1" waits for lock release).
         if (
           msg.callbackData ||
-          msg.text.trim().startsWith('/') ||
+          msg.userInputResponse ||
+          isControlCommand(msg.text.trim()) ||
           isNumericPermissionShortcut(adapter.channelType, msg.text.trim(), msg.address.chatId)
         ) {
           await handleMessage(adapter, msg);
@@ -983,13 +996,23 @@ function runAdapterLoop(adapter: BaseChannelAdapter): void {
   });
 }
 
+/** 模型透传和普通文本走同一调度入口；真正的控制命令绕过模型锁。 */
+function isControlCommand(text: string): boolean {
+  if (text.startsWith('//')) return ['', 'help'].includes(text.slice(2).trim().toLowerCase());
+  if (text.toLowerCase().startsWith('/codex:')) {
+    const [command, ...args] = text.split(/\s+/);
+    return buildCodexPassthroughPrompt(command.split('@')[0].toLowerCase(), args.join(' ')) === null;
+  }
+  return text.startsWith('/');
+}
+
 /**
  * Handle a single inbound message.
  */
 async function handleMessage(
   adapter: BaseChannelAdapter,
   msg: InboundMessage,
-  opts?: { ack?: () => void },
+  opts?: { ack?: () => void; context?: TurnContext },
 ): Promise<void> {
   const { store } = getBridgeContext();
 
@@ -1008,6 +1031,15 @@ async function handleMessage(
     }
   };
   const ack = opts?.ack || defaultAck;
+
+  if (msg.userInputResponse || /^\/answer(?:\s|$)/.test(msg.text.trim())) {
+    const handled = msg.userInputResponse
+      ? handleUserInputResponse(msg.address, msg.userInputResponse, msg.callbackMessageId)
+      : handleUserInputText(msg.address, msg.text.trim());
+    await deliver(adapter, { address: msg.address, text: handled ? '回答已提交。' : '回答无效或请求已过期，请检查问题与选项。', parseMode: 'plain' });
+    ack();
+    return;
+  }
 
   // Handle callback queries (permission buttons, workflow action buttons)
   if (msg.callbackData) {
@@ -1200,13 +1232,20 @@ async function handleMessage(
   if (!text && !hasAttachments) { ack(); return; }
 
   // Regular message — route to conversation engine
-  const binding = router.resolve(msg.address);
+  const context = opts?.context ?? captureTurn(msg.address);
+  if (!ownsTurn(context)) { ack(); return; }
+  // 会话归属在入队时固定；恢复 ID 必须取前一回合完成后的值。
+  const binding = {
+    ...context.binding,
+    sdkSessionId: store.getChannelBinding(context.binding.channelType, context.binding.chatId)?.sdkSessionId ?? '',
+  };
+  const isCurrent = () => ownsTurn(context) && getState().uiOwners.get(context.chatKey) === context.abort;
 
   // Notify adapter that message processing is starting (e.g., typing indicator)
   adapter.onMessageStart?.(msg.address.chatId);
 
   // Create an AbortController so /stop can cancel this task externally
-  const taskAbort = new AbortController();
+  const taskAbort = context.abort;
   registerActiveTask(msg.address, binding.codepilotSessionId, taskAbort);
 
   // ── Streaming preview setup ──────────────────────────────────
@@ -1228,6 +1267,7 @@ async function handleMessage(
 
   // Build the preview onPartialText callback (or undefined if preview not supported)
   const previewOnPartialText = (previewState && streamCfg) ? (fullText: string) => {
+    if (!isCurrent()) return;
     const ps = previewState!;
     const cfg = streamCfg!;
     if (ps.degraded) return;
@@ -1245,7 +1285,7 @@ async function handleMessage(
       if (!ps.throttleTimer) {
         ps.throttleTimer = setTimeout(() => {
           ps.throttleTimer = null;
-          if (!ps.degraded) flushPreview(adapter, ps, cfg);
+          if (isCurrent() && !ps.degraded) flushPreview(adapter, ps, cfg);
         }, cfg.intervalMs);
       }
       return;
@@ -1256,7 +1296,7 @@ async function handleMessage(
       if (!ps.throttleTimer) {
         ps.throttleTimer = setTimeout(() => {
           ps.throttleTimer = null;
-          if (!ps.degraded) flushPreview(adapter, ps, cfg);
+          if (isCurrent() && !ps.degraded) flushPreview(adapter, ps, cfg);
         }, cfg.intervalMs - elapsed);
       }
       return;
@@ -1279,10 +1319,12 @@ async function handleMessage(
   const toolCallTracker = new Map<string, ToolCallInfo>();
 
   const onStreamCardText = hasStreamingCards ? (fullText: string) => {
+    if (!isCurrent()) return;
     try { adapter.onStreamText!(msg.address.chatId, fullText); } catch { /* non-critical */ }
   } : undefined;
 
   const onToolEvent = (toolId: string, toolName: string, status: 'running' | 'complete' | 'error') => {
+    if (!isCurrent()) return;
     // Always record to global state for /status live context
     if (toolName) {
       recordRecentToolCall(binding.codepilotSessionId, toolName, status);
@@ -1313,6 +1355,10 @@ async function handleMessage(
     const promptText = text || (hasAttachments ? 'Describe this image.' : '');
 
     const result = await engine.processMessage(binding, promptText, async (perm) => {
+      if (!isCurrent()) {
+        getBridgeContext().permissions.resolvePendingPermission(perm.permissionRequestId, { behavior: 'deny', message: '任务已取消' });
+        return;
+      }
       await broker.forwardPermissionRequest(
         adapter,
         msg.address,
@@ -1323,7 +1369,19 @@ async function handleMessage(
         perm.suggestions,
         msg.messageId,
       );
-    }, taskAbort.signal, hasAttachments ? msg.attachments : undefined, onPartialText, onToolEvent);
+    }, taskAbort.signal, hasAttachments ? msg.attachments : undefined, onPartialText, onToolEvent, {
+      isCurrent,
+      onUserInputRequest: async request => {
+        if (!isCurrent()) {
+          getBridgeContext().permissions.resolvePendingPermission(request.requestId, { behavior: 'deny', message: '任务已取消' });
+          return;
+        }
+        await forwardUserInputRequest(adapter, msg.address, request, binding.codepilotSessionId, msg.messageId);
+      },
+      onProgress: text => { if (isCurrent()) adapter.onProgress?.(msg.address.chatId, text); },
+    });
+    clearUserInputRequests(binding.codepilotSessionId);
+    if (!isCurrent()) return;
 
     // Best-effort: record token usage into local daily summary.
     // 写入失败不得影响主流程（IM 响应/流式体验）。
@@ -1375,7 +1433,9 @@ async function handleMessage(
     // `tokenUsage` 是整个 turn 的累计量，在 tool-use / 多轮 round-trip 下会显著大于
     // 当前 prompt footprint，直接拿来算会出现 `ctx 256%` 这类明显错误的数字。
     // 拿不到 `lastTurnUsage` 时宁可不显示 ctx，也不显示错值。
-    const usageForCtx = result.lastTurnUsage ?? null;
+    const usageForCtx = result.contextTokens != null
+      ? { input_tokens: result.contextTokens, output_tokens: 0 }
+      : result.lastTurnUsage ?? null;
     if (usageForCtx) {
       try {
         const freshSession = store.getSession(binding.codepilotSessionId);
@@ -1395,26 +1455,36 @@ async function handleMessage(
     // Finalize streaming card if adapter supports it.
     // onStreamEnd awaits any in-flight card creation and returns true if a card
     // was actually finalized (meaning content is already visible to the user).
-    let cardFinalized = false;
-    if (hasStreamingCards && adapter.onStreamEnd) {
-      try {
-        const status = result.hasError ? 'error' : 'completed';
-        cardFinalized = await adapter.onStreamEnd(
+    const finalize = async () => {
+      if (!isCurrent()) return false;
+      if (hasStreamingCards && adapter.onStreamEnd) {
+        const status = result.errorCode === 'abort' ? 'interrupted' : result.hasError ? 'error' : 'completed';
+        return adapter.onStreamEnd(
           msg.address.chatId,
           status,
           result.responseText,
           ctxFooter ? { ctx: ctxFooter } : undefined,
         );
-      } catch (err) {
-        console.warn('[bridge-manager] Card finalize failed:', err instanceof Error ? err.message : err);
       }
+      return false;
+    };
+
+    // 空回答没有待发记录，也必须限制卡片收尾等待，避免占住会话队列。
+    if (!result.responseText) {
+      const deadline = parsePositiveInt(store.getSetting('bridge_delivery_timeout_ms')) || 15_000;
+      const settled = await abortable(settleWithin(finalize(), deadline), taskAbort.signal);
+      if (!settled) console.warn('[bridge-manager] 空回答卡片收尾超时，平台更新结果未知。');
+      if (!isCurrent()) return;
     }
 
     // Send response text — render via channel-appropriate format.
     // Skip if streaming card was finalized (content already in card).
     if (result.responseText) {
-      if (!cardFinalized) {
-        await deliverResponse(adapter, msg.address, result.responseText, binding.codepilotSessionId, msg.messageId);
+      const sent = await abortable(deliverResponse(adapter, msg.address, result.responseText, binding.codepilotSessionId, msg.messageId, {
+        turnId: context.turnId, isCurrent, finalize,
+      }), taskAbort.signal);
+      if (!sent.ok && isCurrent()) {
+        console.warn('[bridge-manager] 回答未送达，可通过 /retry 重投已有回答。');
       }
     } else if (result.hasError) {
       if (result.errorCode === 'timeout') {
@@ -1441,7 +1511,7 @@ async function handleMessage(
     // Persist the actual SDK session ID for future resume.
     // If the result has an error and no session ID was captured, clear the
     // stale ID so the next message starts fresh instead of retrying a broken resume.
-    if (binding.id) {
+    if (binding.id && isCurrent()) {
       try {
         const update = computeSdkSessionUpdate(result.sdkSessionId, result.hasError);
         if (update !== null) {
@@ -1449,32 +1519,33 @@ async function handleMessage(
         }
       } catch { /* best effort */ }
     }
+  } catch (error) {
+    if (!taskAbort.signal.aborted) throw error;
   } finally {
     // Clean up preview state
+    clearUserInputRequests(binding.codepilotSessionId);
     if (previewState) {
       if (previewState.throttleTimer) {
         clearTimeout(previewState.throttleTimer);
         previewState.throttleTimer = null;
       }
-      adapter.endPreview?.(msg.address.chatId, previewState.draftId);
+      if (isCurrent()) adapter.endPreview?.(msg.address.chatId, previewState.draftId);
     }
 
     // If task was aborted and streaming card is still active, finalize as interrupted
-    if (hasStreamingCards && adapter.onStreamEnd && taskAbort.signal.aborted) {
-      try {
-        await adapter.onStreamEnd(msg.address.chatId, 'interrupted', '');
-      } catch { /* best effort */ }
-    }
-
+    const ownedUi = isCurrent();
     clearActiveTask(msg.address, binding.codepilotSessionId, taskAbort);
     // Notify adapter that message processing ended
-    adapter.onMessageEnd?.(msg.address.chatId);
+    if (ownedUi) {
+      getState().uiOwners.delete(context.chatKey);
+      adapter.onMessageEnd?.(msg.address.chatId);
+    }
     // Commit the offset only after full processing (success or failure)
     ack();
 
     // ── 排出追加消息 ──
     // 当前任务已完成，activeTask 已清除。缓冲中的追加消息合并为一条后续轮次。
-    flushPendingAppends(adapter, getChatTaskKey(msg.address));
+    if (ownedUi) flushPendingAppends(adapter, getChatTaskKey(msg.address));
   }
 }
 
@@ -1532,9 +1603,7 @@ async function handleCommand(
       }
 
       // If there is a running task for this chat, stop it before switching sessions.
-      const stopped = abortActiveTaskForChat(msg.address);
-      // 切换会话时清除追加消息缓冲（旧会话的追加对新会话无意义）
-      clearPendingAppends(adapter, getChatTaskKey(msg.address));
+      const { running: stopped } = cancelChat(adapter, msg.address);
 
       const binding = router.startNewSession(msg.address, workDir ? { workingDirectory: workDir } : {});
 
@@ -1542,7 +1611,7 @@ async function handleCommand(
       const effectiveModel = (session?.model || binding.model || 'default').trim() || 'default';
       const backend = (store.getSetting('bridge_llm_backend') || '').trim().toLowerCase();
       const thinking = backend === 'codex'
-        ? (inferReasoningEffortForStatus(store, effectiveModel) || 'default')
+        ? (binding.reasoningEffort || '由模型目录决定')
         : null;
 
       const st = getState();
@@ -1569,12 +1638,12 @@ async function handleCommand(
         `Model: <code>${escapeHtml(effectiveModel)}</code>`,
         ...(thinking ? [`Thinking: <code>${escapeHtml(thinking)}</code>`] : []),
         `Backend: <code>${escapeHtml(backend || 'default')}</code>`,
-        `Task: ${isRunningTask ? '<b>running</b>' : '<b>idle</b>'}${runningForMs != null ? ` (<code>${formatTimeoutMs(runningForMs)}</code>)` : ''}`,
+        `Task: ${activeChatTask?.abort.signal.aborted ? '<b>cancelling</b>' : isRunningTask ? '<b>running</b>' : '<b>idle</b>'}${runningForMs != null ? ` (<code>${formatTimeoutMs(runningForMs)}</code>)` : ''}`,
         `Session lock: ${hasSessionLock ? '<b>busy</b>' : '<b>free</b>'}`,
         `Turn timeout: <code>${formatTimeoutMs(effectiveTurnTimeoutMs)}</code>`,
         `Turn idle timeout: <code>${formatTimeoutMs(effectiveIdleTimeoutMs)}</code>`,
         `Queue timeout: <code>${formatTimeoutMs(effectiveQueueTimeoutMs)}</code>`,
-        stopped ? '<i>Stopped previous running task.</i>' : '',
+        stopped ? '<i>已请求中断旧任务，并隔离其后续回调。</i>' : '',
       ].filter(Boolean).join('\n');
       break;
     }
@@ -1588,14 +1657,13 @@ async function handleCommand(
         response = 'Invalid session ID format. Expected a 32-64 character hex/UUID string.';
         break;
       }
-      const stopped = abortActiveTaskForChat(msg.address);
-      // 切换会话时清除追加消息缓冲（旧会话的追加对新会话无意义）
-      clearPendingAppends(adapter, getChatTaskKey(msg.address));
+      if (!store.getSession(args)) { response = 'Session not found.'; break; }
+      const { running: stopped } = cancelChat(adapter, msg.address);
       const binding = router.bindToSession(msg.address, args);
       if (binding) {
         response = [
           `Bound to session <code>${args.slice(0, 8)}...</code>`,
-          stopped ? '<i>Stopped previous running task.</i>' : '',
+          stopped ? '<i>已请求中断旧任务，并隔离其后续回调。</i>' : '',
         ].filter(Boolean).join('\n');
       } else {
         response = 'Session not found.';
@@ -1630,13 +1698,34 @@ async function handleCommand(
       break;
     }
 
+    case '/model': {
+      const binding = router.resolve(msg.address);
+      if (!args) {
+        response = `当前模型：<code>${escapeHtml(binding.model || 'default')}</code>\n思考强度：<code>${escapeHtml(binding.reasoningEffort || '由模型目录决定')}</code>\n用法：/model &lt;model-id&gt; [effort]；/model default 恢复默认。下次请求将校验模型目录，不会静默切换型号。`;
+        break;
+      }
+      if (getActiveTaskForChat(msg.address)) {
+        response = '请等待当前任务完成，或先 /stop，再切换模型。';
+        break;
+      }
+      const [model, effort, extra] = args.trim().split(/\s+/);
+      if (extra || !/^[a-zA-Z0-9._:/-]+$/.test(model) || (effort && !/^[a-zA-Z0-9_-]+$/.test(effort))) {
+        response = '用法：/model &lt;model-id&gt; [effort]';
+        break;
+      }
+      store.updateChannelBinding(binding.id, { model, reasoningEffort: effort || '' });
+      store.updateSessionModel(binding.codepilotSessionId, model);
+      response = `模型已设为 <code>${escapeHtml(model)}</code>${effort ? `，思考强度 <code>${escapeHtml(effort)}</code>` : ''}；下次请求生效。`;
+      break;
+    }
+
     case '/status': {
       const binding = router.resolve(msg.address);
       const session = store.getSession(binding.codepilotSessionId);
       const effectiveModel = (session?.model || binding.model || 'default').trim() || 'default';
       const backend = (store.getSetting('bridge_llm_backend') || '').trim().toLowerCase();
       const thinking = backend === 'codex'
-        ? (inferReasoningEffortForStatus(store, effectiveModel) || 'default')
+        ? (binding.reasoningEffort || '由模型目录决定')
         : null;
 
       const st = getState();
@@ -1686,12 +1775,14 @@ async function handleCommand(
         `Model: <code>${escapeHtml(effectiveModel)}</code>`,
         ...(thinking ? [`Thinking: <code>${escapeHtml(thinking)}</code>`] : []),
         `Backend: <code>${escapeHtml(backend || 'default')}</code>`,
-        `Task: ${isRunningTask ? '<b>running</b>' : '<b>idle</b>'}${runningForMs != null ? ` (<code>${formatTimeoutMs(runningForMs)}</code>)` : ''}`,
+        `Task: ${activeChatTask?.abort.signal.aborted ? '<b>cancelling</b>' : isRunningTask ? '<b>running</b>' : '<b>idle</b>'}${runningForMs != null ? ` (<code>${formatTimeoutMs(runningForMs)}</code>)` : ''}`,
         `Session lock: ${hasSessionLock ? '<b>busy</b>' : '<b>free</b>'}`,
         `Turn timeout: <code>${formatTimeoutMs(effectiveTurnTimeoutMs)}</code>`,
         `Turn idle timeout: <code>${formatTimeoutMs(effectiveIdleTimeoutMs)}</code>`,
         `Queue timeout: <code>${formatTimeoutMs(effectiveQueueTimeoutMs)}</code>`,
         ...toolLines,
+        `Waiting messages: ${countWaitingMessages(msg.address)}`,
+        escapeHtml(getResponseDeliveryStatus(msg.address)),
       ].join('\n');
       break;
     }
@@ -1733,22 +1824,17 @@ async function handleCommand(
     }
 
     case '/stop': {
-      const activeChatTask = getActiveTaskForChat(msg.address);
-      if (activeChatTask) {
-        activeChatTask.abort.abort();
-        // Eagerly clear chat-level tracking so /status immediately reflects idle.
-        // Session-level entries (activeTasks, activeTaskStartedAt) are cleaned up
-        // by clearActiveTask() in handleMessage's finally block.
-        const chatKey = getChatTaskKey(msg.address);
-        getState().activeTasksByChat.delete(chatKey);
-        // 同时清除该 chat 的追加消息缓冲
-        const droppedCount = clearPendingAppends(adapter, chatKey);
-        response = droppedCount > 0
-          ? `Stopping current task... (${droppedCount} pending appended message(s) also discarded)`
-          : 'Stopping current task...';
-      } else {
-        response = 'No task is currently running.';
-      }
+      const cancelled = cancelChat(adapter, msg.address);
+      response = cancelled.running
+        ? `已请求停止当前任务，正在清理本地执行。${cancelled.dropped ? ` 已取消 ${cancelled.dropped} 条等待消息。` : ''}`
+        : cancelled.dropped ? `已取消 ${cancelled.dropped} 条等待消息。` : 'No task is currently running.';
+      break;
+    }
+
+    case '/retry': {
+      if (getActiveTaskForChat(msg.address)) { response = '当前任务尚未结束，请稍后重投回答。'; break; }
+      const result = await retryResponseDelivery(adapter, msg.address, args || undefined);
+      response = result.ok ? '回答已送达。' : `回答重投失败：${escapeHtml(result.error || '未知错误')}。`;
       break;
     }
 
@@ -2308,63 +2394,6 @@ async function handleCommand(
       replyToMessageId: msg.messageId,
     });
   }
-}
-
-// ── Status helpers ────────────────────────────────────────────
-
-type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
-
-function parseReasoningEffortToken(text: string): ReasoningEffort | null {
-  const m = text.toLowerCase().match(/\b(xhigh|high|medium|low|minimal)\b/);
-  if (!m) return null;
-  return m[1] as ReasoningEffort;
-}
-
-/**
- * 从 bridge_codex_cli_config（`key=value`，支持换行或 `;` 分隔）中提取 model_reasoning_effort。
- * 仅用于 /status 展示，不参与实际运行逻辑（实际生效由 runner 传给 codex app-server）。
- */
-function extractModelReasoningEffortFromCliConfig(raw: string | null): ReasoningEffort | null {
-  const text = (raw || '').trim();
-  if (!text) return null;
-
-  const splitByNewline = text.includes('\n') || text.includes('\r');
-  const parts = splitByNewline ? text.split(/\r?\n/) : text.split(';');
-
-  for (const part of parts) {
-    const trimmed = part.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eq = trimmed.indexOf('=');
-    if (eq <= 0) continue;
-
-    const key = trimmed.slice(0, eq).trim();
-    const valueRaw = trimmed.slice(eq + 1).trim();
-    if (key !== 'model_reasoning_effort') continue;
-
-    const value = valueRaw.replace(/^['"]|['"]$/g, '').trim();
-    return parseReasoningEffortToken(value);
-  }
-
-  return null;
-}
-
-function inferReasoningEffortForStatus(
-  store: { getSetting(key: string): string | null },
-  modelLabel: string,
-): ReasoningEffort | null {
-  // 1) 显式覆盖：bridge_codex_cli_config 的 model_reasoning_effort
-  const fromCliConfig = extractModelReasoningEffortFromCliConfig(store.getSetting('bridge_codex_cli_config'));
-  if (fromCliConfig) return fromCliConfig;
-
-  // 2) 次优：bridge_codex_model_hint（常见：`gpt-5.5 xhigh`）
-  const hint = store.getSetting('bridge_codex_model_hint');
-  if (hint) {
-    const fromHint = parseReasoningEffortToken(hint);
-    if (fromHint) return fromHint;
-  }
-
-  // 3) 兜底：部分 Codex model displayName/description 可能自带强度
-  return parseReasoningEffortToken(modelLabel);
 }
 
 // ── SDK Session Update Logic ─────────────────────────────────

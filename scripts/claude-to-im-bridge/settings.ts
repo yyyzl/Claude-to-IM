@@ -67,7 +67,11 @@ export function resolveBridgeSetting(
   }
 
   if (key === "default_model") {
-    // conversation-engine.ts 会读 default_model
+    // conversation-engine 读取通用默认值时，仍必须遵循当前后端的模型范围。
+    // 上方 direct 已保留显式 default_model 的优先级。
+    if (readEnv(env, 'bridge_llm_backend')?.trim().toLowerCase() === 'codex') {
+      return readEnv(env, 'bridge_codex_model_id') || readEnv(env, 'bridge_codex_model_hint') || null;
+    }
     const v = readEnv(env, "default_model")
       ?? readEnv(env, "bridge_default_model")
       ?? readEnv(env, "bridge_model");

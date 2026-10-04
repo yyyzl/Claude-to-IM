@@ -1,0 +1,32 @@
+{
+  "id": "runtime-feishu-upgrade",
+  "name": "runtime-feishu-upgrade",
+  "title": "升级模型运行时与飞书交互卡片",
+  "description": "升级 Codex/Claude 运行时和模型适配，完善飞书流式卡片与问答审批，完成质量验证。",
+  "status": "completed",
+  "dev_type": "backend",
+  "scope": "bridge-runtime",
+  "package": null,
+  "priority": "P2",
+  "creator": "yyyzl",
+  "assignee": "yyyzl",
+  "createdAt": "2026-10-04",
+  "completedAt": "2026-10-04",
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "493/493 tests；typecheck/build/diff通过；npm audit=0。全局 Codex CLI 0.160.0、Claude Code 2.1.289 已更新。未重启运行中桥接、未提交；桌面 Store 更新不可确认。测试隔离事件及限制见 research。",
+  "meta": {
+    "quality_report": "research/quality-check.md",
+    "tests_passed": 493,
+    "npm_audit_total": 0,
+    "software_updates": "research/software-updates.md",
+    "test_isolation_incident": "research/testing-isolation-incident.md"
+  }
+}

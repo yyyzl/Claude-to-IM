@@ -10,6 +10,24 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { applyModelOverrides } from '../../lib/workflow/cli.js';
+import { AutoFixer } from '../../lib/workflow/auto-fixer.js';
+import type { WorkflowEngine } from '../../lib/workflow/workflow-engine.js';
+import type { ModelInvokerOptions } from '../../lib/workflow/model-invoker.js';
+import path from 'node:path';
+
+describe('CLI model overrides', () => {
+  it('preserves explicit models without a config file', () => {
+    assert.deepEqual(applyModelOverrides(undefined, { claudeModel: 'sonnet', codexBackend: 'gemini' }), {
+      claude_model: 'sonnet', codex_backend: 'gemini',
+    });
+  });
+  it('overrides only explicitly supplied settings', () => {
+    assert.deepEqual(applyModelOverrides({ claude_model: 'opus', max_rounds: 3 }, { codexBackend: 'codex' }), {
+      claude_model: 'opus', max_rounds: 3, codex_backend: 'codex',
+    });
+  });
+});
 
 // ── CLI parseArgs is not exported, so we test via workflow-command parsing ──
 
@@ -98,6 +116,7 @@ describe('workflow-command review-fix parsing', () => {
 describe('FixResult type structure', () => {
   it('FixResult has all required fields', () => {
     const result: FixResult = {
+      attemptId: 'attempt', proposedIssueIds: [], skippedIssueIds: [], fixBaseSha: 'base', fixHeadSha: 'head', commits: [], validation: [],
       success: true,
       totalCount: 5,
       fixedCount: 3,

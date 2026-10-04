@@ -1,10 +1,5 @@
-export type PermissionBehavior = "allow" | "deny";
-
-export interface PermissionResolution {
-  behavior: PermissionBehavior;
-  message?: string;
-  updatedPermissions?: unknown[];
-}
+import type { PermissionResolution } from '../../src/lib/bridge/host.js';
+export type { PermissionResolution } from '../../src/lib/bridge/host.js';
 
 type Pending = {
   promise: Promise<PermissionResolution>;
@@ -14,6 +9,17 @@ type Pending = {
 
 export class InMemoryPermissionGateway {
   private pending = new Map<string, Pending>();
+  private listeners = new Map<string, Set<(resolution: PermissionResolution) => void>>();
+  /** 只保留终态元数据，覆盖事件在消费前已过期的竞态，不保留答案正文。 */
+  private completed = new Map<string, PermissionResolution>();
+
+  onResolution(requestId: string, listener: (resolution: PermissionResolution) => void): () => void {
+    const completed = this.completed.get(requestId);
+    if (completed) { listener(completed); return () => {}; }
+    const listeners = this.listeners.get(requestId) ?? new Set();
+    listeners.add(listener); this.listeners.set(requestId, listeners);
+    return () => { listeners.delete(listener); if (!listeners.size) this.listeners.delete(requestId); };
+  }
   /** 权限请求自动超时（毫秒）。<=0 表示不超时。默认 10 分钟。 */
   private permissionTimeoutMs: number;
 
@@ -25,6 +31,7 @@ export class InMemoryPermissionGateway {
   waitFor(permissionRequestId: string, signal?: AbortSignal): Promise<PermissionResolution> {
     const existing = this.pending.get(permissionRequestId);
     if (existing) return existing.promise;
+    this.completed.delete(permissionRequestId);
 
     let resolver: ((resolution: PermissionResolution) => void) | null = null;
     const promise = new Promise<PermissionResolution>((resolve) => {
@@ -36,6 +43,11 @@ export class InMemoryPermissionGateway {
       resolve: (resolution) => {
         this.pending.delete(permissionRequestId);
         resolver?.(resolution);
+        this.completed.set(permissionRequestId, { behavior: resolution.behavior, reason: resolution.reason });
+        if (this.completed.size > 100) this.completed.delete(this.completed.keys().next().value!);
+        const listeners = this.listeners.get(permissionRequestId);
+        this.listeners.delete(permissionRequestId);
+        for (const listener of listeners ?? []) { try { listener(resolution); } catch { /* 观察者不改变授权终态。 */ } }
       },
       createdAt: Date.now(),
     };
@@ -50,6 +62,7 @@ export class InMemoryPermissionGateway {
           );
           pending.resolve({
             behavior: "deny",
+            reason: 'expired',
             message: `Permission timed out after ${Math.ceil(this.permissionTimeoutMs / 60_000)} minutes (auto-denied)`,
           });
         }
@@ -60,18 +73,16 @@ export class InMemoryPermissionGateway {
 
     if (signal) {
       if (signal.aborted) {
-        pending.resolve({ behavior: "deny", message: "aborted" });
+        pending.resolve({ behavior: "deny", message: "aborted", reason: 'cancelled' });
         return promise;
       }
-      signal.addEventListener(
-        "abort",
-        () => {
+      const onAbort = () => {
           if (this.pending.has(permissionRequestId)) {
-            pending.resolve({ behavior: "deny", message: "aborted" });
+            pending.resolve({ behavior: "deny", message: "aborted", reason: 'cancelled' });
           }
-        },
-        { once: true },
-      );
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      void promise.then(() => signal.removeEventListener("abort", onAbort));
     }
 
     return promise;

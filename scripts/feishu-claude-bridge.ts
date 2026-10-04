@@ -15,7 +15,7 @@
  *
  * 可选：
  *   bridge_default_work_dir=G:\\RustProject\\push-2-talk
- *   bridge_default_model=claude-sonnet-4-20250514
+ *   bridge_default_model=sonnet
  *   bridge_codex_cli_config=model_provider=openai   # 覆盖 ~/.codex/config.toml（每行一条或用 ; 分隔）
  *   bridge_codex_turn_timeout_ms=5400000           # turn 超时（毫秒），默认 90 分钟
  *   bridge_codex_turn_idle_timeout_ms=0            # turn 无事件超时（毫秒），默认关闭；建议 10-20 分钟用于更快发现卡死
@@ -27,16 +27,21 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
+import type { LLMProvider } from "../src/lib/bridge/host.js";
+import type { BridgeContext } from "../src/lib/bridge/context.js";
 
 import { loadDotEnvFile } from "./claude-to-im-bridge/settings.ts";
 import { isClaudeToImDistStale } from "../src/lib/bridge/internal/build-freshness.ts";
 import { InMemoryPermissionGateway } from "./claude-to-im-bridge/permissions.ts";
 import { ClaudeCodeLLMProvider } from "./claude-to-im-bridge/llm.ts";
 import { CodexAppServerLLMProvider } from "./claude-to-im-bridge/codex-llm.ts";
+import { resolveCodexBinary } from "./claude-to-im-bridge/codex-utils.ts";
 import { JsonFileBridgeStore } from "./claude-to-im-bridge/store.ts";
+import { drainAndFlush } from "./claude-to-im-bridge/shutdown.ts";
 
 type BridgeContextModule = {
-  initBridgeContext: (ctx: { store: any; llm: any; permissions: any; lifecycle?: any }) => void;
+  initBridgeContext: (ctx: BridgeContext) => void;
 };
 
 type BridgeManagerModule = {
@@ -363,44 +368,30 @@ async function main() {
     return runnerRoot;
   })();
 
-  const llm = backend === "codex"
-    ? new CodexAppServerLLMProvider({
+  let llmFinal: LLMProvider;
+  if (backend === "codex") {
+    llmFinal = new CodexAppServerLLMProvider({
         projectRoot: codexProjectRoot,
         permissions,
-        codexBin: store.getSetting("bridge_codex_bin") || undefined,
+        // 运行目录可以是任意业务项目；CLI 依赖始终来自桥接安装目录。
+        codexBin: resolveCodexBinary(store.getSetting("bridge_codex_bin") || undefined, claudeToImRoot),
         cliConfig: store.getSetting("bridge_codex_cli_config") || undefined,
         modelId: store.getSetting("bridge_codex_model_id") || undefined,
-        modelHint: store.getSetting("bridge_codex_model_hint")
-          || store.getSetting("bridge_default_model")
-          || "gpt-5.5 xhigh",
-        sandboxMode: store.getSetting("bridge_codex_sandbox_mode") || "danger-full-access",
-        approvalPolicy: store.getSetting("bridge_codex_approval_policy") || "never",
+        modelHint: store.getSetting("bridge_codex_model_hint") || undefined,
+        sandboxMode: store.getSetting("bridge_codex_sandbox_mode") || undefined,
+        approvalPolicy: store.getSetting("bridge_codex_approval_policy") || undefined,
         turnTimeoutMs: parseIntSetting(store.getSetting("bridge_codex_turn_timeout_ms")),
         turnIdleTimeoutMs: parseIntSetting(store.getSetting("bridge_codex_turn_idle_timeout_ms")),
         keepAliveMs,
         debug: store.getSetting("bridge_codex_debug") === "true",
-      })
-    : (() => {
-        // Lazy import so codex 模式下不依赖 Claude SDK
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return null as any;
-      })();
-
-  // 如果不是 codex 后端，使用 Claude Code SDK
-  const llmResolved = backend === "codex"
-    ? llm
-    : (() => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return null as any;
-      })();
-
-  // NOTE: 这里用显式 if，避免对 SDK 的无条件 import
-  let llmFinal: any = llmResolved;
-  if (backend !== "codex") {
-    const sdk = await import(
-      pathToFileURL(path.join(claudeToImRoot, "node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs")).href
+      });
+  } else {
+    // 按选中的桥接仓库解析公共 package export，保留延迟加载。
+    const requireFromRoot = createRequire(path.join(claudeToImRoot, "package.json"));
+    const sdk: typeof import('@anthropic-ai/claude-agent-sdk') = await import(
+      pathToFileURL(requireFromRoot.resolve('@anthropic-ai/claude-agent-sdk')).href
     );
-    const query = (sdk as any).query as any;
+    const { query } = sdk;
     llmFinal = new ClaudeCodeLLMProvider({ query, permissions, keepAliveMs });
   }
 
@@ -481,7 +472,9 @@ async function main() {
 
   writeHeartbeat("running");
 
-  const shutdown = async (signal: string) => {
+  let shutdownExitCode = 0;
+  const shutdown = async (signal: string, exitCode = 0) => {
+    shutdownExitCode = Math.max(shutdownExitCode, exitCode);
     if (shuttingDown) return;
     shuttingDown = true;
 
@@ -525,48 +518,31 @@ async function main() {
       parentProcess: parentDiag,
     });
 
-    try { await bridgeManager.stop(); } catch { /* ignore */ }
-    try { (llmFinal as any).stop?.(); } catch { /* ignore */ }
+    const failures = await drainAndFlush({
+      stopBridge: () => bridgeManager.stop(),
+      stopRuntime: () => (llmFinal as { stop?: () => void | Promise<void> }).stop?.(),
+      closeStore: () => store.close(),
+    });
+    if (failures.length) {
+      shutdownExitCode = 1;
+      for (const failure of failures) console.error('[bridge-runner] 停机失败:', failure);
+    }
     safeUnlink(control.pidFile);
     writeHeartbeat("stopped", { reason: signal });
-    process.exit(0);
+    process.exit(shutdownExitCode);
   };
 
   process.on("SIGINT", () => { void shutdown("SIGINT"); });
   process.on("SIGTERM", () => { void shutdown("SIGTERM"); });
 
-  // ── Guard: transient socket errors (write EOF / ECONNRESET / EPIPE) ──
-  // The Feishu SDK WSClient's underlying TCP socket can emit 'error' events
-  // that are not fully proxied to the WebSocket 'error' handler (race during
-  // reconnect, idle-timeout, ping on a half-closed connection, etc.).
-  // Without this guard the process crashes with "Unhandled 'error' event on
-  // Socket instance".  We log and let the SDK's own reconnect logic recover.
-  const TRANSIENT_SOCKET_CODES = new Set(["EOF", "ECONNRESET", "EPIPE", "ETIMEDOUT", "ECONNABORTED"]);
-
-  process.on("uncaughtException", (err: NodeJS.ErrnoException) => {
-    if (TRANSIENT_SOCKET_CODES.has(err.code ?? "")) {
-      console.warn(
-        `[bridge-runner] Transient socket error caught (code=${err.code}, syscall=${(err as any).syscall ?? "?"}), ignoring:`,
-        err.message,
-      );
-      return; // swallow — SDK reconnect will handle recovery
-    }
-    // Non-transient: log and exit as usual
-    console.error("[bridge-runner] Uncaught exception (fatal):", err);
-    void shutdown("UNCAUGHT_EXCEPTION");
+  // 到达进程级异常边界就无法确认子系统是否仍一致，交给监督进程重启。
+  process.on("uncaughtException", (error) => {
+    console.error("[bridge-runner] Uncaught exception (fatal):", error);
+    void shutdown("UNCAUGHT_EXCEPTION", 1);
   });
-
-  process.on("unhandledRejection", (reason) => {
-    const err = reason instanceof Error ? reason : new Error(String(reason));
-    if (TRANSIENT_SOCKET_CODES.has((err as NodeJS.ErrnoException).code ?? "")) {
-      console.warn(
-        `[bridge-runner] Transient socket rejection caught (code=${(err as NodeJS.ErrnoException).code}), ignoring:`,
-        err.message,
-      );
-      return;
-    }
-    console.error("[bridge-runner] Unhandled rejection (fatal):", reason);
-    void shutdown("UNHANDLED_REJECTION");
+  process.on("unhandledRejection", (error) => {
+    console.error("[bridge-runner] Unhandled rejection (fatal):", error);
+    void shutdown("UNHANDLED_REJECTION", 1);
   });
 
   if (heartbeatMs > 0) {

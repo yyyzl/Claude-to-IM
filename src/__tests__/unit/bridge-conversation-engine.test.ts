@@ -5,6 +5,7 @@ import { initBridgeContext } from '../../lib/bridge/context';
 import { processMessage } from '../../lib/bridge/conversation-engine';
 import type { BridgeStore, LLMProvider, StreamChatParams } from '../../lib/bridge/host';
 import type { ChannelBinding } from '../../lib/bridge/types';
+import { resolveBridgeSetting } from '../../../scripts/claude-to-im-bridge/settings.ts';
 
 function sse(type: 'text' | 'result', data: string | Record<string, unknown>): string {
   return `data: ${JSON.stringify({ type, data: typeof data === 'string' ? data : JSON.stringify(data) })}\n`;
@@ -82,6 +83,17 @@ function createStore(): BridgeStore {
 describe('conversation-engine permission mode mapping', () => {
   beforeEach(() => {
     delete (globalThis as Record<string, unknown>).__bridge_context__;
+  });
+
+  it('leaves the model unset for a Codex catalog default even when Claude has a configured default', async () => {
+    const binding = { ...createBinding('code'), backend: 'codex', model: '' };
+    const store = createStore();
+    store.getSetting = key => resolveBridgeSetting(key, 'G:/target', { bridge_llm_backend: 'codex', bridge_default_model: 'claude-only' });
+    store.getSession = id => ({ id, model: '', working_directory: 'G:/target' });
+    const seen: Array<string | undefined> = [];
+    initBridgeContext({ store, llm: { streamChat: params => { seen.push(params.model); return streamFromChunks([sse('result', { is_error: false })]); } }, permissions: { resolvePendingPermission: () => false }, lifecycle: {} });
+    await processMessage(binding, 'hi');
+    assert.deepEqual(seen, [undefined]);
   });
 
   it('uses dontAsk for code mode, while ask/plan still require approvals', async () => {

@@ -1,0 +1,8 @@
+{"file":".trellis/spec/backend/index.md","reason":"项目规范入口"}
+{"file":".trellis/spec/backend/module-boundaries.md","reason":"保持adapter/provider/core边界"}
+{"file":".trellis/spec/backend/type-safety.md","reason":"新版SDK和协议类型约束"}
+{"file":".trellis/spec/backend/integration-guidelines.md","reason":"脚本与运行时集成"}
+{"file":".trellis/spec/backend/testing-guidelines.md","reason":"最小mock与回归"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"错误取消与资源生命周期"}
+{"file":".trellis/tasks/10-04-agent-runtime-upgrade/research/codex-current-audit.md","reason":"已确认Codex缺口"}
+{"file":".trellis/tasks/10-04-agent-runtime-upgrade/research/claude-workflow-current-audit.md","reason":"已确认SDK和工作流缺口"}

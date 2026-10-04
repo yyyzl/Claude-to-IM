@@ -29,3 +29,11 @@ test("resolveBridgeSetting: default_model 回退到 bridge_default_model / bridg
   assert.equal(resolveBridgeSetting("default_model", projectRoot, { bridge_model: "claude-y" }), "claude-y");
 });
 
+test("Codex 的默认模型不继承 Claude 设置，但保留显式通用覆盖", () => {
+  const env = { bridge_llm_backend: 'codex', bridge_default_model: 'claude-x', bridge_model: 'claude-y' };
+  assert.equal(resolveBridgeSetting('default_model', 'G:/target', env), null);
+  assert.equal(resolveBridgeSetting('default_model', 'G:/target', { ...env, bridge_codex_model_hint: 'codex-x high' }), 'codex-x high');
+  assert.equal(resolveBridgeSetting('default_model', 'G:/target', { ...env, bridge_codex_model_id: 'codex-y' }), 'codex-y');
+  assert.equal(resolveBridgeSetting('default_model', 'G:/target', { ...env, default_model: 'explicit-model' }), 'explicit-model');
+});
+

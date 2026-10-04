@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { BridgeApiProvider, ResponseDeliveryRecord } from "../../src/lib/bridge/host.js";
 
 import { resolveBridgeSetting } from "./settings.ts";
 
@@ -86,6 +87,7 @@ type PersistedData = {
   bindings: Record<string, ChannelBinding>;
   messages: Record<string, BridgeMessage[]>;
   channelOffsets: Record<string, string>;
+  responseDeliveries?: Record<string, ResponseDeliveryRecord>;
 };
 
 const DEDUP_TTL_MS = 24 * 60 * 60 * 1000;
@@ -114,6 +116,13 @@ export class JsonFileBridgeStore {
   private sessionLocks = new Map<string, SessionLock>(); // sessionId -> lock
 
   private saveTimer: NodeJS.Timeout | null = null;
+  private responseDeliveries = new Map<string, ResponseDeliveryRecord>();
+  private dirty = false;
+  private closed = false;
+  private closing = false;
+  private saving: Promise<void> | null = null;
+  private lastGoodRaw: string | null = null;
+  private corruptRaw: string | null = null;
 
   constructor(opts: { projectRoot: string; dataPath: string }) {
     this.projectRoot = opts.projectRoot;
@@ -134,6 +143,7 @@ export class JsonFileBridgeStore {
   }
 
   upsertChannelBinding(data: UpsertChannelBindingInput): ChannelBinding {
+    this.assertWritable();
     const key = `${data.channelType}:${data.chatId}`;
     const prev = this.bindings.get(key);
     const now = new Date().toISOString();
@@ -168,6 +178,7 @@ export class JsonFileBridgeStore {
   }
 
   updateChannelBinding(id: string, updates: Partial<ChannelBinding>): void {
+    this.assertWritable();
     for (const [key, b] of this.bindings) {
       if (b.id !== id) continue;
       this.bindings.set(key, { ...b, ...updates, updatedAt: new Date().toISOString() });
@@ -194,6 +205,7 @@ export class JsonFileBridgeStore {
     cwd?: string,
     _mode?: string,
   ): BridgeSession {
+    this.assertWritable();
     const id = crypto.randomUUID();
     const session: BridgeSession = {
       id,
@@ -208,6 +220,7 @@ export class JsonFileBridgeStore {
   }
 
   updateSessionProviderId(sessionId: string, providerId: string): void {
+    this.assertWritable();
     const session = this.sessions.get(sessionId);
     if (!session) return;
     session.provider_id = providerId;
@@ -218,6 +231,7 @@ export class JsonFileBridgeStore {
   // ── Messages ───────────────────────────────────────────────
 
   addMessage(sessionId: string, role: string, content: string, _usage?: string | null): void {
+    this.assertWritable();
     const list = this.messages.get(sessionId) || [];
     list.push({ role, content });
     this.messages.set(sessionId, list);
@@ -264,6 +278,7 @@ export class JsonFileBridgeStore {
   // ── SDK session ────────────────────────────────────────────
 
   updateSdkSessionId(sessionId: string, sdkSessionId: string): void {
+    this.assertWritable();
     const session = this.sessions.get(sessionId);
     if (!session) return;
     session.sdk_session_id = sdkSessionId;
@@ -272,6 +287,7 @@ export class JsonFileBridgeStore {
   }
 
   updateSessionModel(sessionId: string, model: string): void {
+    this.assertWritable();
     const session = this.sessions.get(sessionId);
     if (!session) return;
     session.model = model;
@@ -285,7 +301,7 @@ export class JsonFileBridgeStore {
 
   // ── Provider ───────────────────────────────────────────────
 
-  getProvider(_id: string): unknown {
+  getProvider(_id: string): BridgeApiProvider | undefined {
     return undefined;
   }
 
@@ -360,67 +376,157 @@ export class JsonFileBridgeStore {
   }
 
   setChannelOffset(key: string, offset: string): void {
+    this.assertWritable();
     this.channelOffsets.set(key, offset);
     this.scheduleSave();
   }
 
   // ── Persistence ────────────────────────────────────────────
 
-  private load(): void {
-    try {
-      if (!fs.existsSync(this.dataPath)) return;
-      const raw = fs.readFileSync(this.dataPath, "utf8");
-      const parsed = JSON.parse(raw) as Partial<PersistedData>;
+  saveResponseDelivery(record: ResponseDeliveryRecord): void {
+    this.assertWritable();
+    this.responseDeliveries.set(record.id, structuredClone(record));
+    const completed = [...this.responseDeliveries.values()].filter(value => value.status === 'delivered')
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    for (const expired of completed.slice(100)) this.responseDeliveries.delete(expired.id);
+    this.scheduleSave();
+  }
 
-      if (parsed.sessions) {
-        for (const s of Object.values(parsed.sessions)) {
-          if (s?.id) this.sessions.set(s.id, s);
-        }
-      }
-      if (parsed.bindings) {
-        for (const b of Object.values(parsed.bindings)) {
-          if (b?.channelType && b?.chatId) this.bindings.set(`${b.channelType}:${b.chatId}`, b);
-        }
-      }
-      if (parsed.messages) {
-        for (const [sid, msgs] of Object.entries(parsed.messages)) {
-          this.messages.set(sid, Array.isArray(msgs) ? msgs : []);
-        }
-      }
-      if (parsed.channelOffsets) {
-        for (const [k, v] of Object.entries(parsed.channelOffsets)) {
-          this.channelOffsets.set(k, String(v));
-        }
-      }
-    } catch {
-      // 读取失败则忽略（避免阻塞 runner）
+  getResponseDelivery(id: string): ResponseDeliveryRecord | null {
+    const record = this.responseDeliveries.get(id);
+    return record ? structuredClone(record) : null;
+  }
+
+  listResponseDeliveries(channelType: string, chatId: string): ResponseDeliveryRecord[] {
+    return [...this.responseDeliveries.values()]
+      .filter(record => record.address.channelType === channelType && record.address.chatId === chatId)
+      .map(record => structuredClone(record));
+  }
+
+  private load(): void {
+    let raw: string;
+    try {
+      raw = fs.readFileSync(this.dataPath, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw new Error('[BridgeStore] 无法读取存储，拒绝空载启动', { cause: error });
     }
+    let parsed: PersistedData;
+    try {
+      parsed = parsePersistedData(raw);
+    } catch (error) {
+      try {
+        const backup = fs.readFileSync(this.dataPath + '.bak', 'utf8');
+        parsed = parsePersistedData(backup);
+        this.corruptRaw = raw;
+        raw = backup;
+        console.warn('[BridgeStore] 主存储损坏，已加载有效备份；下次保存前保留损坏原件。');
+      } catch {
+        throw new Error('[BridgeStore] 存储损坏且没有有效备份，拒绝覆盖原文件', { cause: error });
+      }
+    }
+    this.sessions = new Map(Object.entries(parsed.sessions));
+    this.bindings = new Map(Object.entries(parsed.bindings));
+    this.messages = new Map(Object.entries(parsed.messages));
+    this.channelOffsets = new Map(Object.entries(parsed.channelOffsets));
+    this.responseDeliveries = new Map(Object.entries(parsed.responseDeliveries ?? {}));
+    this.lastGoodRaw = raw;
+  }
+
+  private assertWritable(): void {
+    if (this.closed || this.closing) throw new Error('[BridgeStore] 存储正在关闭或已关闭');
   }
 
   private scheduleSave(): void {
+    this.assertWritable();
+    this.dirty = true;
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-      this.save();
+      void this.flush().catch(error => {
+        console.error('[BridgeStore] 持久化失败，内存变更尚未保存：', error instanceof Error ? error.message : 'unknown error');
+      });
     }, 200);
   }
 
-  private save(): void {
+  async flush(): Promise<void> {
+    if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
+    while (this.saving || this.dirty) {
+      if (this.saving) { await this.saving; continue; }
+      const saving = this.save();
+      this.saving = saving;
+      try { await saving; }
+      finally { if (this.saving === saving) this.saving = null; }
+    }
+  }
+
+  async close(): Promise<void> {
+    this.closing = true;
+    await this.flush();
+    this.closed = true;
+  }
+
+  private async save(): Promise<void> {
+    this.dirty = false;
+    const raw = JSON.stringify({
+      sessions: Object.fromEntries(this.sessions),
+      bindings: Object.fromEntries(this.bindings),
+      messages: Object.fromEntries(this.messages),
+      channelOffsets: Object.fromEntries(this.channelOffsets),
+      responseDeliveries: Object.fromEntries(this.responseDeliveries),
+    } satisfies PersistedData, null, 2);
     try {
-      const dir = path.dirname(this.dataPath);
-      fs.mkdirSync(dir, { recursive: true });
-
-      const data: PersistedData = {
-        sessions: Object.fromEntries(this.sessions.entries()),
-        bindings: Object.fromEntries(this.bindings.entries()),
-        messages: Object.fromEntries(this.messages.entries()),
-        channelOffsets: Object.fromEntries(this.channelOffsets.entries()),
-      };
-
-      fs.writeFileSync(this.dataPath, JSON.stringify(data, null, 2), "utf8");
-    } catch {
-      // best effort
+      await fs.promises.mkdir(path.dirname(this.dataPath), { recursive: true });
+      if (this.corruptRaw !== null) {
+        await fs.promises.writeFile(this.dataPath + '.corrupt-' + crypto.randomUUID(), this.corruptRaw, { flag: 'wx', mode: 0o600 });
+        this.corruptRaw = null;
+      }
+      if (this.lastGoodRaw !== null) await atomicWrite(this.dataPath + '.bak', this.lastGoodRaw);
+      await atomicWrite(this.dataPath, raw);
+      this.lastGoodRaw = raw;
+    } catch (error) {
+      this.dirty = true;
+      throw error;
     }
   }
 }
 
+async function atomicWrite(target: string, content: string): Promise<void> {
+  const temporary = target + '.tmp-' + crypto.randomUUID();
+  const handle = await fs.promises.open(temporary, 'wx', 0o600);
+  try { await handle.writeFile(content, 'utf8'); await handle.sync(); }
+  finally { await handle.close(); }
+  // 失败时保留旧文件及临时快照，不静默删除任何恢复材料。
+  await fs.promises.rename(temporary, target);
+}
+
+function parsePersistedData(raw: string): PersistedData {
+  const data: unknown = JSON.parse(raw);
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Invalid store');
+  const record = data as Record<string, unknown>;
+  for (const key of ['sessions', 'bindings', 'messages', 'channelOffsets']) {
+    if (!record[key] || typeof record[key] !== 'object' || Array.isArray(record[key])) throw new Error('Invalid store field: ' + key);
+  }
+  for (const messages of Object.values(record.messages as Record<string, unknown>)) {
+    if (!Array.isArray(messages) || messages.some(m => !m || typeof m.role !== 'string' || typeof m.content !== 'string')) throw new Error('Invalid stored messages');
+  }
+  for (const [id, value] of Object.entries(record.sessions as Record<string, Record<string, unknown>>)) {
+    if (!value || value.id !== id || typeof value.model !== 'string' || typeof value.working_directory !== 'string') throw new Error('Invalid stored session');
+  }
+  for (const [key, value] of Object.entries(record.bindings as Record<string, Record<string, unknown>>)) {
+    if (!value || typeof value.id !== 'string' || key !== `${value.channelType}:${value.chatId}` || typeof value.codepilotSessionId !== 'string') throw new Error('Invalid stored binding');
+  }
+  if (Object.values(record.channelOffsets as Record<string, unknown>).some(v => typeof v !== 'string')) throw new Error('Invalid offsets');
+  if (record.responseDeliveries !== undefined && (!record.responseDeliveries || typeof record.responseDeliveries !== 'object' || Array.isArray(record.responseDeliveries))) throw new Error('Invalid response deliveries');
+  for (const [id, value] of Object.entries((record.responseDeliveries ?? {}) as Record<string, ResponseDeliveryRecord>)) {
+    if (!value || value.id !== id || typeof value.sessionId !== 'string' || typeof value.responseText !== 'string'
+      || !value.address || typeof value.address.channelType !== 'string' || typeof value.address.chatId !== 'string'
+      || !['pending', 'failed', 'delivered'].includes(value.status) || !Number.isSafeInteger(value.attempts) || value.attempts < 0
+      || typeof value.createdAt !== 'string' || typeof value.updatedAt !== 'string' || !Array.isArray(value.chunks)
+      || value.chunks.some(chunk => !chunk || typeof chunk.text !== 'string' || typeof chunk.sent !== 'boolean'
+        || !['HTML', 'Markdown', 'plain'].includes(chunk.parseMode)
+        || (chunk.messageId !== undefined && typeof chunk.messageId !== 'string')
+        || (chunk.plainFallback !== undefined && typeof chunk.plainFallback !== 'string'))) throw new Error('Invalid response delivery');
+  }
+  return record as PersistedData;
+}

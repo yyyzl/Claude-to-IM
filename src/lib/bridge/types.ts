@@ -48,6 +48,8 @@ export interface InboundMessage {
   callbackData?: string;
   /** For callback queries: the message ID of the original message that triggered the callback */
   callbackMessageId?: string;
+  /** 问答卡片提交；callbackMessageId 必须指向原始卡片。 */
+  userInputResponse?: import('./host.js').UserInputResponse;
   /** Platform-specific raw update object (for adapter-specific handling) */
   raw?: unknown;
   /** Adapter-specific update ID for deferred offset acknowledgement */
@@ -82,6 +84,10 @@ export interface SendResult {
   /** Platform-specific message ID of the sent message */
   messageId?: string;
   error?: string;
+  /** 平台返回的 HTTP 状态，用于区分重试与明确失败。 */
+  httpStatus?: number;
+  /** 平台要求的重试等待秒数。 */
+  retryAfter?: number;
 }
 
 // ── Bindings ───────────────────────────────────────────────────
@@ -99,6 +105,8 @@ export interface ChannelBinding {
   workingDirectory: string;
   /** Model override for this binding */
   model: string;
+  /** 后端目录验证后的思考强度；切换模型时重新验证。 */
+  reasoningEffort?: string;
   /** Chat mode */
   mode: 'code' | 'plan' | 'ask';
   /** LLM backend used when this binding was last created/updated (e.g. 'claude' | 'codex') */
