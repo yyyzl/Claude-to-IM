@@ -134,18 +134,12 @@ def append_event(task_dir: Path, event: str, source: str, detail: str | None = N
         pass
 
 
-def get_task_dir_from_current(project_dir: Path) -> Path | None:
-    """从 .current-task 解析当前任务目录。"""
-    trellis_dir = project_dir / ".trellis"
-    current_task_file = trellis_dir / ".current-task"
-    if not current_task_file.is_file():
-        return None
-    task_ref = current_task_file.read_text(encoding="utf-8").strip()
-    if not task_ref:
-        return None
-    if Path(task_ref).is_absolute():
-        return Path(task_ref)
-    elif task_ref.startswith(".trellis/"):
-        return trellis_dir.parent / task_ref
-    else:
-        return trellis_dir / "tasks" / task_ref
+def get_task_dir_from_current(
+    project_dir: Path,
+    platform_input: dict | None = None,
+    platform: str | None = None,
+) -> Path | None:
+    """复用上游会话解析；没有会话身份时不恢复其他窗口的任务。"""
+    from common.paths import get_current_task_abs
+
+    return get_current_task_abs(project_dir, platform_input, platform)

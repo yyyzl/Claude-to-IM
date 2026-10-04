@@ -36,23 +36,6 @@ def read_file(path: Path, fallback: str = "") -> str:
         return fallback
 
 
-def get_task_dir_from_current(project_dir: Path):
-    """Resolve the active task directory from .trellis/.current-task."""
-    trellis_dir = project_dir / ".trellis"
-    current_task_file = trellis_dir / ".current-task"
-    if not current_task_file.is_file():
-        return None
-    task_ref = current_task_file.read_text(encoding="utf-8").strip()
-    if not task_ref:
-        return None
-    if Path(task_ref).is_absolute():
-        return Path(task_ref)
-    elif task_ref.startswith(".trellis/"):
-        return trellis_dir.parent / task_ref
-    else:
-        return trellis_dir / "tasks" / task_ref
-
-
 def main() -> None:
     if should_skip_injection():
         sys.exit(0)
@@ -60,11 +43,17 @@ def main() -> None:
     # Read hook input from stdin (Codex protocol)
     try:
         hook_input = json.loads(sys.stdin.read())
-        project_dir = Path(hook_input.get("cwd", ".")).resolve()
-    except (json.JSONDecodeError, KeyError):
-        project_dir = Path(".").resolve()
+    except (json.JSONDecodeError, OSError):
+        hook_input = {}
+    if not isinstance(hook_input, dict):
+        hook_input = {}
+    project_dir = Path(hook_input.get("cwd") or ".").resolve()
+    scripts_dir = str(project_dir / ".trellis" / "scripts")
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    from fusion.recovery_io import get_task_dir_from_current
 
-    task_dir = get_task_dir_from_current(project_dir)
+    task_dir = get_task_dir_from_current(project_dir, hook_input, "codex")
     if not task_dir or not task_dir.is_dir():
         # No active task — nothing to inject
         sys.exit(0)

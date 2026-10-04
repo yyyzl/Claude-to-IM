@@ -12,10 +12,11 @@ Provides:
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
-from .io import read_json
+from .io import describe_json_read_failure, read_json_checked
 from .paths import FILE_TASK_JSON
 from .types import TaskInfo
 
@@ -28,13 +29,22 @@ def load_task(task_dir: Path) -> TaskInfo | None:
 
     Returns:
         TaskInfo if task.json exists and is valid, None otherwise.
+
+    A directory without task.json is not a task, so it is skipped silently.
+    A task.json that exists but cannot be loaded is different: the task
+    disappears from `task.py list` and from every context the iterator feeds.
+    Callers stay tolerant, but the skip is announced on stderr so a task
+    cannot vanish from the workflow with no diagnostic anywhere.
     """
     task_json = task_dir / FILE_TASK_JSON
     if not task_json.is_file():
         return None
 
-    data = read_json(task_json)
-    if not data:
+    data, reason = read_json_checked(task_json)
+    if data is None:
+        problem, hint = describe_json_read_failure(task_json, reason)
+        print(f"[WARN] Skipping task '{task_dir.name}': {problem}", file=sys.stderr)
+        print(f"       {hint}", file=sys.stderr)
         return None
 
     return TaskInfo(
@@ -102,8 +112,11 @@ def children_progress(
     """
     if not children:
         return ""
+    # A child missing from active statuses has been archived (cmd_archive
+    # sets status=completed before moving the dir). Count it as done so
+    # parent progress doesn't regress when children are archived.
     done = sum(
         1 for c in children
-        if all_statuses.get(c) in ("completed", "done")
+        if c not in all_statuses or all_statuses.get(c) in ("completed", "done")
     )
     return f" [{done}/{len(children)} done]"

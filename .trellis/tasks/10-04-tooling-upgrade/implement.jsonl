@@ -1,0 +1,3 @@
+{"file":".trellis/spec/backend/index.md","reason":"现有后端规范索引"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"更新质量与验证要求"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"模板、hooks、session状态的跨层影响"}

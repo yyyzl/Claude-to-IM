@@ -1,0 +1,23 @@
+{
+  "date": "2026-10-04",
+  "runtime_commit": "478483c",
+  "runtime_push": "origin/main",
+  "global_cli": {
+    "trellis": {
+      "package": "@mindfoldhq/trellis",
+      "before": "0.5.9",
+      "after": "0.6.17",
+      "project_before": "0.5.0-beta.15",
+      "channel": "latest"
+    },
+    "gitnexus": {
+      "package": "gitnexus",
+      "before": "1.6.4",
+      "after": "1.6.12",
+      "channel": "latest"
+    }
+  },
+  "node": "22.18.0",
+  "install_exit_code": 0,
+  "scope": "Existing npm global CLI packages only; no global MCP or model configuration edits."
+}

@@ -1,31 +1,36 @@
 {
   "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python .codex/hooks/session-start.py",
-            "timeout": 15,
-            "statusMessage": "Loading Trellis context..."
-          },
-          {
-            "type": "command",
-            "command": "python .codex/hooks/fusion-session-start.py",
-            "timeout": 10,
-            "statusMessage": "Loading Fusion recovery context..."
-          }
-        ]
-      }
-    ],
     "UserPromptSubmit": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "python .codex/hooks/inject-workflow-state.py",
-            "timeout": 5,
-            "statusMessage": "Loading Trellis workflow state..."
+            "command": "python -X utf8 .codex/hooks/inject-workflow-state.py",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "^(?:trellis-implement|trellis-check|trellis-research)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -X utf8 .codex/hooks/inject-subagent-context.py",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .codex/hooks/fusion-session-start.py",
+            "timeout": 10,
+            "statusMessage": "Loading Fusion recovery context..."
           }
         ]
       }

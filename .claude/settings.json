@@ -10,7 +10,7 @@
           {
             "type": "command",
             "command": "python .claude/hooks/session-start.py",
-            "timeout": 10
+            "timeout": 30
           },
           {
             "type": "command",
@@ -25,7 +25,7 @@
           {
             "type": "command",
             "command": "python .claude/hooks/session-start.py",
-            "timeout": 10
+            "timeout": 30
           },
           {
             "type": "command",
@@ -40,7 +40,7 @@
           {
             "type": "command",
             "command": "python .claude/hooks/session-start.py",
-            "timeout": 10
+            "timeout": 30
           },
           {
             "type": "command",
@@ -72,6 +72,17 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/inject-workflow-state.py",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
     "PreCompact": [
       {
         "matcher": "",
@@ -80,17 +91,6 @@
             "type": "command",
             "command": "python .claude/hooks/fusion-pre-compact.py",
             "timeout": 3
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python .claude/hooks/inject-workflow-state.py",
-            "timeout": 5
           }
         ]
       }

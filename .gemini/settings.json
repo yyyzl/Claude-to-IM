@@ -7,18 +7,30 @@
           {
             "type": "command",
             "command": "python .gemini/hooks/session-start.py",
-            "timeout": 10000
+            "timeout": 30000
           }
         ]
       }
     ],
-    "UserPromptSubmit": [
+    "BeforeAgent": [
       {
         "matcher": "",
         "hooks": [
           {
             "type": "command",
             "command": "python .gemini/hooks/inject-workflow-state.py",
+            "timeout": 15000
+          }
+        ]
+      }
+    ],
+    "BeforeTool": [
+      {
+        "matcher": "run_shell_command|ShellTool",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .gemini/hooks/inject-shell-session-context.py",
             "timeout": 5000
           }
         ]
