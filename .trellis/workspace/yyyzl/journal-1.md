@@ -1785,3 +1785,38 @@ Three major features: (1) CLI rewrite with spec-review/code-review/review-fix su
 ### Status
 
 [OK] **Completed**
+
+
+## Session 37: 额度功能联调确认与主分支交付
+<!-- trellis-session: v=2 fp=460bbc9e08136e5a -->
+
+**Date**: 2026-10-13
+**Task**: 额度功能联调确认与主分支交付
+**Branch**: `main`
+
+### Summary
+
+用户确认实际飞书联调正常；额度功能已快进合回并普通推送origin/main，远端与本地main一致。补充归档任务验收与交付记录；原27文件包含7业务、3测试、6使用文档、3规范及8任务记录。
+
+### Main Changes
+
+- 记录用户实际飞书联调结果，修正归档任务末尾未勾选的收尾记录
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b43dc4f` | feat: 支持飞书查询 Codex 账号额度 |
+| `2d6eac4` | docs: 补充额度功能飞书联调与主分支交付记录 |
+
+### Testing
+
+- [OK] 三个额度回归测试文件42/42通过，外层硬超时60秒；实际diff及GitNexus范围核对完成
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 文件双向收发与跨重启去重仍为后续需求，尚未建立独立任务
