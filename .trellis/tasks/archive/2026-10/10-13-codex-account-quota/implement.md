@@ -48,5 +48,5 @@ git status --short
 - [x] 最终 GitNexus 与实际 diff 核对：tracked diff 映射 44 个符号、63 条执行流，完整结构化结果 partial/truncated 均为 false；新增文件另按实际清单核对，所有改动均属于本任务。
 - [x] 按 Phase 3.4 展示一次提交计划并获得用户确认；用户追加授权提交并推送当前功能分支。
 - [x] 工作提交完成：b43dc4f（feat: 支持飞书查询 Codex 账号额度）。
-- [ ] 完成当前任务归档与会话记录后推送 origin/codex/account-quota。
-- [ ] 工作提交后再归档和记录会话；不自动重启桥接或调用真实账号/飞书。
+- [x] 归档与会话记录完成：a41a2f0、e58bd1d。
+- [x] 用户确认实际飞书联调正常，并追加授权合回 main、普通推送 origin/main；本轮无需重复真实联调或重启。交付结果以远端 Git 引用核对为准。

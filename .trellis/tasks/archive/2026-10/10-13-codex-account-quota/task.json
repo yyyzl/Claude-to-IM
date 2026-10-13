@@ -29,6 +29,6 @@
     "src/lib/bridge/delivery-layer.ts",
     "src/lib/bridge/internal/bridge-help.ts"
   ],
-  "notes": "2026-10-13 额度功能完成，相关203条、完整790条单测及typecheck/build通过；已核对图检测与实际清单。工作提交b43dc4f已完成，用户授权推送当前功能分支。收尾仅归档本任务，记录会话后推送origin，不自动重启或真实联调。",
+  "notes": "2026-10-13 额度功能完成并已归档，相关203条、完整790条单测及typecheck/build通过；工作提交b43dc4f。用户补充确认实际飞书联调正常，并授权合回main、普通推送origin/main；三个额度测试文件42条复验通过。本轮不重复真实联调或重启，文件双向收发和跨重启去重仍为后续需求。",
   "meta": {}
 }
