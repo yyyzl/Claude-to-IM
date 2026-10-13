@@ -226,11 +226,14 @@ Adapters track their polling position using offsets (e.g., Telegram's `update_id
 
 ```typescript
 interface LLMProvider {
+  getAccountQuota?(): Promise<AccountQuota>;
   streamChat(params: StreamChatParams): ReadableStream<string>;
 }
 ```
 
 The single most important interface. It starts a streaming conversation with the LLM and returns a `ReadableStream<string>` of SSE-formatted events.
+
+The optional `getAccountQuota()` capability powers manual `/quota` queries. Existing hosts can continue implementing only `streamChat()`. `AccountQuota`, exported from `host.ts`, contains `queriedAt` (Unix milliseconds) and `buckets`; each bucket has `limitId`, `limitName`, `primary`, and `secondary`. Windows contain only `usedPercent`, `windowDurationMins`, and `resetsAt` (Unix seconds), with unknown windows, periods, and reset times represented as `null`. The bundled Codex provider reads through its existing app-server connection without starting a model turn. See [usage and limits (Chinese)](codex-quota.zh-CN.md).
 
 #### StreamChatParams
 

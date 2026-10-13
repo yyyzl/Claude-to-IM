@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/module-boundaries.md","reason":"保持编排、宿主协议与报告展示边界"}
+{"file":".trellis/spec/backend/type-safety.md","reason":"外部额度响应校验和可空字段处理"}
+{"file":".trellis/spec/backend/integration-guidelines.md","reason":"固定运行时协议与宿主装配"}
+{"file":".trellis/spec/backend/reliability-contracts.md","reason":"控制消息不阻塞、连接/停机代际隔离"}
+{"file":".trellis/spec/backend/testing-guidelines.md","reason":"固定 schema 的 fake fixture 和 60 秒后台上限"}
+{"file":".trellis/tasks/10-13-codex-account-quota/research/app-server-quota.md","reason":"额度 RPC 字段、来源和影响分析"}

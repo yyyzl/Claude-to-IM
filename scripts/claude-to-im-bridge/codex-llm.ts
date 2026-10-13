@@ -1,7 +1,7 @@
 /** 将锁定版本 Codex app-server 的公开双向协议适配为桥接 SSE。 */
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
-import type { GeneratedImage, LLMProvider, StreamChatParams, TokenUsage, UserInputQuestion } from '../../src/lib/bridge/host.js';
+import type { AccountQuota, GeneratedImage, LLMProvider, StreamChatParams, TokenUsage, UserInputQuestion } from '../../src/lib/bridge/host.js';
 import type { CodexModelPreferences, ModelCatalog } from '../../src/lib/bridge/types.js';
 import { findFastServiceTier } from '../../src/lib/bridge/internal/model-capabilities.js';
 import { createGeneratedImage, checkGeneratedImageBudget } from '../../src/lib/bridge/internal/generated-image.js';
@@ -10,6 +10,7 @@ import { JsonRpcAppServerClient, redactSensitive } from './codex-jsonrpc.ts';
 import type { JsonRpcMessage } from './codex-jsonrpc.ts';
 import { buildTurnSandboxPolicy, parseCodexModelPage, resolveCodexBinary, selectCodexEffort, selectCodexModel } from './codex-utils.ts';
 import type { CodexModelListItem } from './codex-utils.ts';
+import { parseCodexAccountQuota } from './codex-quota.ts';
 
 type CodexTransport = Pick<JsonRpcAppServerClient, 'request' | 'notify' | 'respond' | 'respondError' | 'onServerRequest' | 'onNotification' | 'onDisconnect' | 'drainBacklog' | 'stop' | 'isRunning'>;
 type SendEvent = (type: string, data: unknown) => void;
@@ -145,6 +146,16 @@ export class CodexAppServerLLMProvider implements LLMProvider {
         defaultServiceTier: model.defaultServiceTier,
       })),
     };
+  }
+
+  /** 复用握手与连接；额度 RPC 失败不重置正在被其它聊天使用的连接。 */
+  async getAccountQuota(): Promise<AccountQuota> {
+    const epoch = this.connectionEpoch;
+    await this.ensureInitialized();
+    this.assertConnectionEpoch(epoch);
+    const response = await this.client.request('account/rateLimits/read', { excludeResetCreditDetails: true }, 15_000);
+    this.assertConnectionEpoch(epoch);
+    return parseCodexAccountQuota(response);
   }
 
   streamChat(params: StreamChatParams): ReadableStream<string> {

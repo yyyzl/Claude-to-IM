@@ -233,6 +233,10 @@ codex debug app-server send-message-v2 "ping"
 - PNG/JPEG/WebP/GIF 图片按协议传入；其他附件会明确提示不支持，不再静默忽略。模型目录若声明不支持图片，也会在调用前提示。
 - commentary 作为独立进度展示，不混入最终回答和会话历史。用量来自公开 `thread/tokenUsage/updated`；ctx 优先使用后端 `last.totalTokens`（包括压缩后估计），不再读取本机 rollout 文件补数。
 
+### 4.5 Codex 账号额度
+
+账号额度可通过 `/quota` 手动查询，显示服务端提供的窗口、已用/剩余比例和北京时间重置时间。它是 runner 登录账号的共享额度，已有 `/usage` 仍是本地 Token 统计；详见 [Codex 额度查询说明](codex-quota.zh-CN.md)。
+
 ## 5) 安全建议
 
 - `.env.bridge.local` 只放本机，且必须被 Git 忽略

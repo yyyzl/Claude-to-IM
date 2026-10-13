@@ -227,11 +227,14 @@ setChannelOffset(key: string, offset: string): void;
 
 ```typescript
 interface LLMProvider {
+  getAccountQuota?(): Promise<AccountQuota>;
   streamChat(params: StreamChatParams): ReadableStream<string>;
 }
 ```
 
 最关键的接口。它启动与 LLM 的流式对话，返回 `ReadableStream<string>` 格式的 SSE 事件流。
+
+`getAccountQuota()` 是可选的账号额度能力，供 `/quota` 手动查询；已有宿主可以继续只实现 `streamChat()`。`AccountQuota` 从 `host.ts` 导出，仅包含 `queriedAt`（Unix 毫秒）和 `buckets`。每桶包含 `limitId`、`limitName`、`primary`、`secondary`；窗口只包含 `usedPercent`、`windowDurationMins` 和 `resetsAt`（Unix 秒），未知窗口/周期/时间使用 `null`。内置 Codex provider 通过现有 app-server 获取，查询不启动模型回合。具体使用和限制见 [Codex 额度查询](codex-quota.zh-CN.md)。
 
 #### StreamChatParams
 

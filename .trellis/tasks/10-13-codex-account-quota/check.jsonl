@@ -1,0 +1,8 @@
+{"file":".trellis/spec/backend/type-safety.md","reason":"复核比例、窗口、时间及私有字段投影"}
+{"file":".trellis/spec/backend/index.md","reason":"最终全范围检查的层级索引及规范路由"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"最终检查代码收敛、命名、文档同步与复用"}
+{"file":".trellis/spec/backend/reliability-contracts.md","reason":"复核真实 manager 循环和晚到回执、共享连接隔离"}
+{"file":".trellis/spec/backend/testing-guidelines.md","reason":"检查所有测试为 fake 且受后台超时限制"}
+{"file":".trellis/spec/backend/module-boundaries.md","reason":"复核 manager 只做接线且宿主不越界"}
+{"file":".trellis/tasks/10-13-codex-account-quota/research/app-server-quota.md","reason":"复核固定版本 RPC 契约"}
+{"file":".trellis/spec/backend/codex-account-quota.md","reason":"核对实际实现与账号额度七节执行合同，含发送前微任务及危险参数拒绝边界"}

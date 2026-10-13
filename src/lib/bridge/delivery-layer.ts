@@ -27,13 +27,17 @@ const INTER_CHUNK_DELAY_MS = 300;
 const rateLimiter = new ChatRateLimiter();
 
 /** 有界等待单次发送；迟到响应不能继续触发上层发送链。 */
-async function boundedSend(adapter: BaseChannelAdapter, message: OutboundMessage): Promise<SendResult> {
+async function boundedSend(adapter: BaseChannelAdapter, message: OutboundMessage, isCurrent?: () => boolean): Promise<SendResult> {
   const configured = Number(getBridgeContext().store.getSetting('bridge_delivery_timeout_ms'));
   const timeoutMs = Number.isFinite(configured) && configured > 0 ? configured : 15_000;
   let timer: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([
-      Promise.resolve().then(() => adapter.send(message)).catch((error: unknown) => ({ ok: false, error: error instanceof Error ? error.message : String(error) })),
+      Promise.resolve().then(() => {
+        // 前一次归属检查与实际平台调用之间仍有微任务边界。
+        if (isCurrent && !isCurrent()) return { ok: false, error: '任务已取消' };
+        return adapter.send(message);
+      }).catch((error: unknown) => ({ ok: false, error: error instanceof Error ? error.message : String(error) })),
       new Promise<SendResult>(resolve => { timer = setTimeout(() => resolve({ ok: false, error: '发送超时，平台结果未知', httpStatus: 408 }), timeoutMs); }),
     ]);
   } finally { if (timer) clearTimeout(timer); }
@@ -170,9 +174,13 @@ export async function deliver(
   opts?: {
     sessionId?: string;
     dedupKey?: string;
+    /** 控制查询停机/重启后，停止尚未发起的分块、重试和审计。 */
+    isCurrent?: () => boolean;
   },
 ): Promise<SendResult> {
   const { store } = getBridgeContext();
+  const isCurrent = opts?.isCurrent ?? (() => true);
+  if (!isCurrent()) return { ok: false, error: '任务已取消' };
 
   // Dedup check
   if (opts?.dedupKey) {
@@ -204,6 +212,7 @@ export async function deliver(
   let lastMessageId: string | undefined;
 
   for (let i = 0; i < chunks.length; i++) {
+    if (!isCurrent()) return { ok: false, error: '任务已取消' };
     const chunkKey = opts?.dedupKey ? `${opts.dedupKey}:chunk:${i}` : undefined;
     if (chunkKey && store.checkDedup(chunkKey)) continue;
     // Rate limit: wait if this chat is sending too fast
@@ -223,11 +232,12 @@ export async function deliver(
       replyToMessageId: message.replyToMessageId,
     };
 
-    const result = await sendWithRetry(adapter, chunkMessage);
+    const result = await sendWithRetry(adapter, chunkMessage, undefined, isCurrent);
     if (!result.ok) {
       return result;
     }
     lastMessageId = result.messageId;
+    if (!isCurrent()) return { ok: false, messageId: lastMessageId, error: '任务已取消' };
     if (chunkKey) store.insertDedup(chunkKey);
 
     // Track outbound reference
@@ -277,7 +287,7 @@ async function sendWithRetry(
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     if (isCurrent && !isCurrent()) return { ok: false, error: '任务已取消' };
-    let result = await boundedSend(adapter, currentMessage);
+    let result = await boundedSend(adapter, currentMessage, isCurrent);
     if (result.ok) return result;
 
     lastError = result.error;
@@ -292,7 +302,7 @@ async function sendWithRetry(
         parseMode: 'plain',
       };
       if (isCurrent && !isCurrent()) return { ok: false, error: '任务已取消' };
-      const plainResult = await boundedSend(adapter, currentMessage);
+      const plainResult = await boundedSend(adapter, currentMessage, isCurrent);
       if (plainResult.ok) return plainResult;
       lastError = plainResult.error;
       // If plain text also fails, classify that error and continue

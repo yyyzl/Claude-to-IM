@@ -9,6 +9,7 @@
 - `processWithSessionLock(..., signal?: AbortSignal)`：信号取消尚未开始的排队任务；已运行任务由自己的取消上下文结束。
 - `deliverResponse(adapter, address, responseText, sessionId, replyToMessageId?, options?)`：统一生成响应分块、保存待发记录和投递；`options` 可携带 `turnId / isCurrent / finalize / images`。
 - `retryResponseDelivery(adapter, address, id?, { isCurrent }?)`：只重投已有记录的未送达块，不调用模型；有效性谓词在每个后续分块与发送重试前检查。
+- `deliver(adapter, message, { isCurrent }?)`：普通文本投递可选归属检查，覆盖开始、后续分块与重试；已进入平台的发送不能撤回。账号额度查询的异步调度及 epoch 合同见 [账号额度合同](./codex-account-quota.md)。
 - `BridgeStore.saveResponseDelivery/getResponseDelivery/listResponseDeliveries/flush`：四项共同形成可选的持久待发能力；`close()` 用于停机。
 - `BridgeStore.listChannelSessionHistory?(channelType, chatId): ChannelSessionHistoryEntry[]`：只读当前聊天历史；条目为 `sessionId/title/workingDirectory/updatedAt`，按最近关联排序。`/sessions [页码]` 每页 5 条，完整 ID 可用于 `/bind`。
 - `PermissionGateway.onResolution?(requestId, listener)`：订阅真实解决结果，返回取消订阅函数；`reason` 可区分 `expired / cancelled / delivery_failed`。

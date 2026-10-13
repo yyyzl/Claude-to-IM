@@ -21,6 +21,7 @@ Claude-to-IM was extracted from CodePilot as a standalone library for developers
 - **Markdown rendering**: Platform-native formatting — HTML for Telegram, Discord-flavored Markdown, Feishu rich text cards
 - **Reliable delivery**: Auto-chunking at platform limits, retry with exponential backoff, HTML fallback on parse errors, message deduplication
 - **Codex image output**: The bundled Codex runner returns generated images to the originating Feishu chat alongside text, with retry support. See [usage and limits (Chinese)](docs/reliability-fixes.zh-CN.md#codex-生成图片自动回传).
+- **Codex account quota**: `/quota` reads account-wide usage windows and reset times through the existing app-server connection. See [usage and limits (Chinese)](docs/codex-quota.zh-CN.md).
 - **Security**: Input validation, token bucket rate limiting (20 msg/min per chat), user authorization whitelists, path traversal protection, full audit logging
 - **Workflow engine**: Automated dual-model (Claude + Codex) collaboration workflows — Spec-Review (Delphi method), Code-Review, and Review-Fix with crash-safe state machine
 - **Host-agnostic**: All host dependencies abstracted via 4 DI interfaces — no database driver, no LLM client, no framework lock-in

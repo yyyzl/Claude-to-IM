@@ -53,6 +53,7 @@ import {
   resolveUsageSummaryPath,
 } from './internal/usage-summary.js';
 import { parseUsageQueryRange, renderUsageReportHtml } from './internal/usage-command.js';
+import { buildQuotaCommandResponse } from './internal/quota-command.js';
 import {
   DEFAULT_CONTEXT_WINDOW,
   formatCtxFooter,
@@ -1040,9 +1041,12 @@ function runAdapterLoop(adapter: BaseChannelAdapter): void {
           isControlCommand(msg.text.trim()) ||
           isNumericPermissionShortcut(adapter.channelType, msg.text.trim(), msg.address.chatId)
         ) {
-          if (msg.modelSelectionResponse || /^\/model(?:@\S+)?(?:\s|$)/i.test(msg.text.trim())) {
-            // 目录网络请求不阻塞后续 stop/new；归属由协调器在 await 后复验。
-            const task = handleMessage(adapter, msg).catch(err => console.error('[bridge-manager] 模型选择失败:', err))
+          if (msg.modelSelectionResponse || /^\/(?:model|quota)(?:@\S+)?(?:\s|$)/i.test(msg.text.trim())) {
+            // 目录/额度查询和平台发送不阻塞控制消息；await 后复验各自归属。
+            const task = handleMessage(adapter, msg).catch(err => {
+              if (/^\/quota(?:@\S+)?(?:\s|$)/i.test(msg.text.trim())) console.error('[bridge-manager] 额度命令处理失败。');
+              else console.error('[bridge-manager] 模型选择失败:', err);
+            })
               .finally(() => state.taskPromises.delete(task));
             state.taskPromises.add(task);
           } else await handleMessage(adapter, msg);
@@ -1668,6 +1672,10 @@ async function handleCommand(
   const parts = text.split(/\s+/);
   const command = parts[0].split('@')[0].toLowerCase();
   const args = parts.slice(1).join(' ').trim();
+  // 额度命令的安全拒绝与正常报告都归属发起时的桥接运行实例。
+  const quotaState = command === '/quota' ? getState() : null;
+  const quotaEpoch = quotaState?.runEpoch;
+  const isQuotaCurrent = quotaState ? () => quotaState.running && quotaState.runEpoch === quotaEpoch : undefined;
 
   // Run dangerous-input detection on the full command text
   const dangerCheck = isDangerousInput(text);
@@ -1685,13 +1693,20 @@ async function handleCommand(
       text: `Command rejected: invalid input detected.`,
       parseMode: 'plain',
       replyToMessageId: msg.messageId,
-    });
+    }, { isCurrent: isQuotaCurrent });
     return;
   }
 
   let response = '';
 
   switch (command) {
+    case '/quota': {
+      const report = await buildQuotaCommandResponse(llm, (store.getSetting('bridge_llm_backend') || '').trim().toLowerCase(), args);
+      if (!isQuotaCurrent || !isQuotaCurrent()) return;
+      await deliver(adapter, { address: msg.address, text: report, parseMode: 'HTML', replyToMessageId: msg.messageId }, { isCurrent: isQuotaCurrent });
+      return;
+    }
+
     case '/start':
       response = buildBridgeCommandHelp();
       break;

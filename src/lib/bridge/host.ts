@@ -269,7 +269,31 @@ export interface StreamChatParams {
   onRuntimeStatusChange?: (status: string) => void;
 }
 
+/** 账号额度的公开窗口；时间是服务端 Unix 秒，周期是实际分钟数。 */
+export interface AccountQuotaWindow {
+  usedPercent: number;
+  windowDurationMins: number | null;
+  resetsAt: number | null;
+}
+
+/** 服务端额度桶；主、次窗口的位置不代表固定周期。 */
+export interface AccountQuotaBucket {
+  limitId: string | null;
+  limitName: string | null;
+  primary: AccountQuotaWindow | null;
+  secondary: AccountQuotaWindow | null;
+}
+
+/** 只读白名单快照，不携带认证、账号标识、积分或原始协议响应。 */
+export interface AccountQuota {
+  /** 查询完成时的本机 Unix 毫秒。 */
+  queriedAt: number;
+  buckets: AccountQuotaBucket[];
+}
+
 export interface LLMProvider {
+  /** 当前登录账号的全局额度；不创建模型回合或修改聊天状态。 */
+  getAccountQuota?(): Promise<AccountQuota>;
   /** Codex 模型目录；实现须返回完整、已验证的快照。 */
   getModelCatalog?(options?: { refresh?: boolean }): Promise<ModelCatalog>;
   /**

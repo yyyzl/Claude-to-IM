@@ -18,6 +18,7 @@ export function buildBridgeCommandHelp(): string {
     '/git draft - Generate commit draft (LLM)',
     '/git push - Push current branch',
     '/usage [今天|昨天|最近N天] - Show token usage summary',
+    '/quota - 查看 Codex 登录账号的 5 小时／周等额度（其它项目和客户端共享）',
     '/workflow spec-review|code-review|status|resume|stop - Workflow 工作流',
     '/perm allow|allow_session|deny &lt;id&gt; - Respond to permission request',
     '/answer &lt;id&gt; &lt;答案或JSON&gt; - 回答模型提问',
