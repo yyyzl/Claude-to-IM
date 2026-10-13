@@ -47,5 +47,6 @@ git status --short
 - [x] 使用文档与七节执行合同同步；14 条 implement/check 清单及新文档本地链接有效。
 - [x] 最终 GitNexus 与实际 diff 核对：tracked diff 映射 44 个符号、63 条执行流，完整结构化结果 partial/truncated 均为 false；新增文件另按实际清单核对，所有改动均属于本任务。
 - [x] 按 Phase 3.4 展示一次提交计划并获得用户确认；用户追加授权提交并推送当前功能分支。
-- [ ] 执行工作提交，归档/记录后推送 origin/codex/account-quota。
+- [x] 工作提交完成：b43dc4f（feat: 支持飞书查询 Codex 账号额度）。
+- [ ] 完成当前任务归档与会话记录后推送 origin/codex/account-quota。
 - [ ] 工作提交后再归档和记录会话；不自动重启桥接或调用真实账号/飞书。

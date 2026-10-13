@@ -3,7 +3,7 @@
   "name": "codex-account-quota",
   "title": "飞书查看 Codex 账号额度",
   "description": "通过现有 Codex app-server 查询并展示账号限额窗口、剩余比例和重置时间",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": "backend",
   "scope": "bridge",
   "package": null,
@@ -11,11 +11,11 @@
   "creator": "yyyzl",
   "assignee": "yyyzl",
   "createdAt": "2026-10-13",
-  "completedAt": null,
+  "completedAt": "2026-10-13",
   "branch": "codex/account-quota",
   "base_branch": "main",
   "worktree_path": null,
-  "commit": null,
+  "commit": "b43dc4ff66d79c2f45eca5d1770c511656c46e33",
   "pr_url": null,
   "subtasks": [],
   "children": [],
@@ -29,6 +29,6 @@
     "src/lib/bridge/delivery-layer.ts",
     "src/lib/bridge/internal/bridge-help.ts"
   ],
-  "notes": "2026-10-13 额度功能与独立审查完成；相关203条、完整790条单测及typecheck/build通过，最终图检测与实际清单已核对。用户已确认提交并要求推送当前功能分支；按27文件计划执行后归档、记录并推送origin。不自动重启或真实联调。",
+  "notes": "2026-10-13 额度功能完成，相关203条、完整790条单测及typecheck/build通过；已核对图检测与实际清单。工作提交b43dc4f已完成，用户授权推送当前功能分支。收尾仅归档本任务，记录会话后推送origin，不自动重启或真实联调。",
   "meta": {}
 }
