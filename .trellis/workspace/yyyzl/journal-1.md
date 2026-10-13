@@ -1763,3 +1763,25 @@ Three major features: (1) CLI rewrite with spec-review/code-review/review-fix su
 ### Next Steps
 
 - 按需将新构建用于实际桥接并验证真实账号与飞书权限；本次未重启服务或调用生产接口
+
+
+## Session 36: 飞书查看 Codex 账号额度
+<!-- trellis-session: v=2 fp=5f70bd27700d8481 -->
+
+**Date**: 2026-10-13
+**Task**: 飞书查看 Codex 账号额度
+**Branch**: `codex/account-quota`
+
+### Summary
+
+实现/quota，通过现有Codex app-server查询账号共享额度，显示实际窗口、剩余比例和北京时间；白名单解析、共享连接错误隔离及停机异步发送边界完成。独立相关203条与完整790条单测通过，typecheck/build通过；GitNexus完整检测与27文件清单已核对。本任务已归档，用户授权普通推送origin/codex/account-quota；真实账号与生产飞书未联调，未重启桥接。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b43dc4ff66d79c2f45eca5d1770c511656c46e33` | feat: 支持飞书查询 Codex 账号额度 |
+
+### Status
+
+[OK] **Completed**

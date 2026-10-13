@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 35
-- **Last Active**: 2026-10-05
+- **Total Sessions**: 36
+- **Last Active**: 2026-10-13
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1765 | Active |
+| `journal-1.md` | ~1787 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 36 | 2026-10-13 | 飞书查看 Codex 账号额度 | `b43dc4ff66d79c2f45eca5d1770c511656c46e33` | `codex/account-quota` |
 | 35 | 2026-10-05 | 优先可靠性修复与飞书图片回传 | `ad3fb66`, `2dbfcc5` | `codex/audit-priority-fixes` |
 | 34 | 2026-10-05 | 修复 Codex Fast 档位误判 | `d527d60` | `codex/fast-capability-fix` |
 | 33 | 2026-10-05 | Codex 飞书模型配置卡片 | `d5db4ed` | `codex/model-picker` |
