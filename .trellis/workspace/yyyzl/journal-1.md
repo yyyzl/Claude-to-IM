@@ -1859,3 +1859,39 @@ Three major features: (1) CLI rewrite with spec-review/code-review/review-fix su
 
 - 运行中的桥接尚未重启；随后由用户在飞书联调即时追加和实际模型答复质量。
 - 继续按即时追加→入站去重→文件双向收发顺序推进；后两项保持planning，文件入口及旧Codex线程兼容仍待收敛。
+
+
+## Session 39: 飞书 Codex 非阻塞问答与原卡补充
+<!-- trellis-session: v=2 fp=134b8b05493d840a -->
+
+**Date**: 2026-10-14
+**Task**: 飞书 Codex 非阻塞问答与原卡补充
+**Branch**: `feat/feishu-codex-async-questions`
+
+### Summary
+
+完成原生异步提问、独立飞书表单与原任务补充；894项单测和真实选择/输入回传验收通过，已归档问答子任务，按用户授权推进主分支推送。
+
+### Main Changes
+
+- 显式区分RPC与原生消息题，独立问答卡支持选择和文字，答案复用原卡追加；闭合后提供显式补充入口。
+- 修复平台输入框上限并记录可靠性合同；按工作提交、任务归档、会话日志顺序收尾。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0ca950c7d2f82c4577840b3293168b1ea06f9b0c` | feat: 支持飞书 Codex 非阻塞问答与迟到补充 |
+
+### Testing
+
+- [OK] 894/894单测、88问答、74既有回归，typecheck/build通过；单测60秒进程树硬截止。
+- [OK] 原项目聊天真实独立表单、用户选择/输入回传、同一原回复卡+1追加与问答卡接收状态通过。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 父任务继续协调去重和文件子任务的最终规划；本次仅交付问答。
