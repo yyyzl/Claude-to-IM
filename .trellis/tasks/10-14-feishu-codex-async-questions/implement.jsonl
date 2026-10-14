@@ -1,0 +1,11 @@
+{"file":".trellis/spec/backend/index.md","reason":"后端入口与开发检查"}
+{"file":".trellis/spec/backend/module-boundaries.md","reason":"provider/broker/manager/adapter 职责"}
+{"file":".trellis/spec/backend/type-safety.md","reason":"共享契约与真实回调运行时校验"}
+{"file":".trellis/spec/backend/reliability-contracts.md","reason":"追加、任务归属、取消、unknown 与来源确认"}
+{"file":".trellis/spec/backend/testing-guidelines.md","reason":"内存传输、真实模型阻断及全局上下文隔离"}
+{"file":".trellis/spec/backend/integration-guidelines.md","reason":"厂商问答响应与通用宿主边界"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"最小变更与异步清理"}
+{"file":".trellis/tasks/10-14-feishu-codex-async-questions/research/upstream-protocol.md","reason":"0.160/0.162 锁定协议及已完成诊断"}
+{"file":".trellis/tasks/10-14-feishu-codex-async-questions/research/implementation-boundaries.md","reason":"实施边界与来源/闭合/平台竞态"}
+{"file":".agents/skills/execute-plan-tdd/SKILL.md","reason":"按计划切片先行为 RED 后最小实现 GREEN"}
+{"file":".trellis/tasks/10-14-feishu-codex-async-questions/research/live-native-async.md","reason":"真实联调原生async消息生产者、schema及答案通道、S5范围和回归证据"}

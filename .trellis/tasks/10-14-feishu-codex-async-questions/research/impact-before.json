@@ -1,0 +1,549 @@
+[
+  {
+    "name": "handleMessage",
+    "file": "src/lib/bridge/bridge-manager.ts",
+    "result": {
+      "target": {
+        "id": "Function:src/lib/bridge/bridge-manager.ts:handleMessage",
+        "name": "handleMessage",
+        "type": "Function",
+        "filePath": "src/lib/bridge/bridge-manager.ts"
+      },
+      "direction": "upstream",
+      "impactedCount": 13,
+      "risk": "CRITICAL",
+      "riskSharedAxes": "LOW",
+      "epistemic": "exact",
+      "summary": {
+        "direct": 4,
+        "processes_affected": 5,
+        "modules_affected": 2
+      },
+      "byDepthCounts": {
+        "1": 4,
+        "2": 6,
+        "3": 3
+      },
+      "directCallers": [
+        {
+          "id": "File:src/lib/bridge/bridge-manager.ts",
+          "name": "bridge-manager.ts",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "relationType": "USES"
+        },
+        {
+          "id": "Function:src/lib/bridge/bridge-manager.ts:runAdapterLoop",
+          "name": "runAdapterLoop",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "relationType": "CALLS"
+        },
+        {
+          "id": "Function:src/lib/bridge/bridge-manager.ts:scheduleMessages",
+          "name": "scheduleMessages",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "relationType": "CALLS"
+        },
+        {
+          "id": "Method:scripts/claude-to-im-bridge/codex-jsonrpc.ts:JsonRpcAppServerClient.handleLine#2",
+          "name": "handleLine",
+          "filePath": "scripts/claude-to-im-bridge/codex-jsonrpc.ts",
+          "relationType": "CALLS"
+        }
+      ],
+      "affectedProcesses": [
+        {
+          "name": "request",
+          "filePath": "scripts/claude-to-im-bridge/codex-jsonrpc.ts",
+          "affected_process_count": 8
+        },
+        {
+          "name": "tryAutoStart",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "affected_process_count": 4
+        },
+        {
+          "name": "enqueueRegularMessage",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "affected_process_count": 7
+        },
+        {
+          "name": "scheduleMessages",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "affected_process_count": 5
+        },
+        {
+          "name": "runAdapterLoop",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "affected_process_count": 2
+        }
+      ]
+    }
+  },
+  {
+    "name": "runAdapterLoop",
+    "file": "src/lib/bridge/bridge-manager.ts",
+    "result": {
+      "target": {
+        "id": "Function:src/lib/bridge/bridge-manager.ts:runAdapterLoop",
+        "name": "runAdapterLoop",
+        "type": "Function",
+        "filePath": "src/lib/bridge/bridge-manager.ts"
+      },
+      "direction": "upstream",
+      "impactedCount": 2,
+      "risk": "LOW",
+      "riskSharedAxes": "LOW",
+      "epistemic": "exact",
+      "summary": {
+        "direct": 1,
+        "processes_affected": 1,
+        "modules_affected": 1
+      },
+      "byDepthCounts": {
+        "1": 1,
+        "2": 1
+      },
+      "directCallers": [
+        {
+          "id": "Function:src/lib/bridge/bridge-manager.ts:start",
+          "name": "start",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "relationType": "CALLS"
+        }
+      ],
+      "affectedProcesses": [
+        {
+          "name": "tryAutoStart",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "affected_process_count": 4
+        }
+      ]
+    }
+  },
+  {
+    "name": "enqueueRegularMessage",
+    "file": "src/lib/bridge/bridge-manager.ts",
+    "result": {
+      "target": {
+        "id": "Function:src/lib/bridge/bridge-manager.ts:enqueueRegularMessage",
+        "name": "enqueueRegularMessage",
+        "type": "Function",
+        "filePath": "src/lib/bridge/bridge-manager.ts"
+      },
+      "direction": "upstream",
+      "impactedCount": 3,
+      "risk": "LOW",
+      "riskSharedAxes": "LOW",
+      "epistemic": "exact",
+      "summary": {
+        "direct": 1,
+        "processes_affected": 2,
+        "modules_affected": 1
+      },
+      "byDepthCounts": {
+        "1": 1,
+        "2": 1,
+        "3": 1
+      },
+      "directCallers": [
+        {
+          "id": "Function:src/lib/bridge/bridge-manager.ts:runAdapterLoop",
+          "name": "runAdapterLoop",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "relationType": "CALLS"
+        }
+      ],
+      "affectedProcesses": [
+        {
+          "name": "tryAutoStart",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "affected_process_count": 4
+        },
+        {
+          "name": "runAdapterLoop",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "affected_process_count": 2
+        }
+      ]
+    }
+  },
+  {
+    "name": "cancelChat",
+    "file": "src/lib/bridge/bridge-manager.ts",
+    "result": {
+      "target": {
+        "id": "Function:src/lib/bridge/bridge-manager.ts:cancelChat",
+        "name": "cancelChat",
+        "type": "Function",
+        "filePath": "src/lib/bridge/bridge-manager.ts"
+      },
+      "direction": "upstream",
+      "impactedCount": 7,
+      "risk": "CRITICAL",
+      "riskSharedAxes": "LOW",
+      "epistemic": "exact",
+      "summary": {
+        "direct": 2,
+        "processes_affected": 6,
+        "modules_affected": 2
+      },
+      "byDepthCounts": {
+        "1": 2,
+        "2": 1,
+        "3": 4
+      },
+      "directCallers": [
+        {
+          "id": "Function:src/lib/bridge/bridge-manager.ts:handleCommand",
+          "name": "handleCommand",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "relationType": "CALLS"
+        },
+        {
+          "id": "Function:src/lib/bridge/bridge-manager.ts:stop",
+          "name": "stop",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "relationType": "CALLS"
+        }
+      ],
+      "affectedProcesses": [
+        {
+          "name": "handleMessage",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "affected_process_count": 8
+        },
+        {
+          "name": "request",
+          "filePath": "scripts/claude-to-im-bridge/codex-jsonrpc.ts",
+          "affected_process_count": 6
+        },
+        {
+          "name": "scheduleMessages",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "affected_process_count": 5
+        },
+        {
+          "name": "stop",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "affected_process_count": 4
+        },
+        {
+          "name": "handleCommand",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "affected_process_count": 2
+        },
+        {
+          "name": "runAdapterLoop",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "affected_process_count": 2
+        }
+      ]
+    }
+  },
+  {
+    "name": "resolveAnswer",
+    "file": "src/lib/bridge/user-input-broker.ts",
+    "result": {
+      "target": {
+        "id": "Function:src/lib/bridge/user-input-broker.ts:resolveAnswer",
+        "name": "resolveAnswer",
+        "type": "Function",
+        "filePath": "src/lib/bridge/user-input-broker.ts"
+      },
+      "direction": "upstream",
+      "impactedCount": 7,
+      "risk": "HIGH",
+      "riskSharedAxes": "LOW",
+      "epistemic": "exact",
+      "summary": {
+        "direct": 2,
+        "processes_affected": 4,
+        "modules_affected": 2
+      },
+      "byDepthCounts": {
+        "1": 2,
+        "2": 1,
+        "3": 4
+      },
+      "directCallers": [
+        {
+          "id": "Function:src/lib/bridge/user-input-broker.ts:handleUserInputResponse",
+          "name": "handleUserInputResponse",
+          "filePath": "src/lib/bridge/user-input-broker.ts",
+          "relationType": "CALLS"
+        },
+        {
+          "id": "Function:src/lib/bridge/user-input-broker.ts:handleUserInputText",
+          "name": "handleUserInputText",
+          "filePath": "src/lib/bridge/user-input-broker.ts",
+          "relationType": "CALLS"
+        }
+      ],
+      "affectedProcesses": [
+        {
+          "name": "handleMessage",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "affected_process_count": 8
+        },
+        {
+          "name": "request",
+          "filePath": "scripts/claude-to-im-bridge/codex-jsonrpc.ts",
+          "affected_process_count": 6
+        },
+        {
+          "name": "scheduleMessages",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "affected_process_count": 5
+        },
+        {
+          "name": "runAdapterLoop",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "affected_process_count": 2
+        }
+      ]
+    }
+  },
+  {
+    "name": "clearUserInputRequests",
+    "file": "src/lib/bridge/user-input-broker.ts",
+    "result": {
+      "target": {
+        "id": "Function:src/lib/bridge/user-input-broker.ts:clearUserInputRequests",
+        "name": "clearUserInputRequests",
+        "type": "Function",
+        "filePath": "src/lib/bridge/user-input-broker.ts"
+      },
+      "direction": "upstream",
+      "impactedCount": 14,
+      "risk": "CRITICAL",
+      "riskSharedAxes": "LOW",
+      "epistemic": "exact",
+      "summary": {
+        "direct": 2,
+        "processes_affected": 8,
+        "modules_affected": 2
+      },
+      "byDepthCounts": {
+        "1": 2,
+        "2": 6,
+        "3": 6
+      },
+      "directCallers": [
+        {
+          "id": "Function:src/lib/bridge/bridge-manager.ts:cancelChat",
+          "name": "cancelChat",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "relationType": "CALLS"
+        },
+        {
+          "id": "Function:src/lib/bridge/bridge-manager.ts:handleMessage",
+          "name": "handleMessage",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "relationType": "CALLS"
+        }
+      ],
+      "affectedProcesses": [
+        {
+          "name": "request",
+          "filePath": "scripts/claude-to-im-bridge/codex-jsonrpc.ts",
+          "affected_process_count": 8
+        },
+        {
+          "name": "handleMessage",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "affected_process_count": 8
+        },
+        {
+          "name": "stop",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "affected_process_count": 4
+        },
+        {
+          "name": "enqueueRegularMessage",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "affected_process_count": 7
+        },
+        {
+          "name": "scheduleMessages",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "affected_process_count": 5
+        },
+        {
+          "name": "tryAutoStart",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "affected_process_count": 4
+        },
+        {
+          "name": "handleCommand",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "affected_process_count": 2
+        },
+        {
+          "name": "runAdapterLoop",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "affected_process_count": 2
+        }
+      ]
+    }
+  },
+  {
+    "name": "handleCardAction",
+    "file": "src/lib/bridge/adapters/feishu-adapter.ts",
+    "result": {
+      "target": {
+        "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.handleCardAction#1",
+        "name": "handleCardAction",
+        "type": "Method",
+        "filePath": "src/lib/bridge/adapters/feishu-adapter.ts"
+      },
+      "direction": "upstream",
+      "impactedCount": 1,
+      "risk": "LOW",
+      "riskSharedAxes": "LOW",
+      "epistemic": "exact",
+      "summary": {
+        "direct": 1,
+        "processes_affected": 1,
+        "modules_affected": 1
+      },
+      "byDepthCounts": {
+        "1": 1
+      },
+      "directCallers": [
+        {
+          "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.start#0",
+          "name": "start",
+          "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+          "relationType": "CALLS"
+        }
+      ],
+      "affectedProcesses": [
+        {
+          "name": "start",
+          "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+          "affected_process_count": 4
+        }
+      ]
+    }
+  },
+  {
+    "name": "handleServerRequest",
+    "file": "scripts/claude-to-im-bridge/codex-llm.ts",
+    "result": {
+      "target": {
+        "id": "Method:scripts/claude-to-im-bridge/codex-llm.ts:CodexAppServerLLMProvider.handleServerRequest#1",
+        "name": "handleServerRequest",
+        "type": "Method",
+        "filePath": "scripts/claude-to-im-bridge/codex-llm.ts"
+      },
+      "direction": "upstream",
+      "impactedCount": 1,
+      "risk": "LOW",
+      "riskSharedAxes": "LOW",
+      "epistemic": "exact",
+      "summary": {
+        "direct": 1,
+        "processes_affected": 1,
+        "modules_affected": 1
+      },
+      "byDepthCounts": {
+        "1": 1
+      },
+      "directCallers": [
+        {
+          "id": "Method:scripts/claude-to-im-bridge/codex-llm.ts:CodexAppServerLLMProvider.constructor#1",
+          "name": "constructor",
+          "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+          "relationType": "CALLS"
+        }
+      ],
+      "affectedProcesses": [
+        {
+          "name": "constructor",
+          "filePath": "scripts/claude-to-im-bridge/codex-llm.ts",
+          "affected_process_count": 3
+        }
+      ]
+    }
+  },
+  {
+    "name": "forwardUserInputRequest",
+    "file": "src/lib/bridge/user-input-broker.ts",
+    "result": {
+      "target": {
+        "id": "Function:src/lib/bridge/user-input-broker.ts:forwardUserInputRequest",
+        "name": "forwardUserInputRequest",
+        "type": "Function",
+        "filePath": "src/lib/bridge/user-input-broker.ts"
+      },
+      "direction": "upstream",
+      "impactedCount": 1,
+      "risk": "LOW",
+      "riskSharedAxes": "LOW",
+      "epistemic": "exact",
+      "summary": {
+        "direct": 1,
+        "processes_affected": 1,
+        "modules_affected": 1
+      },
+      "byDepthCounts": {
+        "1": 1
+      },
+      "directCallers": [
+        {
+          "id": "Function:src/lib/bridge/bridge-manager.ts:handleMessage.onUserInputRequest@1560:6",
+          "name": "onUserInputRequest",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "relationType": "CALLS"
+        }
+      ],
+      "affectedProcesses": [
+        {
+          "name": "onUserInputRequest",
+          "filePath": "src/lib/bridge/bridge-manager.ts",
+          "affected_process_count": 10
+        }
+      ]
+    }
+  },
+  {
+    "name": "buildUserInputCard",
+    "file": "src/lib/bridge/markdown/feishu.ts",
+    "result": {
+      "target": {
+        "id": "Function:src/lib/bridge/markdown/feishu.ts:buildUserInputCard",
+        "name": "buildUserInputCard",
+        "type": "Function",
+        "filePath": "src/lib/bridge/markdown/feishu.ts"
+      },
+      "direction": "upstream",
+      "impactedCount": 1,
+      "risk": "LOW",
+      "riskSharedAxes": "LOW",
+      "epistemic": "exact",
+      "summary": {
+        "direct": 1,
+        "processes_affected": 1,
+        "modules_affected": 1
+      },
+      "byDepthCounts": {
+        "1": 1
+      },
+      "directCallers": [
+        {
+          "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.sendUserInputRequest#3",
+          "name": "sendUserInputRequest",
+          "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+          "relationType": "CALLS"
+        }
+      ],
+      "affectedProcesses": [
+        {
+          "name": "sendUserInputRequest",
+          "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+          "affected_process_count": 2
+        }
+      ]
+    }
+  }
+]

@@ -325,7 +325,7 @@ export interface PermissionResolution {
   updatedPermissions?: unknown[];
   scope?: 'turn' | 'session';
   updatedInput?: Record<string, unknown>;
-  reason?: 'expired' | 'cancelled' | 'delivery_failed';
+  reason?: 'expired' | 'cancelled' | 'delivery_failed' | 'request_closed' | 'turn_completed';
 }
 
 /** 模型向用户询问的信息。问题 ID 由 provider 映射回厂商协议。 */
@@ -342,12 +342,20 @@ export interface UserInputQuestion {
 export interface UserInputRequest {
   requestId: string;
   questions: UserInputQuestion[];
+  /** 缺省按阻塞问题处理；Codex 透传原布尔值。 */
+  isBlocking?: boolean;
+  /** RPC 题默认回原请求；原生 async 通知题以普通用户消息补充。 */
+  answerChannel?: 'rpc' | 'message';
 }
 
 export interface UserInputResponse {
   requestId: string;
   answers: Record<string, string[]>;
 }
+
+/** 用户明确选择把已关闭问答作为任务补充，不能用于原 RPC 回答。 */
+export interface UserInputSupplementResponse extends UserInputResponse {}
+export type UserInputPhase = 'pending' | 'closed' | 'answered' | 'supplemented' | 'expired' | 'cancelled' | 'failed';
 
 export interface PermissionGateway {
   /** 观察真实请求终态；用于移除原卡按钮，不另行猜测超时时间。 */

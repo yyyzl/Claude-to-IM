@@ -1,7 +1,7 @@
 /** 将锁定版本 Codex app-server 的公开双向协议适配为桥接 SSE。 */
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
-import type { AccountQuota, ActiveTurnInput, TurnInputResult, GeneratedImage, LLMProvider, StreamChatParams, TokenUsage, UserInputQuestion } from '../../src/lib/bridge/host.js';
+import type { AccountQuota, ActiveTurnInput, TurnInputResult, GeneratedImage, LLMProvider, StreamChatParams, TokenUsage, UserInputQuestion, UserInputRequest } from '../../src/lib/bridge/host.js';
 import type { CodexModelPreferences, ModelCatalog } from '../../src/lib/bridge/types.js';
 import { findFastServiceTier } from '../../src/lib/bridge/internal/model-capabilities.js';
 import { createGeneratedImage, checkGeneratedImageBudget } from '../../src/lib/bridge/internal/generated-image.js';
@@ -14,7 +14,7 @@ import { parseCodexAccountQuota } from './codex-quota.ts';
 
 type CodexTransport = Pick<JsonRpcAppServerClient, 'request' | 'notify' | 'respond' | 'respondError' | 'onServerRequest' | 'onNotification' | 'onDisconnect' | 'drainBacklog' | 'stop' | 'isRunning'>;
 type SendEvent = (type: string, data: unknown) => void;
-type ActiveTurn = { emit: SendEvent; abort: AbortController; turnId?: string; onStatus?: (status: string) => void };
+type ActiveTurn = { emit: SendEvent; abort: AbortController; turnId?: string; onStatus?: (status: string) => void; blocking: Set<string>; ended: boolean; epoch: number; ready: Promise<void>; isInputOpen: () => boolean };
 type TurnPolicy = { sandbox: string; approvalPolicy: string };
 type ModelSelection = { model: CodexModelListItem; effort?: string; serviceTierForTurn?: string };
 type TurnResult = { text: string; usage: TokenUsage | null; lastUsage: TokenUsage | null; contextWindow: number | null; contextTokens: number | null; emittedFinalText: boolean };
@@ -66,6 +66,18 @@ function subtractUsage(total: TokenUsage, baseline: TokenUsage): TokenUsage {
 }
 function getNotifThreadId(message: JsonRpcMessage): string | null { return pickString(message.params?.threadId); }
 function getNotifTurnId(message: JsonRpcMessage): string | null { return pickString(message.params?.turnId) ?? pickString(record(message.params?.turn).id); }
+function parseAsyncQuestions(value: unknown): UserInputQuestion[] | null {
+  if (!Array.isArray(value) || !value.length || value.length > 50) return null;
+  const questions: UserInputQuestion[] = [];
+  for (const [index, raw] of value.entries()) {
+    const question = record(raw); const title = pickString(question.title);
+    if (!title || (question.options != null && (!Array.isArray(question.options)
+      || question.options.some(option => typeof option !== 'string' || !option.trim())))) return null;
+    questions.push({ id: `q${index}`, question: title,
+      ...(Array.isArray(question.options) && question.options.length ? { options: question.options.map(label => ({ label })) } : {}), allowOther: true });
+  }
+  return JSON.stringify(questions).length <= 32_000 ? questions : null;
+}
 function parseCodexCliConfigOverrides(raw?: string): string[] {
   const values = (raw ?? '').split(/[\r\n;]+/).map(value => value.trim()).filter(value => value && !value.startsWith('#'));
   if (values.some(value => value.indexOf('=') <= 0)) throw new Error('bridge_codex_cli_config 每项必须是 key=value');
@@ -83,7 +95,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
   private connectionEpoch = 0;
   private models: CodexModelListItem[] = [];
   private activeTurns = new Map<string, ActiveTurn>();
-  private serverRequests = new Map<string | number, { permissionId: string; resolved: boolean }>();
+  private serverRequests = new Map<string | number, { permissionId: string; resolved: boolean; threadId: string; active: ActiveTurn; question: boolean }>();
   private previousUsage = new Map<string, TokenUsage>();
   private configuredEffort?: string;
 
@@ -107,7 +119,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
       this.resetConnectionState();
       for (const pending of this.serverRequests.values()) {
         pending.resolved = true;
-        this.permissions.resolvePendingPermission(pending.permissionId, { behavior: 'deny', message: 'Codex 连接已断开' });
+        this.permissions.resolvePendingPermission(pending.permissionId, { behavior: 'deny', reason: 'cancelled', message: 'Codex 连接已断开' });
       }
     });
     this.client.onServerRequest(message => { void this.handleServerRequest(message).catch(error => console.warn('[codex-llm] 服务端请求已结束:', toErrorMessage(error))); });
@@ -116,9 +128,9 @@ export class CodexAppServerLLMProvider implements LLMProvider {
       const id = message.params?.requestId;
       if (typeof id !== 'string' && typeof id !== 'number') return;
       const pending = this.serverRequests.get(id);
-      if (pending) {
+      if (pending && message.params?.threadId === pending.threadId) {
         pending.resolved = true;
-        this.permissions.resolvePendingPermission(pending.permissionId, { behavior: 'deny', message: '请求已由服务端结束' });
+        this.permissions.resolvePendingPermission(pending.permissionId, { behavior: 'deny', reason: pending.active.abort.signal.aborted || pending.active.epoch !== this.connectionEpoch ? 'cancelled' : 'request_closed', message: '请求已由服务端结束' });
       }
     });
   }
@@ -234,7 +246,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
           // 线程已建立，但配置是否被接受要等 turn/start，不能提前报告为实际使用。
           send('status', { session_id: threadId });
           if (abort.signal.aborted) throw abortError();
-          active = { emit: send, abort, onStatus: params.onRuntimeStatusChange };
+          active = { emit: send, abort, onStatus: params.onRuntimeStatusChange, blocking: new Set(), ended: false, epoch, ready, isInputOpen: () => !inputClosed };
           this.activeTurns.set(threadId, active);
           params.onRuntimeStatusChange?.('running');
           const turnId = await this.startTurn({ threadId, input, params, selection, policy });
@@ -245,11 +257,20 @@ export class CodexAppServerLLMProvider implements LLMProvider {
             threadId, turnId, signal: abort.signal, onDelta: delta => send('text', delta), onProgress: text => send('progress', text),
             onInputReady: markReady, onInputClosed: closeInput,
             onGeneratedImage: image => send('generated_image', image),
+            onUserInputRequest: request => send('user_input_request', request),
             onToolEvent: (id, name, status, item) => {
               if (status === 'running') send('tool_use', { id, name, input: item ?? {} });
               else send('tool_result', { tool_use_id: id, content: pickString(item?.aggregatedOutput) ?? '', is_error: status === 'error' });
             },
           });
+          active.ended = true;
+          // 正常完成先标注未答问题，再触发内部 abort；不得伪装成用户取消。
+          for (const pending of this.serverRequests.values()) {
+            if (pending.active === active && pending.question && !pending.resolved) {
+              pending.resolved = true;
+              this.permissions.resolvePendingPermission(pending.permissionId, { behavior: 'deny', reason: 'turn_completed' });
+            }
+          }
           if (result.text && !result.emittedFinalText) send('text', result.text);
           send('result', { usage: result.usage, last_usage: result.lastUsage, context_window: result.contextWindow, context_tokens: result.contextTokens, is_error: false, session_id: threadId });
         } catch (error) {
@@ -260,6 +281,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
           offInputDisconnect();
           abort.signal.removeEventListener('abort', closeOnAbort);
           if (keepAlive) clearInterval(keepAlive);
+          if (active) active.ended = true;
           abort.abort();
           externalSignal?.removeEventListener('abort', onAbort);
           if (threadId && active && this.activeTurns.get(threadId) === active) this.activeTurns.delete(threadId);
@@ -415,14 +437,29 @@ export class CodexAppServerLLMProvider implements LLMProvider {
     // 精细权限和 MCP elicitation 需要更专门的界面，明确拒绝而不是挂起或扩大授权。
     if (method === 'item/permissions/requestApproval') { this.client.respond(message.id, { permissions: {}, scope: 'turn' }); active?.emit('progress', '精细权限请求已拒绝，请在本地 Codex 完成授权。'); return; }
     if (method === 'mcpServer/elicitation/request') { this.client.respond(message.id, { action: 'decline', content: null }); active?.emit('progress', '此 MCP 交互需要在本地 Codex 完成。'); return; }
-    if (!active || active.abort.signal.aborted || (active.turnId && params.turnId !== active.turnId)) {
+    if (!active || active.ended || active.abort.signal.aborted || (active.turnId && params.turnId !== active.turnId)) {
       this.client.respond(message.id, method === 'item/tool/requestUserInput' ? { answers: {} } : { decision: 'cancel' }); return;
     }
-    const pending = { permissionId: randomUUID(), resolved: false };
+    const threadId = pickString(params.threadId)!;
+    const pending = { permissionId: randomUUID(), resolved: false, threadId, active, question: method === 'item/tool/requestUserInput' };
     this.serverRequests.set(message.id, pending);
+    const reportStatus = () => {
+      if (active.isInputOpen() && !active.ended && !active.abort.signal.aborted && active.epoch === this.connectionEpoch && this.activeTurns.get(threadId) === active) {
+        active.onStatus?.(active.blocking.size ? 'waiting_for_input' : 'running');
+      }
+    };
     try {
       const resolutionPromise = this.permissions.waitFor(pending.permissionId, active.abort.signal);
-      active.onStatus?.('waiting_for_input');
+      // 先登记，避免等待 turn/start 时丢失 resolved；原回合 ready 后才核对和展示。
+      const initialized = await Promise.race([active.ready.then(() => true), resolutionPromise.then(() => false)]);
+      if (pending.resolved) return;
+      if (!initialized || !active.isInputOpen() || active.ended || active.abort.signal.aborted
+        || active.epoch !== this.connectionEpoch || this.activeTurns.get(threadId) !== active || params.turnId !== active.turnId) {
+        this.permissions.resolvePendingPermission(pending.permissionId, { behavior: 'deny', reason: 'cancelled' });
+        this.client.respond(message.id, pending.question ? { answers: {} } : { decision: 'cancel' });
+        return;
+      }
+      if (!pending.question || params.isBlocking !== false) { active.blocking.add(pending.permissionId); reportStatus(); }
       if (method === 'item/tool/requestUserInput') {
         const questions: UserInputQuestion[] = [];
         for (const value of Array.isArray(params.questions) ? params.questions : []) {
@@ -433,15 +470,15 @@ export class CodexAppServerLLMProvider implements LLMProvider {
             options: Array.isArray(question.options) ? question.options.flatMap(value => { const option = record(value); return typeof option.label === 'string' ? [{ label: option.label, description: pickString(option.description) ?? undefined }] : []; }) : undefined });
         }
         if (!questions.length) this.permissions.resolvePendingPermission(pending.permissionId, { behavior: 'deny', message: '服务端问题格式无效' });
-        else active.emit('user_input_request', { requestId: pending.permissionId, questions });
+        else active.emit('user_input_request', { requestId: pending.permissionId, questions, isBlocking: params.isBlocking !== false });
         const resolution = await resolutionPromise;
         const supplied = record(resolution.updatedInput?.answers);
-        const answers: Record<string, { answers: string[] }> = {};
+        const answers: Record<string, { answers: string[] }> = Object.create(null);
         if (resolution.behavior === 'allow') for (const question of questions) {
           const values = supplied[question.id];
           if (Array.isArray(values) && values.every(value => typeof value === 'string')) answers[question.id] = { answers: values };
         }
-        if (!pending.resolved) this.client.respond(message.id, { answers });
+        if (!pending.resolved) this.client.respond(message.id, { answers: { ...answers } });
       } else {
         active.emit('permission_request', { permissionRequestId: pending.permissionId, toolName: method === 'item/fileChange/requestApproval' ? 'fileChange' : 'commandExecution', toolInput: params });
         const resolution = await resolutionPromise;
@@ -453,7 +490,8 @@ export class CodexAppServerLLMProvider implements LLMProvider {
       if (!pending.resolved && this.client.isRunning()) this.client.respondError(message.id, -32603, toErrorMessage(error));
     } finally {
       this.serverRequests.delete(message.id);
-      active.onStatus?.('running');
+      active.blocking.delete(pending.permissionId);
+      reportStatus();
     }
   }
 
@@ -463,13 +501,15 @@ export class CodexAppServerLLMProvider implements LLMProvider {
     onInputReady?: () => void;
     onInputClosed?: () => void;
     onGeneratedImage?: (image: GeneratedImage) => void;
+    onUserInputRequest?: (request: UserInputRequest) => void;
     onToolEvent?: (id: string, name: string, status: 'running' | 'complete' | 'error', item?: Record<string, unknown>) => void;
   }): Promise<TurnResult> {
     let text = ''; let emittedFinalText = false;
     let usage: TokenUsage | null = null; let lastUsage: TokenUsage | null = null; let contextWindow: number | null = null; let contextTokens: number | null = null;
     let baseline = this.previousUsage.get(opts.threadId) ?? null;
     let finalTotal: TokenUsage | null = null;
-    const items = new Map<string, { phase: string; buffered: string; emitted: string }>();
+    type MessageState = { phase: string; buffered: string; emitted: string; async?: boolean; completed?: boolean; question?: boolean };
+    const items = new Map<string, MessageState>();
     const toolIds = new Set<string>();
     const completedImageIds = new Set<string>();
     const pendingImageIds = new Set<string>();
@@ -497,7 +537,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
         const refreshIdle = () => { if (idleTimer) clearTimeout(idleTimer); if (idleMs > 0) idleTimer = setTimeout(() => fail(turnTimeoutError('Codex 长时间没有进展，已请求中断')), idleMs); };
         const flush = (id: string) => {
           const item = items.get(id);
-          if (!item?.buffered || !item.phase) return;
+          if (!item?.buffered || !item.phase || item.question || (item.async && !item.completed)) return;
           const delta = item.buffered; item.buffered = ''; item.emitted += delta;
           if (item.phase === 'commentary') opts.onProgress?.(item.emitted);
           else { text += delta; emittedFinalText = true; opts.onDelta(delta); }
@@ -519,14 +559,23 @@ export class CodexAppServerLLMProvider implements LLMProvider {
             if (typeof last.totalTokens === 'number' && last.totalTokens >= 0) contextTokens = last.totalTokens;
           } else if (message.method === 'item/agentMessage/delta') {
             const id = pickString(params.itemId); if (!id) return;
-            const state = items.get(id) ?? { phase: '', buffered: '', emitted: '' };
+            const state: MessageState = items.get(id) ?? { phase: '', buffered: '', emitted: '' };
+            if (state.question || state.completed) return;
             state.buffered += typeof params.delta === 'string' ? params.delta : '';
             items.set(id, state); flush(id);
           } else if (message.method === 'item/started' || message.method === 'item/completed') {
             const id = pickString(item.id); if (!id) return;
             const done = message.method === 'item/completed';
             if (item.type === 'agentMessage') {
-              const state = items.get(id) ?? { phase: '', buffered: '', emitted: '' };
+              const state: MessageState = items.get(id) ?? { phase: '', buffered: '', emitted: '' };
+              state.async ||= item.delivery === 'async';
+              const questions = item.delivery === 'async' && typeof item.text === 'string' ? parseAsyncQuestions(item.questions) : null;
+              if (questions && !state.question) {
+                state.question = true; state.buffered = '';
+                opts.onUserInputRequest?.({ requestId: randomUUID(), questions, isBlocking: false, answerChannel: 'message' });
+              }
+              if (done) state.completed = true;
+              if (state.question) { items.set(id, state); return; }
               state.phase = pickString(item.phase) ?? (done ? 'final_answer' : ''); items.set(id, state); flush(id);
               if (done && typeof item.text === 'string') {
                 if (state.phase === 'commentary') { if (item.text !== state.emitted) opts.onProgress?.(item.text); }
@@ -568,6 +617,14 @@ export class CodexAppServerLLMProvider implements LLMProvider {
           } else if (message.method === 'turn/completed') {
             opts.onInputClosed?.();
             const turn = record(params.turn); completed = true;
+            // async 尚无有效题元数据且缺少 item completed 时，不能吞掉普通缓存文字。
+            for (const [id, state] of items) {
+              if (state.async && !state.question) {
+                state.completed = true;
+                state.phase ||= 'final_answer';
+                flush(id);
+              }
+            }
             if (pendingImageIds.size) imageNotice('部分图片生成未完成，没有对应的可交付图片。');
             if (turn.status === 'failed') fail(new Error('Codex 回合执行失败，请稍后重试。'));
             else if (turn.status === 'interrupted') fail(abortError());

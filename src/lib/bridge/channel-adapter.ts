@@ -14,7 +14,7 @@ import type {
   SendResult,
   ModelSelectionView,
 } from './types.js';
-import type { GeneratedImage, UserInputRequest } from './host.js';
+import type { GeneratedImage, UserInputRequest, UserInputPhase } from './host.js';
 
 export interface ImageUploadResult {
   ok: boolean;
@@ -127,6 +127,14 @@ export abstract class BaseChannelAdapter {
     _request: UserInputRequest,
     _replyToMessageId?: string,
   ): Promise<SendResult>;
+
+  /** 问答专属阶段更新；不改变通用审批卡语义。 */
+  updateUserInputRequest?(
+    _address: ChannelAddress,
+    _messageId: string,
+    _request: UserInputRequest,
+    _phase: UserInputPhase,
+  ): Promise<void>;
 
   sendModelSelection?(
     _address: ChannelAddress,

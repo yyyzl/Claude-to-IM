@@ -2,7 +2,7 @@
 
 ## 1. 范围与触发条件
 
-修改消息队列、会话绑定、停止、回答投递、权限交互、JSON Store 或工作流恢复/自动修复时，必须使用本合同。平台表现不能代替核心状态：卡片收到点击不代表权限已批准，模型结束不代表回答已送达。
+修改消息队列、会话绑定、停止、回答投递、权限/问答交互、JSON Store 或工作流恢复/自动修复时，必须使用本合同。平台表现不能代替核心状态：卡片收到点击不代表权限已批准，模型结束不代表回答已送达。
 
 ## 2. 接口
 
@@ -12,7 +12,11 @@
 - `deliver(adapter, message, { isCurrent }?)`：普通文本投递可选归属检查，覆盖开始、后续分块与重试；已进入平台的发送不能撤回。账号额度查询的异步调度及 epoch 合同见 [账号额度合同](./codex-account-quota.md)。
 - `BridgeStore.saveResponseDelivery/getResponseDelivery/listResponseDeliveries/flush`：四项共同形成可选的持久待发能力；`close()` 用于停机。
 - `BridgeStore.listChannelSessionHistory?(channelType, chatId): ChannelSessionHistoryEntry[]`：只读当前聊天历史；条目为 `sessionId/title/workingDirectory/updatedAt`，按最近关联排序。`/sessions [页码]` 每页 5 条，完整 ID 可用于 `/bind`。
-- `PermissionGateway.onResolution?(requestId, listener)`：订阅真实解决结果，返回取消订阅函数；`reason` 可区分 `expired / cancelled / delivery_failed`。
+- `PermissionGateway.onResolution?(requestId, listener)`：订阅真实解决结果，返回取消订阅函数；reason 为 expired/cancelled/delivery_failed/request_closed/turn_completed，问答闭合两项详见下方合同。
+- `UserInputRequest.isBlocking?: boolean`：明确 false 表示非阻塞，缺省维持通用阻塞语义；`answerChannel?: 'rpc' | 'message'` 缺省 rpc，不能据阻塞状态推断答案通道。`UserInputSupplementResponse` 与原答案结构相同，以 `InboundMessage.userInputSupplementResponse` 表示明确的补充动作。
+- `BaseChannelAdapter.updateUserInputRequest?(address, messageId, request, phase)`：问答专属阶段回写，phase 为 pending/closed/answered/supplemented/expired/cancelled/failed；不改变审批卡更新能力。
+- `prepareUserInputSupplement(address, response, callbackMessageId, action)`：action 必填 answer/supplement，分别要求 pending/closed；返回 invalid/unavailable、原请求答案的 rpc 或 ready `{text, sessionId, isCurrent, claim(admit: () => void): boolean}`。调用方在准入锁内校验、claim 并转入既有调度；rpc 才走原网关。缺少有效 admit 返回 false 且保留未消费资格。
+- `clearUserInputRequests(sessionId, { preserveClosed?, owner? }?)`：回合收尾可保留 closed，通过原归属回调身份限定本回合；`invalidateUserInputRequests(address?)` 主动取消原 channel/chat，缺省全量清理用于停机。
 - `WorkflowStore.acquireExecution(runId)`：取得唯一执行权并返回释放函数；活跃或归属不明的执行者不能自动抢占。
 - `WorkflowStore.loadDocumentVersion(runId, target)`：只读返回 `{version, content}`，其中 `target` 为 `spec | plan`，缺失内容为 `null`；版本文件仍由原 `saveSpec/savePlan` 显式版本参数保存。
 - `AutoFixOptions.validate?(cwd, issueIds)`：返回 `{passed, summary}`；缺少验证时只产生修复候选，不计入 `fixedCount`。
@@ -55,6 +59,26 @@ manager 持有原来源组，提交中及已接收来源不能同时留在可 fl
 
 ### 投递与权限
 
+#### Codex 非阻塞问答与闭合补充
+
+RPC 题目有效答案回传原 app-server JSON-RPC 请求，结构为 `{answers: {[questionId]: {answers: string[]}}}`，不调用 turn/steer 或另开回合。`isBlocking === false` 的问题允许继续输出，不写 waiting_for_input；同一 ActiveTurn 的其他阻塞问题/审批仍存在时必须继续等待，最后一个解决才运行。迟到 finally 检查原 active/epoch/abort/ended，不能在 idle 后回写 running。弃用 autoResolutionMs 不用于新的答题倒计时；卡片投递超时也不是回答期限。
+
+原生非阻塞题是当前 thread/turn 的 `agentMessage.delivery='async'` 与结构化 questions，属于 notification，不存在对应回答 RPC。collector 按 item.id 去重 started/completed/backlog，从 title/options 映射稳定题目 ID，经原 SSE 显式转发 message 答案通道；不扫描历史、不从文字猜题，不把题目文字计入最终回答。phase=final_answer 不等于 turn 完成，普通 async 消息不得丢失。原生选择支持建议答案和其他文字，不能推断多选或秘密字段。非飞书渠道保持文字显示。
+
+metadata 未知的 delta 缓存，已知 async 等 completed 后判别题目；普通 started 已明确 phase 且无 async 则维持流式。上述题目文本隔离仅针对尚未投递的片段：如果已显示普通文字后同 item 的 completed 才改变为 async，已投递片段无法撤回，不缓存所有普通消息来防御未经证实的字段变更。普通 async 缺 completed 时在 turn 完成刷出缓存，phase 缺省按 final_answer，已有 commentary 保持。两种边界需保留回归。
+
+message 题目不创建 PermissionGateway pending/observer/response。pending 原答案动作携带 broker 原题，经 manager 原归属校验、admissionGate、sanitize、一次 claim 准入既有追加/后轮；RPC 默认合同不变。正常 clear(preserveClosed:true,owner) 明确将原生 pending 转 closed，闭合后只接显式补充，旧原提交竞态不得自动转换；错误或主动取消不保留。
+
+`serverRequest/resolved` 精确匹配原 threadId/requestId，未答问题以 request_closed 关闭；正常回合完成在内部 abort 之前以 turn_completed 关闭该回合未答问题。这两个 PermissionResolution.reason 只证明原请求已结束，不能当作本桥接答案已被模型接收的收据。初始化期先登记原请求再等待 ready，确认远端 turnId 后精确校验，避免旧问题借新 active 归属转发；等待期间关闭、取消或失败不得复活。错误、主动停止、断连、过期或失败不可转为可补充。
+
+RPC 问答 broker 独立观察真实网关，两种入口均保留飞书 Codex 的原题、地址、session、原卡和原 task guard；closed 未答记录关闭后最多 10 分钟、全进程最多 100 条，定时器 unref，按时间/数量淘汰。先登记再订阅，处理 onResolution 同步回放及卡创建晚到；发送失败、秘密问题、已回答、已补充和取消不能复活。只保留未答原题，不持久化或日志输出答案正文。正常 finally 不取消 closed；stop/new/bind 按聊天清理，停机也清理闲置卡。
+
+答案与补充共用原题校验：真实 channel/chat/user/card、已知问题 ID、完整非空 own-property 答案、选项与单/多选限制及大小。动态问题 ID 映射不得用普通对象的原型属性代替答案；不得信任按钮携带的原题、绑定或来源。closed 的原答案动作只拒绝并提示显式补充，不自动重放。明确补充从 broker 原题生成文本，在 manager admissionGate 内检查原取消信号、binding/session、generation、epoch，并要求当前 active 为空或仍为原 turnId；其他 active 回合不能被旧卡 steer。sanitize 与总大小检查在 claim 前完成，同步 claim(admit) 一次再沿用既有 enqueue/live-append 来源与 ack 合同；没有有效 admit 不消耗资格。
+
+问答控制动作及反馈为 tracked task，消费循环和准入锁不能等待模型/平台网络。每卡最多一个实际在途 patch，真正结束后合并最新终态；本地超时不能并行新 patch 让旧 closed 覆盖终态。外部永久挂起时核心资格立即撤销，UI 及时刷新不保证；飞书 patch 也不保证未提交草稿保留。展示与准入结果分开，更新失败不撤销已成立的答案或补充事实。
+
+飞书 JSON2 input 的 `max_length` 平台范围为1…1000，other/free 与 pending/closed 均须遵守；不能把本地答案校验上限或历史渲染值当作平台组件属性范围。SDK content:string 不校验内层schema，fake SDK成功不证明平台接受卡片。平台格式、IM投递可见控件、真实答案回到原任务分别取证；CardKit仅实体校验成功不能宣称真实问答链路已通过。[官方输入组件合同](https://open.feishu.cn/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/card-json-v2-components/interactive-components/input)。
+
 `ResponseDeliveryRecord` 保留 ID、所属地址/会话、待发正文、分块及 sent/messageId、状态、尝试次数和时间。必须先 save + await flush，再进行平台发送；每块成功后更新进度。保存失败不可降级成无记录发送。只有宿主确实实现完整能力才称持久化；内存降级须明确重启可能丢失。
 
 重试必须验证 chat/channel/user 来源并互斥。不能把失败记成成功去重，也不能按旧格式错误判断降级后的重试。成功记录清除重复正文并限制元数据保留。平台送达与本地保存之间有不确定窗口，不声称 exactly-once。
@@ -93,6 +117,10 @@ JSON 写入采用同目录临时文件、同步内容后原子替换，并保留
 | --- | --- |
 | 合并/排队期间 stop | 不启动被取消的模型请求，消息得到明确处理 |
 | 旧回合晚到或绑定切走再切回 | 不更新新 binding、状态或卡片 |
+| 非阻塞问答与其他阻塞交互并存 | 输出可继续，等待状态由尚未解决的阻塞集合决定 |
+| 关闭通知 thread 错误或原答案按钮在闭合后晚到 | 忽略错误通知；旧答案不能自动转换为补充 |
+| 闭合问题补充双击、超时结果未知或另一回合活跃 | 一次性准入；unknown 不重放；新活跃回合拒绝旧补充 |
+| 原回合正常完成与主动 stop/new/bind/停机 | 正常未答可保留显式入口，主动取消清理包括闲置卡 |
 | 补充成功回执晚于模型完成 | 接收事实仍成立，补充 user 在原 assistant 前结算；不自动后轮 |
 | 即时补充请求结果未知、收尾后回执迟到 | 不重送、不迁入新任务、不在最终记录之后再追加 user |
 | 待发记录 flush 失败 | 不发送，返回可定位的持久化错误 |
@@ -123,6 +151,9 @@ JSON 写入采用同目录临时文件、同步内容后原子替换，并保留
 - 边界：进程退出后遗留 running，在确认 owner 已退出并取得锁后恢复；另一个活跃 runner 恢复同一 run 时拒绝。
 - 失败：修复模型改了不在本组范围的文件，即使 git diff 非空也不能称为已修复。
 - 边界：未知标题补丁保存后进程中断，恢复保留首次 failedSections，问题仍未解决；正常匹配的补丁恢复后仍能解决问题。
+- 正常：非阻塞问题“输出格式？”期间 Codex 继续分析，回答“CSV”只返回原问题，没有新的过程卡或回合。
+- 边界：原问题已关闭，用户点击“作为任务补充发送”后，原题与“CSV”沿即时追加/后轮一次处理；点击原“提交答案”则提示关闭。
+- 失败：旧问题卡在另一 active 回合或换绑后点击，不能向该新回合发送答案。
 
 ## 6. 必需测试断言
 
@@ -132,6 +163,8 @@ JSON 写入采用同目录临时文件、同步内容后原子替换，并保留
 
 图片回归使用锁定 Codex 协议结构、合成 PNG 与 fake 传输。覆盖 early 通知、重复/错回合、失败/空/坏/超限、纯图和图文、流卡收尾、上传检查点、重启补发、取消后迟到及 SDK 日志脱敏。禁止真实生图与生产飞书调用，测试不得扫描用户图片目录。
 
+问答回归锚点：bridge-codex-protocol.test.ts 验证标志、并发等待、原 RPC、正常闭合/取消和错 thread；bridge-user-input-broker.test.ts 验证同步已终态、晚到卡、答案来源、连续到期/容量淘汰及慢 patch 最终终态；bridge-feishu-streaming.test.ts 验证同卡选择/输入、专用补充 DTO与终态去入口；bridge-feishu-async-questions.test.ts 用真实 manager/provider/broker 和 fake 平台验证即时/后轮、双击、旧回合隔离、闲置卡 stop/new/bind/停机、挂起反馈仍消费控制及 unknown 不重播。硬阻断真实模型/网络，每批 60 秒。
+
 ## 7. 错误与正确做法
 
 - 错：`await deliverResponse(...)` 后忽略结果并认为用户已收到。正确：送达状态独立记录，失败保留补发入口。
@@ -140,5 +173,6 @@ JSON 写入采用同目录临时文件、同步内容后原子替换，并保留
 - 错：存在任何 diff 就增加 fixedCount。正确：范围/补丁检查产生候选，问题验证通过后才增加 fixedCount。
 - 错：保存过文档就从 latest 重放补丁。正确：先保存原始基线与应用结果，恢复固定判定及目标版本。
 - 错：把渠道当前绑定列表当作聊天历史并截断 ID。正确：按 channel/chat 的历史关联读取，提供完整可用绑定命令。
+- 错：`if (!handleUserInputResponse(...)) enqueueRegularMessage(answer)` 自动重放闭合答案。正确：原答案失败仅提示关闭；专用补充动作经原题/来源/原任务校验和一次性 claim 后才准入。
 
 来源：`10-04-optimization-audit` 的隔离研究，`10-04-reliability-fixes`、`10-05-audit-priority-fixes` 与 `10-05-feishu-image-output` 的实现/回归。

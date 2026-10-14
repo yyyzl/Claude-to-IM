@@ -50,6 +50,7 @@ export interface InboundMessage {
   callbackMessageId?: string;
   /** 问答卡片提交；callbackMessageId 必须指向原始卡片。 */
   userInputResponse?: import('./host.js').UserInputResponse;
+  userInputSupplementResponse?: import('./host.js').UserInputSupplementResponse;
   /** 独立于模型问答的配置卡提交，来源仍使用 address/callbackMessageId。 */
   modelSelectionResponse?: ModelSelectionResponse;
   /** Platform-specific raw update object (for adapter-specific handling) */

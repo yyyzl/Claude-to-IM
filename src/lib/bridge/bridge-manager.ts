@@ -27,7 +27,7 @@ import './adapters/index.js';
 import * as router from './channel-router.js';
 import * as engine from './conversation-engine.js';
 import * as broker from './permission-broker.js';
-import { clearUserInputRequests, forwardUserInputRequest, handleUserInputResponse, handleUserInputText } from './user-input-broker.js';
+import { clearUserInputRequests, forwardUserInputRequest, handleUserInputResponse, handleUserInputText, invalidateUserInputRequests, prepareUserInputSupplement, isUserInputClosed } from './user-input-broker.js';
 import { deliver, deliverSingle } from './delivery-layer.js';
 import { deliverResponse, retryResponseDelivery, getResponseDeliveryStatus } from './response-delivery.js';
 import { abortable, settleWithin } from './internal/abort.js';
@@ -442,6 +442,7 @@ function ownsTurn(context: TurnContext): boolean {
 function cancelChat(adapter: BaseChannelAdapter, address: ChannelAddress): { running: boolean; dropped: number } {
   const state = getState();
   state.modelSelection?.invalidate(address);
+  invalidateUserInputRequests(address);
   const key = getChatTaskKey(address);
   state.chatGenerations.set(key, (state.chatGenerations.get(key) ?? 0) + 1);
   let retrying = false;
@@ -469,7 +470,6 @@ function cancelChat(adapter: BaseChannelAdapter, address: ChannelAddress): { run
   const active = getActiveTaskForChat(address);
   if (active && !active.abort.signal.aborted) {
     active.abort.abort();
-    clearUserInputRequests(active.sessionId);
     // 先提交旧卡终态，完成后仅清理仍归属于旧回合的 UI。
     const ending = adapter.onStreamEnd?.(address.chatId, 'interrupted', '');
     const endUi = () => {
@@ -1014,6 +1014,7 @@ export async function stop(): Promise<void> {
   state.running = false;
   state.runEpoch++;
   state.modelSelection?.invalidate();
+  invalidateUserInputRequests();
   const stopping = (async () => {
     for (const abort of state.loopAborts.values()) abort.abort();
     state.loopAborts.clear();
@@ -1131,14 +1132,16 @@ function runAdapterLoop(adapter: BaseChannelAdapter): void {
         if (
           msg.callbackData ||
           msg.userInputResponse ||
+          msg.userInputSupplementResponse ||
           msg.modelSelectionResponse ||
           isControlCommand(msg.text.trim()) ||
           isNumericPermissionShortcut(adapter.channelType, msg.text.trim(), msg.address.chatId)
         ) {
-          if (msg.modelSelectionResponse || /^\/(?:model|quota)(?:@\S+)?(?:\s|$)/i.test(msg.text.trim())) {
+          if (msg.modelSelectionResponse || msg.userInputResponse || msg.userInputSupplementResponse || /^\/(?:model|quota|answer)(?:@\S+)?(?:\s|$)/i.test(msg.text.trim())) {
             // 目录/额度查询和平台发送不阻塞控制消息；await 后复验各自归属。
             const task = handleMessage(adapter, msg).catch(err => {
-              if (/^\/quota(?:@\S+)?(?:\s|$)/i.test(msg.text.trim())) console.error('[bridge-manager] 额度命令处理失败。');
+              if (msg.userInputResponse || msg.userInputSupplementResponse || /^\/answer(?:\s|$)/.test(msg.text.trim())) console.error('[bridge-manager] 问答处理失败。');
+              else if (/^\/quota(?:@\S+)?(?:\s|$)/i.test(msg.text.trim())) console.error('[bridge-manager] 额度命令处理失败。');
               else console.error('[bridge-manager] 模型选择失败:', err);
             })
               .finally(() => state.taskPromises.delete(task));
@@ -1209,6 +1212,38 @@ async function handleMessage(
   };
   const ack = opts?.ack || defaultAck;
 
+  if (msg.userInputSupplementResponse || msg.userInputResponse) {
+    const response = msg.userInputSupplementResponse ?? msg.userInputResponse!;
+    const action = msg.userInputSupplementResponse ? 'supplement' : 'answer';
+    const state = getState(); const epoch = state.runEpoch;
+    const generation = state.chatGenerations.get(getChatTaskKey(msg.address)) ?? 0;
+    let feedback = action === 'answer' ? '回答无效或请求已过期，请检查问题与选项。' : '补充无效或问题已失效，请通过普通消息继续。';
+    let transferred = false;
+    let isFeedbackCurrent = () => state.running && state.runEpoch === epoch && generation === (state.chatGenerations.get(getChatTaskKey(msg.address)) ?? 0);
+    try {
+      await state.admissionGate.run(msg.address, () => {
+        if (!isFeedbackCurrent() || !adapter.isRunning()) return;
+        const prepared = prepareUserInputSupplement(msg.address, response, msg.callbackMessageId, action);
+        if (prepared.status === 'rpc') {
+          feedback = handleUserInputResponse(msg.address, response, msg.callbackMessageId) ? '回答已提交。' : '回答无效或请求已过期，请检查问题与选项。';
+          return;
+        }
+        if (prepared.status !== 'ready') {
+          if (prepared.status === 'unavailable') feedback = '当前已有其他回合，请通过普通消息继续；旧问题未作为补充发送。';
+          else if (action === 'answer' && isUserInputClosed(msg.address, response.requestId, msg.callbackMessageId)) feedback = '原问答已关闭，请使用卡片上的“作为任务补充发送”按钮。';
+          return;
+        }
+        isFeedbackCurrent = prepared.isCurrent;
+        const cleaned = sanitizeInput(prepared.text);
+        if (!cleaned.text || cleaned.truncated) { feedback = '原问题与答案合计过长，请缩短答案后重新提交。'; return; }
+        const regular: InboundMessage = { ...msg, text: cleaned.text, callbackData: undefined, callbackMessageId: undefined, userInputResponse: undefined, userInputSupplementResponse: undefined, modelSelectionResponse: undefined };
+        transferred = prepared.claim(() => enqueueRegularMessage(adapter, regular));
+      });
+      if (!transferred) await deliver(adapter, { address: msg.address, text: feedback, parseMode: 'plain' }, { isCurrent: isFeedbackCurrent });
+    } finally { if (!transferred) ack(); }
+    return;
+  }
+
   if (msg.modelSelectionResponse) {
     try {
       if ((store.getSetting('bridge_llm_backend') || '').toLowerCase() !== 'codex') throw new Error('当前桥接不是 Codex，模型卡已失效。');
@@ -1220,12 +1255,12 @@ async function handleMessage(
     return;
   }
 
-  if (msg.userInputResponse || /^\/answer(?:\s|$)/.test(msg.text.trim())) {
-    const handled = msg.userInputResponse
-      ? handleUserInputResponse(msg.address, msg.userInputResponse, msg.callbackMessageId)
-      : handleUserInputText(msg.address, msg.text.trim());
-    await deliver(adapter, { address: msg.address, text: handled ? '回答已提交。' : '回答无效或请求已过期，请检查问题与选项。', parseMode: 'plain' });
-    ack();
+  if (/^\/answer(?:\s|$)/.test(msg.text.trim())) {
+    const handled = handleUserInputText(msg.address, msg.text.trim());
+    const state = getState(); const epoch = state.runEpoch; const generation = state.chatGenerations.get(getChatTaskKey(msg.address)) ?? 0;
+    try {
+      await deliver(adapter, { address: msg.address, text: handled ? '回答已提交。' : '回答无效或请求已过期，请检查问题与选项。', parseMode: 'plain' }, { isCurrent: () => state.running && state.runEpoch === epoch && generation === (state.chatGenerations.get(getChatTaskKey(msg.address)) ?? 0) });
+    } finally { ack(); }
     return;
   }
 
@@ -1330,10 +1365,6 @@ async function handleMessage(
         return;
       }
       // pendingLinks.length === 0: no pending permissions, fall through as normal message
-    } else if (rawText !== normalized && /^[123]$/.test(rawText) === false) {
-      // Log when normalization changed the text — helps diagnose encoding issues
-      const codePoints = [...rawText].map(c => 'U+' + c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0'));
-      console.log(`[bridge-manager] Shortcut candidate raw codepoints: ${codePoints.join(' ')} → normalized: "${normalized}"`);
     }
   }
 
@@ -1424,6 +1455,8 @@ async function handleMessage(
   if (!admitted) { ack(); return; }
   const { context, binding, activeTask } = admitted;
   const isCurrent = () => ownsTurn(context) && getState().uiOwners.get(context.chatKey) === context.abort;
+  const isQuestionCurrent = () => ownsTurn(context);
+  let questionsCompletedNormally = false;
 
   // Notify adapter that message processing is starting (e.g., typing indicator)
   adapter.onMessageStart?.(msg.address.chatId);
@@ -1563,11 +1596,21 @@ async function handleMessage(
           getBridgeContext().permissions.resolvePendingPermission(request.requestId, { behavior: 'deny', message: '任务已取消' });
           return;
         }
-        await forwardUserInputRequest(adapter, msg.address, request, binding.codepilotSessionId, msg.messageId);
+        await forwardUserInputRequest(adapter, msg.address, request, binding.codepilotSessionId, msg.messageId, {
+          isCurrent: isQuestionCurrent,
+          allowSupplement: adapter.channelType === 'feishu' && activeTask.backend === 'codex' && Boolean(msg.address.userId),
+          canSupplement: () => {
+            const state = getState();
+            return state.running && adapter.isRunning() && ownsTurn(context)
+              && (store.getSetting('bridge_llm_backend') || 'claude').trim().toLowerCase() === 'codex'
+              && [...state.activeTasksByChat.values()].every(task => task.sessionId !== binding.codepilotSessionId || task.context.turnId === context.turnId);
+          },
+        });
       },
       onProgress: text => { if (isCurrent()) adapter.onProgress?.(msg.address.chatId, text); },
     });
-    clearUserInputRequests(binding.codepilotSessionId);
+    questionsCompletedNormally = !result.hasError;
+    clearUserInputRequests(binding.codepilotSessionId, { preserveClosed: questionsCompletedNormally, owner: isQuestionCurrent });
     if (!isCurrent()) return;
     const generatedImages = result.errorCode === 'abort' || result.errorCode === 'timeout' ? [] : result.generatedImages ?? [];
     const responseText = [
@@ -1729,7 +1772,7 @@ async function handleMessage(
       && entry.result.reason !== 'cancelled' && ownsTurn(context));
     const transferred = new Set(followUps);
     // Clean up preview state
-    clearUserInputRequests(binding.codepilotSessionId);
+    clearUserInputRequests(binding.codepilotSessionId, { preserveClosed: questionsCompletedNormally, owner: isQuestionCurrent });
     if (previewState) {
       if (previewState.throttleTimer) {
         clearTimeout(previewState.throttleTimer);

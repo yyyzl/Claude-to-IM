@@ -2,7 +2,7 @@
   "id": "feishu-reliability-files",
   "name": "feishu-reliability-files",
   "title": "飞书可靠性、即时追加与文件双向收发",
-  "description": "按现有桥接架构分别交付飞书 Codex 即时追加、跨重启入站去重和文件双向收发",
+  "description": "按现有桥接架构分别交付飞书 Codex 即时追加、异步问答、跨重启入站去重和文件双向收发",
   "status": "planning",
   "dev_type": "backend",
   "scope": "bridge-coordination",
@@ -21,10 +21,11 @@
   "children": [
     "10-13-feishu-inbound-dedup",
     "10-13-feishu-file-io",
-    "10-13-feishu-codex-live-append"
+    "10-13-feishu-codex-live-append",
+    "10-14-feishu-codex-async-questions"
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "即时追加已实施并通过独立检查、825项单测及类型/构建验证，本地提交与该子任务归档已获用户明确确认。父任务继续协调，去重和文件仍planning，文件入口仍待选择。按即时追加、去重、文件顺序独立验收。",
+  "notes": "即时追加已合入main并归档。问答S6经894单测/typecheck/build与第3轮真实问答、原卡追加验收，用户已授权本批提交推送，按既定三笔收尾并整合main。去重和文件仍planning，父任务继续协调。",
   "meta": {}
 }

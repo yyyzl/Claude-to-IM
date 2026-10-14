@@ -1,0 +1,9 @@
+{"file":".trellis/spec/backend/index.md","reason":"验证层范围"}
+{"file":".trellis/spec/backend/type-safety.md","reason":"共享类型消费者及边界校验"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"独立质量门禁与代码收敛"}
+{"file":".trellis/spec/backend/testing-guidelines.md","reason":"测试真实性及平台隔离"}
+{"file":".trellis/spec/backend/reliability-contracts.md","reason":"原归属、一次性来源、控制不阻塞及 unknown"}
+{"file":".trellis/spec/backend/integration-guidelines.md","reason":"原 RPC 与追加动作区分"}
+{"file":".trellis/tasks/10-14-feishu-codex-async-questions/research/upstream-protocol.md","reason":"核对最新协议事实，避免猜测超时"}
+{"file":".trellis/tasks/10-14-feishu-codex-async-questions/research/implementation-boundaries.md","reason":"审查闭合、正常完成与主动取消"}
+{"file":".trellis/tasks/10-14-feishu-codex-async-questions/research/live-native-async.md","reason":"真实联调原生async消息生产者、schema及答案通道、S5范围和回归证据"}

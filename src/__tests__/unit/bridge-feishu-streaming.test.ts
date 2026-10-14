@@ -1,12 +1,26 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { initBridgeContext } from '../../lib/bridge/context.js';
-import type { BridgeStore } from '../../lib/bridge/host.js';
+import type { BridgeStore, UserInputPhase, UserInputRequest } from '../../lib/bridge/host.js';
 import { FeishuAdapter } from '../../lib/bridge/adapters/feishu-adapter.js';
 import { buildPermissionButtonCard, buildUserInputCard } from '../../lib/bridge/markdown/feishu.js';
 
 type Request = { path?: Record<string, string>; data: Record<string, unknown> };
 type Response = { code: number; data?: Record<string, string> };
+type InputField = { name: unknown; maxLength: unknown };
+function inputs(value: unknown): InputField[] {
+  if (Array.isArray(value)) return value.flatMap(inputs);
+  if (!value || typeof value !== 'object') return [];
+  const node = value as Record<string, unknown>;
+  return node.tag === 'input' ? [{ name: node.name, maxLength: node.max_length }] : Object.values(node).flatMap(inputs);
+}
+function assertInputRange(fields: InputField[]): void {
+  assert.ok(fields.length > 0, '问答表单应包含输入框');
+  for (const field of fields) {
+    assert.ok(typeof field.maxLength === 'number' && Number.isInteger(field.maxLength)
+      && field.maxLength >= 1 && field.maxLength <= 1_000, `${String(field.name)} max_length应在1…1000内`);
+  }
+}
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((r) => { resolve = r; });
@@ -31,12 +45,95 @@ function fixture(settings: Record<string, string> = {}) {
     handleCardAction(event: unknown): Promise<unknown>;
     queue: unknown[];
   };
-  internal.restClient = { cardkit: { v1: { card: methods, cardElement: methods } }, im: { message: { create: methods.create, reply: methods.create } } };
+  internal.restClient = { cardkit: { v1: { card: methods, cardElement: methods } }, im: { message: { create: methods.create, reply: methods.create, patch: methods.update } } };
   return { adapter, internal, methods, calls };
 }
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 270));
 
 describe('飞书流式卡片协议', () => {
+  it('原生问答的自由/其他输入满足飞书1…1000上限，pending发送与closed更新均成功', async () => {
+    const { adapter, internal } = fixture();
+    const received: Array<{ kind: string; fields: InputField[] }> = [];
+    // 飞书 JSON 2.0 input 官方范围与真实11310收据的最小平台边界，不复制渲染逻辑。
+    const platform = (kind: string) => async (request: Request) => {
+      const fields = inputs(JSON.parse(String(request.data.content)));
+      received.push({ kind, fields });
+      try { assertInputRange(fields); }
+      catch { return { code: 11310, msg: 'max_length exceed the default maximum 1000' }; }
+      return { code: 0, data: { message_id: 'validated-card' } };
+    };
+    internal.restClient = { im: { message: { create: platform('create'), reply: platform('reply'), patch: platform('patch') } } };
+    const request: UserInputRequest = { requestId: 'platform-input-limit', isBlocking: false, answerChannel: 'message', questions: [
+      { id: 'choice', question: '报告格式', options: [{ label: '简短' }, { label: '详细' }], allowOther: true },
+      { id: 'free', question: '验收标记' },
+    ] };
+    const address = { channelType: 'feishu', chatId: 'chat' };
+    for (const replyTo of [undefined, 'original-user-message']) {
+      const sent = await adapter.sendUserInputRequest(address, request, replyTo);
+      assert.equal(sent.ok, true, '平台应接受pending原生问答卡的input范围');
+      assert.equal(sent.messageId, 'validated-card');
+    }
+    await adapter.updateUserInputRequest(address, 'validated-card', request, 'closed');
+    // 独立核对真实patch正文，不能仅凭void返回或字段名称推断closed格式有效。
+    for (const outbound of received) assertInputRange(outbound.fields);
+    const fields = [{ name: 'q0_other', maxLength: 1_000 }, { name: 'q1', maxLength: 1_000 }];
+    assert.deepEqual(received, [
+      { kind: 'create', fields },
+      { kind: 'reply', fields },
+      { kind: 'patch', fields },
+    ]);
+  });
+  it('input合同负面自检能抓closed超限，adapter不会吞掉patch的11310拒绝', async () => {
+    const { adapter, internal } = fixture();
+    const request: UserInputRequest = { requestId: 'closed-limit-self-check', answerChannel: 'message', questions: [
+      { id: 'choice', question: '报告格式', options: [{ label: '简短' }], allowOther: true }, { id: 'free', question: '验收标记' },
+    ] };
+    const closed = JSON.parse(buildUserInputCard(request, 'closed'));
+    assertInputRange(inputs(closed));
+    // 仅改变测试fixture，验证边界确实拒绝旧4000配置；不改生产制造RED。
+    for (const name of ['q0_other', 'q1']) {
+      const invalid = structuredClone(closed);
+      const field = invalid.body.elements[0].elements.find((element: { name?: string }) => element.name === name);
+      assert.ok(field);
+      field.max_length = 4_000;
+      assert.throws(() => assertInputRange(inputs(invalid)), /max_length应在1…1000内/);
+    }
+    internal.restClient = { im: { message: { patch: async () => ({ code: 11310, msg: 'max_length exceed the default maximum 1000' }) } } };
+    await assert.rejects(adapter.updateUserInputRequest({ channelType: 'feishu', chatId: 'chat' }, 'closed-card', request, 'closed'), /FeishuError\(11310\)/);
+  });
+  it('原生消息题明确说明答案作为当前任务补充，选择与自由输入仍在同卡', () => {
+    const content = buildUserInputCard({ requestId: 'native-card', isBlocking: false, answerChannel: 'message', questions: [
+      { id: 'q0', question: '选择', options: [{ label: 'A' }], allowOther: true }, { id: 'q1', question: '标记' },
+    ] });
+    assert.match(content, /回答会作为当前任务补充/);
+    const form = JSON.parse(content).body.elements[0];
+    assert.ok(form.elements.some((e: { tag: string }) => e.tag === 'select_static'));
+    assert.ok(form.elements.some((e: { name: string }) => e.name === 'q0_other'));
+    assert.ok(form.elements.some((e: { name: string }) => e.name === 'q1'));
+  });
+  it('非阻塞问题说明继续工作，closed 保留原生表单并显式补充，终态移除入口', async () => {
+    const { adapter, internal, calls } = fixture();
+    const request = { requestId: 'async-form', isBlocking: false, questions: [
+      { id: 'choice', question: '原选择', options: [{ label: 'A' }] }, { id: 'free', question: '原输入' },
+    ] };
+    assert.match(buildUserInputCard(request), /继续工作/);
+    assert.match(buildUserInputCard({ ...request, isBlocking: true }), /等待/);
+    for (const phase of ['closed', 'answered', 'supplemented', 'expired', 'cancelled', 'failed'] as UserInputPhase[]) {
+      await adapter.updateUserInputRequest!({ channelType: 'feishu', chatId: 'chat' }, 'original-card', request, phase);
+      const card = JSON.parse(String(calls.at(-1)!.request.data.content));
+      const form = card.body?.elements.find((element: { tag: string }) => element.tag === 'form');
+      if (phase !== 'closed') { assert.equal(form, undefined); continue; }
+      assert.ok(form.elements.some((e: { tag: string }) => e.tag === 'select_static'));
+      assert.ok(form.elements.some((e: { tag: string }) => e.tag === 'input'));
+      const button = form.elements.find((e: { tag: string }) => e.tag === 'button');
+      assert.equal(button.text.content, '作为任务补充发送');
+      await internal.handleCardAction({ action: { value: { ...button.behaviors[0].value, chatId: 'forged', sessionId: 'forged', question: 'forged' }, form_value: { q0: 'A', q1: '答案' } }, context: { open_chat_id: 'chat', open_message_id: 'original-card' }, operator: { open_id: 'user' } });
+      const message = internal.queue[0] as { address: { chatId: string }; callbackMessageId: string; userInputResponse?: unknown; userInputSupplementResponse: { requestId: string; answers: Record<string, string[]> } };
+      assert.equal(message.address.chatId, 'chat'); assert.equal(message.callbackMessageId, 'original-card');
+      assert.equal(message.userInputResponse, undefined);
+      assert.deepEqual({ ...message.userInputSupplementResponse.answers }, { choice: ['A'], free: ['答案'] });
+    }
+  });
   it('等待正在发送的正文完成，进入收尾后不再调度旧内容', async () => {
     const { adapter, internal, methods, calls } = fixture();
     await internal.createStreamingCard('chat');
@@ -149,6 +246,19 @@ describe('飞书流式卡片协议', () => {
     assert.equal(calls.length, 0);
     assert.doesNotMatch(buildPermissionButtonCard('授权', 'p'), /5 minutes|5 分钟/);
     assert.match(buildUserInputCard({ requestId: 'r', questions: [{ id: 'free', question: '内容' }] }), /form_action_type/);
+  });
+
+  it('任意问题 ID 在补充表单真实回调中保留为自有答案字段', async () => {
+    const { internal } = fixture();
+    const request = { requestId: 'prototype-form', questions: [{ id: '__proto__', question: '原题' }, { id: 'constructor', question: '另一原题' }] };
+    const card = JSON.parse(buildUserInputCard(request, 'closed'));
+    const button = card.body.elements[0].elements.find((e: { tag: string }) => e.tag === 'button');
+    await internal.handleCardAction({ action: { value: button.behaviors[0].value, form_value: { q0: '内容', q1: '要求' } }, context: { open_chat_id: 'chat', open_message_id: 'original-message' }, operator: { open_id: 'user' } });
+    const message = internal.queue[0] as { userInputSupplementResponse: { answers: Record<string, string[]> } };
+    assert.deepEqual(Object.keys(message.userInputSupplementResponse.answers), ['__proto__', 'constructor']);
+    assert.equal(Object.hasOwn(message.userInputSupplementResponse.answers, '__proto__'), true);
+    assert.deepEqual(message.userInputSupplementResponse.answers.__proto__, ['内容']);
+    assert.deepEqual(message.userInputSupplementResponse.answers.constructor, ['要求']);
   });
 
   it('超长回答结束流式但返回 false，交由核心投递全部内容', async () => {

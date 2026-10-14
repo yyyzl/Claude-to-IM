@@ -1,5 +1,5 @@
 import type { ModelSelectionResponse, ModelSelectionView, ToolCallInfo } from '../types.js';
-import type { UserInputRequest } from '../host.js';
+import type { UserInputRequest, UserInputPhase } from '../host.js';
 import { findFastServiceTier } from '../internal/model-capabilities.js';
 
 /**
@@ -410,8 +410,16 @@ export function buildPermissionButtonCard(
 }
 
 /** JSON 2.0 原生表单：用户一次提交全部问题，答案只经回调回传。 */
-export function buildUserInputCard(request: UserInputRequest): string {
+export function buildUserInputCard(request: UserInputRequest, phase: UserInputPhase = 'pending'): string {
+  if (phase !== 'pending' && phase !== 'closed') {
+    const labels = { answered: '✅ 答案已提交', supplemented: '✓ 已作为任务补充接收', expired: '⌛ 问答已过期', cancelled: '⛔ 问答已取消', failed: '❌ 问答投递失败' };
+    return buildCardContent(labels[phase]);
+  }
   const elements: Array<Record<string, unknown>> = [];
+  elements.push({ tag: 'markdown', content: phase === 'closed'
+    ? '原问答已关闭，提交后将作为任务补充。'
+    : request.answerChannel === 'message' ? 'Codex 正在继续工作，回答会作为当前任务补充。'
+      : request.isBlocking === false ? 'Codex 正在继续工作，你可以提交回答。' : '正在等待你的回答。' });
   const fields: Record<string, string> = {};
   const multiSelectFields: string[] = [];
   request.questions.forEach((question, index) => {
@@ -429,19 +437,19 @@ export function buildUserInputCard(request: UserInputRequest): string {
       });
       const descriptions = question.options.filter(option => option.description).map(option => `**${option.label}**：${option.description}`);
       if (descriptions.length) elements.push({ tag: 'markdown', content: descriptions.join('\n'), text_size: 'notation' });
-      if (question.allowOther) elements.push({ tag: 'input', name: `${name}_other`, placeholder: { tag: 'plain_text', content: '其他答案（选填）' }, width: 'fill', max_length: 4_000 });
+      if (question.allowOther) elements.push({ tag: 'input', name: `${name}_other`, placeholder: { tag: 'plain_text', content: '其他答案（选填）' }, width: 'fill', max_length: 1_000 });
     } else {
-      elements.push({ tag: 'input', name, required: true, placeholder: { tag: 'plain_text', content: '请输入答案' }, width: 'fill', max_length: 4_000 });
+      elements.push({ tag: 'input', name, required: true, placeholder: { tag: 'plain_text', content: '请输入答案' }, width: 'fill', max_length: 1_000 });
     }
   });
   elements.push({
-    tag: 'button', name: 'submit_answers', type: 'primary', text: { tag: 'plain_text', content: '提交答案' },
+    tag: 'button', name: 'submit_answers', type: 'primary', text: { tag: 'plain_text', content: phase === 'closed' ? '作为任务补充发送' : '提交答案' },
     form_action_type: 'submit',
-    behaviors: [{ type: 'callback', value: { user_input_request_id: request.requestId, fields, multi_select_fields: multiSelectFields } }],
+    behaviors: [{ type: 'callback', value: { [phase === 'closed' ? 'user_input_supplement_request_id' : 'user_input_request_id']: request.requestId, fields, multi_select_fields: multiSelectFields } }],
   });
   return JSON.stringify({
     schema: '2.0', config: { wide_screen_mode: true },
-    header: { title: { tag: 'plain_text', content: '需要你的选择' }, template: 'blue' },
+    header: { title: { tag: 'plain_text', content: phase === 'closed' ? '补充此前问题' : '需要你的回答' }, template: 'blue' },
     body: { elements: [{ tag: 'form', name: 'answers', elements }] },
   });
 }

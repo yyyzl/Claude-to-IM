@@ -26,7 +26,7 @@ import type {
   ModelSelectionResponse,
   ModelSelectionView,
 } from '../types.js';
-import type { GeneratedImage, UserInputRequest } from '../host.js';
+import type { GeneratedImage, UserInputRequest, UserInputPhase } from '../host.js';
 import type { ImageUploadResult } from '../channel-adapter.js';
 import { decodeGeneratedImage } from '../internal/generated-image.js';
 import type { FileAttachment } from '../types.js';
@@ -600,7 +600,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
       address: { channelType: 'feishu', chatId, userId },
       text: '', timestamp: Date.now(), callbackMessageId: messageId,
     };
-    const requestId = pickString(value?.user_input_request_id);
+    const supplementId = pickString(value?.user_input_supplement_request_id);
+    const answerId = pickString(value?.user_input_request_id);
+    if (supplementId && answerId) return { toast: { type: 'error', content: '问答操作无效。' } };
+    const requestId = supplementId ?? answerId;
     if (value && 'model_selection_request_id' in value) {
       const response = parseModelSelectionResponse(value, action?.form_value);
       if (!response) return { toast: { type: 'error', content: '模型设置表单无效，请重新打开 /model。' } };
@@ -628,7 +631,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
           ? multiSelect ? [...selected, other.trim()] : [other.trim()]
           : selected;
       }
-      callbackMsg.userInputResponse = { requestId, answers };
+      if (supplementId) callbackMsg.userInputSupplementResponse = { requestId, answers };
+      else callbackMsg.userInputResponse = { requestId, answers };
     } else {
       const callbackData = pickString(value?.callback_data);
       if (!callbackData || !/^(perm|workflow):/.test(callbackData)) return { toast: { type: 'error', content: '不支持的卡片操作。' } };
@@ -1098,6 +1102,13 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (!this.restClient) throw new Error('Feishu client not initialized');
     const labels = { allowed: '✅ 已允许', denied: '⛔ 已拒绝或取消', expired: '⌛ 请求已过期', failed: '❌ 请求投递失败，已拒绝', answered: '✅ 答案已提交' };
     assertFeishuSuccess(await this.restClient.im.message.patch({ path: { message_id: messageId }, data: { content: buildCardContent(labels[status]) } }));
+  }
+
+  async updateUserInputRequest(_address: ChannelAddress, messageId: string, request: UserInputRequest, phase: UserInputPhase): Promise<void> {
+    if (!this.restClient) throw new Error('Feishu client not initialized');
+    const content = buildUserInputCard(request, phase);
+    if (Buffer.byteLength(content, 'utf8') > MAX_CARD_BYTES) throw new Error('问答卡片超过大小限制');
+    assertFeishuSuccess(await this.restClient.im.message.patch({ path: { message_id: messageId }, data: { content } }));
   }
 
   async onStreamEnd(
