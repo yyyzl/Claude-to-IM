@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/reliability-contracts.md","reason":"复核图文确认、取消迟到与补发语义"}
+{"file":".trellis/spec/backend/inline-image-delivery.md","reason":"新增正文PNG准入、快照、同卡确认及补发合同"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"变更范围与质量检查"}
+{"file":".trellis/spec/backend/testing-guidelines.md","reason":"回归覆盖与60秒单测批次限制"}
+{"file":".trellis/tasks/10-14-feishu-inline-images/research/diagnosis.md","reason":"防止偏离当前截图的具体根因或误改原生生图路径"}

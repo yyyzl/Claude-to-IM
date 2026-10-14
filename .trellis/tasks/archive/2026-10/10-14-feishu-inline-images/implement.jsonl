@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/module-boundaries.md","reason":"图文解析、投递、平台与宿主契约职责边界"}
+{"file":".trellis/spec/backend/reliability-contracts.md","reason":"持久投递、生成图、取消、重试与完成卡确认"}
+{"file":".trellis/spec/backend/type-safety.md","reason":"新增正文内嵌媒体合同与恢复校验"}
+{"file":".trellis/spec/backend/testing-guidelines.md","reason":"fake平台与合成媒体回归"}
+{"file":".trellis/tasks/10-14-feishu-inline-images/research/diagnosis.md","reason":"真实截图对应正文及本地路径原样进入卡片的根因证据"}
