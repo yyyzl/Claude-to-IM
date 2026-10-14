@@ -1,0 +1,31 @@
+{
+  "id": "feishu-codex-live-append",
+  "name": "feishu-codex-live-append",
+  "title": "飞书 Codex 即时追加复用当前卡片",
+  "description": "将运行中追加补充接入原 Codex 回合并复用原飞书卡片，处理结束竞态与取消归属",
+  "status": "in_progress",
+  "dev_type": "backend",
+  "scope": "bridge-append",
+  "package": null,
+  "priority": "P1",
+  "creator": "yyyzl",
+  "assignee": "yyyzl",
+  "createdAt": "2026-10-13",
+  "completedAt": null,
+  "branch": "feat/feishu-codex-live-append",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "10-13-feishu-reliability-files",
+  "relatedFiles": [
+    "src/lib/bridge/host.ts",
+    "src/lib/bridge/conversation-engine.ts",
+    "src/lib/bridge/bridge-manager.ts",
+    "scripts/claude-to-im-bridge/codex-llm.ts"
+  ],
+  "notes": "2026-10-14 用户明确批准实施，并随后以“行”确认两笔本地提交及当前子任务归档。原 Codex 回合即时文本补充及原卡复用已实现，独立检查修复收尾吞掉结果提示的竞态。最终825/825单测、typecheck/build和完整范围核对通过；CRITICAL已告知。桥接未重启，真实飞书联调待用户验证。",
+  "meta": {}
+}

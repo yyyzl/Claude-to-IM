@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "遵循现有核心、宿主、测试布局"}
+{"file": ".trellis/spec/backend/module-boundaries.md", "reason": "manager、engine、provider 的最小职责边界"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "输入能力结果与 RPC 响应白名单校验"}
+{"file": ".trellis/spec/backend/reliability-contracts.md", "reason": "取消、消息归属、源消息确认和未知结果不自动重送"}
+{"file": ".trellis/spec/backend/testing-guidelines.md", "reason": "内存模型和平台、禁止真实调用、60秒测试硬限"}
+{"file": ".trellis/spec/backend/integration-guidelines.md", "reason": "可选宿主契约与每次 stream 的能力接线"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "接收补充、历史记录和最终卡片的完整链路"}
+{"file": ".trellis/tasks/10-13-feishu-reliability-files/research/live-append.md", "reason": "固定协议、就绪和终态竞态、影响分析及最小验证矩阵"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "独立范围、文档同步、类型与构建核验"}
