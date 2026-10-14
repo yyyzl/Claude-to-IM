@@ -7,7 +7,7 @@
 ## 2. 接口
 
 - `processWithSessionLock(..., signal?: AbortSignal)`：信号取消尚未开始的排队任务；已运行任务由自己的取消上下文结束。
-- `deliverResponse(adapter, address, responseText, sessionId, replyToMessageId?, options?)`：统一生成响应分块、保存待发记录和投递；`options` 可携带 `turnId / isCurrent / finalize / images`。
+- `deliverResponse(adapter, address, responseText, sessionId, replyToMessageId?, options?)`：统一生成响应分块、保存待发记录和投递；`options` 可携带 `turnId / isCurrent / finalize / images / workingDirectory`。`finalize(preparedText)` 仅确认实际转换后的完整正文；飞书正文媒体见 [正文图片交付合同](./inline-image-delivery.md)。
 - `retryResponseDelivery(adapter, address, id?, { isCurrent }?)`：只重投已有记录的未送达块，不调用模型；有效性谓词在每个后续分块与发送重试前检查。
 - `deliver(adapter, message, { isCurrent }?)`：普通文本投递可选归属检查，覆盖开始、后续分块与重试；已进入平台的发送不能撤回。账号额度查询的异步调度及 epoch 合同见 [账号额度合同](./codex-account-quota.md)。
 - `BridgeStore.saveResponseDelivery/getResponseDelivery/listResponseDeliveries/flush`：四项共同形成可选的持久待发能力；`close()` 用于停机。
@@ -109,9 +109,9 @@ Codex 生成图仅来自精确匹配当前 thread/turn 的 `item/completed.image
 
 生成图片通过独立事件进入会话结果，禁止 Base64 进入普通正文、工具日志或原始 SDK 错误日志。共享校验先限制编码长度，再检查标准 Base64、PNG 最小结构及 IHDR 尺寸；每图最多 10_000_000 字节、宽高 1…12000，每回合最多 8 张、合计 30_000_000 字节。无效或超限须给用户可见说明，保留已接受内容。
 
-回合结束且归属有效后建立单条图文 outbox，文字在前、图片按生成顺序。记录先 save + flush，再上传；图片上传得到 imageKey 后先保存并 flush，再检查归属，使用持久 sendUuid 发送图片消息；成功进度必须在后续取消检查前落盘。重试复用 imageKey/sendUuid，不重新生成图片。建立 outbox 前不承诺内存产物的崩溃恢复。
+回合结束且归属有效后建立单条图文 outbox，原生独立图片仍按文字在前、图片按生成顺序；正文明确引用的本地 PNG 在对应位置交付，详见 [正文图片交付合同](./inline-image-delivery.md)。记录先 save + flush，再上传；图片上传得到 imageKey 后先保存并 flush，再检查归属，使用持久 sendUuid 发送图片消息；成功进度必须在后续取消检查前落盘。重试复用 imageKey/sendUuid，不重新生成图片。建立 outbox 前不承诺内存产物的崩溃恢复。
 
-流卡 finalize 只确认文字块送达，随后继续图片；纯图片也必须收尾原卡。图片不得进入文字/卡片降级路径，其他渠道默认明确不支持。上传与发送分离，上传迟到不得自动触发发送；超时保持结果未知语义，不能虚报成功。旧无 kind 的文本块继续按文本加载，混合记录须严格校验，成功后清除图片数据。
+原生独立图片场景中，流卡 finalize 只确认文字块送达，随后继续图片；纯图片也必须收尾原卡。正文内嵌图文块则按 [正文图片交付合同](./inline-image-delivery.md) 整体确认。图片不得进入文字/卡片降级路径，其他渠道默认明确不支持。上传与发送分离，上传迟到不得自动触发发送；超时保持结果未知语义，不能虚报成功。旧无 kind 的文本块继续按文本加载，混合记录须严格校验，成功后清除图片数据。
 
 飞书 SDK 的 image.create 返回扁平 image_key；message.create 须同时检查平台成功与 message_id。SDK logger 仅输出固定类别与安全数值状态码，不传递原始错误、请求配置、Buffer 或 Base64。Codex 服务端失败和 JSON 语法错误同样不得透传原始异常文本或 cause 链；保留固定错误类别和主存储/备份角色，避免错误信息回显媒体内容。
 

@@ -1,7 +1,7 @@
 /** 最终回答待发记录：发送前持久化，补发只处理未确认成功的分块。 */
 import { createHash, randomUUID } from 'node:crypto';
 import type { BaseChannelAdapter, ImageUploadResult } from './channel-adapter.js';
-import type { BridgeStore, GeneratedImage, ResponseDeliveryRecord } from './host.js';
+import type { BridgeStore, GeneratedImage, InlineResponseImage, ResponseDeliveryRecord } from './host.js';
 import type { ChannelAddress, SendResult } from './types.js';
 import { getBridgeContext } from './context.js';
 import { deliverSingle } from './delivery-layer.js';
@@ -10,10 +10,11 @@ import { markdownToDiscordChunks } from './markdown/discord.js';
 import { splitFeishuMarkdown } from './markdown/feishu.js';
 import { PLATFORM_LIMITS } from './types.js';
 import { validateGeneratedImage, checkGeneratedImageBudget } from './internal/generated-image.js';
+import { snapshotInlineImages, renderInlineImages, markdownImageSpans } from './internal/inline-images.js';
 
 const memory = new WeakMap<BridgeStore, Map<string, ResponseDeliveryRecord>>();
 const running = new Set<string>();
-type Options = { turnId?: string; isCurrent?: () => boolean; finalize?: () => Promise<boolean>; images?: GeneratedImage[] };
+type Options = { turnId?: string; isCurrent?: () => boolean; finalize?: (preparedText: string) => Promise<boolean>; images?: GeneratedImage[]; workingDirectory?: string };
 function records(store: BridgeStore): Map<string, ResponseDeliveryRecord> {
   let rows = memory.get(store); if (!rows) { rows = new Map(); memory.set(store, rows); } return rows;
 }
@@ -64,6 +65,66 @@ async function finalizeWithinDeadline(store: BridgeStore, finalize: () => Promis
     ]);
   } finally { if (timer) clearTimeout(timer); }
 }
+
+/** 图片上传检查点在整段发送之前保存；重复引用复用已保存 key。 */
+class InlineImageUploadError extends Error {}
+async function prepareInlineImages(adapter: BaseChannelAdapter, store: BridgeStore, record: ResponseDeliveryRecord, options: Options): Promise<void> {
+  const uploaded = new Map<string, string>();
+  for (const chunk of record.chunks) if (chunk.kind !== 'image') for (const item of chunk.inlineImages ?? []) if (item.imageKey) uploaded.set(item.image.id, item.imageKey);
+  for (const chunk of record.chunks) {
+    if (chunk.kind === 'image' || chunk.sent) continue;
+    for (const item of chunk.inlineImages ?? []) {
+      checkCurrent(options);
+      if (item.imageKey) continue;
+      const key = uploaded.get(item.image.id);
+      if (key) { item.imageKey = key; await save(store, record); continue; }
+      const result = await uploadWithinDeadline(adapter, store, item.image);
+      if (!result.ok || !result.imageKey?.trim() || result.imageKey.length > 2048 || /[\s()<>]/.test(result.imageKey)) throw new InlineImageUploadError(result.error || '图片上传未返回有效标识，尚未发送');
+      item.imageKey = result.imageKey; uploaded.set(item.image.id, result.imageKey);
+      await save(store, record);
+      checkCurrent(options);
+    }
+  }
+}
+
+/** 上传失败时仍展示正文；说明预览不构成完整图文的确认。 */
+async function showInlinePreview(adapter: BaseChannelAdapter, store: BridgeStore, record: ResponseDeliveryRecord, options: Options): Promise<void> {
+  checkCurrent(options);
+  if (options.finalize && record.chunks.every(chunk => !chunk.sent)) {
+    const inlineImages = record.chunks.flatMap(chunk => chunk.kind === 'image' ? [] : chunk.inlineImages ?? []);
+    const preview = renderInlineImages(record.responseText, inlineImages, true);
+    const finalized = await finalizeWithinDeadline(store, () => options.finalize!(preview));
+    checkCurrent(options);
+    // 收尾的是待补发说明，不是完整图文；不确认正文块或清除媒体快照。
+    if (finalized) return;
+  }
+  for (const chunk of record.chunks) {
+    if (chunk.kind === 'image' || chunk.sent) continue;
+    const text = renderInlineImages(chunk.text, chunk.inlineImages ?? [], true);
+    for (const part of splitFeishuMarkdown(text)) {
+      checkCurrent(options);
+      const result = await deliverSingle(adapter, { address: record.address, text: part, parseMode: 'Markdown', replyToMessageId: record.replyToMessageId }, undefined, options.isCurrent);
+      if (!result.ok) return;
+    }
+  }
+}
+
+/** 以真实 image_key 的最终封装预算分块，分块快照标记随之指向已保存 key。 */
+function splitInlineChunks(record: ResponseDeliveryRecord): void {
+  record.chunks = record.chunks.flatMap(chunk => {
+    if (chunk.kind === 'image' || chunk.sent || !chunk.inlineImages?.length) return [chunk];
+    const prepared = renderInlineImages(chunk.text, chunk.inlineImages);
+    return splitFeishuMarkdown(prepared).map(part => {
+      const sources = new Set(markdownImageSpans(part).map(span => span.source));
+      const inline: InlineResponseImage[] = [];
+      for (const item of chunk.inlineImages ?? []) {
+        if (item.imageKey && sources.has(item.imageKey) && !inline.some(value => value.marker === item.imageKey)) inline.push({ ...structuredClone(item), marker: item.imageKey });
+      }
+      return { ...chunk, text: part, inlineImages: inline.length ? inline : undefined };
+    });
+  });
+}
+
 async function attempt(adapter: BaseChannelAdapter, store: BridgeStore, record: ResponseDeliveryRecord, options: Options = {}): Promise<SendResult> {
   const key = `${record.address.channelType}:${record.address.chatId}:${record.id}`;
   if (running.has(key)) return { ok: false, error: `回答 ${record.id} 正在发送，请勿重复补发` };
@@ -75,12 +136,26 @@ async function attempt(adapter: BaseChannelAdapter, store: BridgeStore, record: 
     record.status = 'pending'; record.attempts++; record.lastError = undefined;
     await save(store, record);
     checkCurrent(options);
+    try { await prepareInlineImages(adapter, store, record, options); }
+    catch (error) {
+      if (error instanceof InlineImageUploadError && (!options.isCurrent || options.isCurrent())) {
+        try { await showInlinePreview(adapter, store, record, options); } catch { /* 预览失败仍保留原上传错误和未确认进度。 */ }
+      }
+      throw error;
+    }
     if (options.finalize && record.chunks.every(chunk => !chunk.sent)) {
-      const finalized = await finalizeWithinDeadline(store, options.finalize);
+      const inlineImages = record.chunks.flatMap(chunk => chunk.kind === 'image' ? [] : chunk.inlineImages ?? []);
+      const prepared = renderInlineImages(record.responseText, inlineImages);
+      const finalized = await finalizeWithinDeadline(store, () => options.finalize!(prepared));
       if (finalized) {
         for (const chunk of record.chunks) if (chunk.kind !== 'image') chunk.sent = true;
         await save(store, record);
       }
+      checkCurrent(options);
+    }
+    if (record.chunks.some(chunk => chunk.kind !== 'image' && !chunk.sent && chunk.inlineImages?.length)) {
+      splitInlineChunks(record);
+      await save(store, record);
       checkCurrent(options);
     }
     for (const chunk of record.chunks) {
@@ -100,7 +175,8 @@ async function attempt(adapter: BaseChannelAdapter, store: BridgeStore, record: 
           image: { imageKey: chunk.imageKey, sendUuid: chunk.sendUuid },
         }, undefined, options.isCurrent);
       } else {
-        result = await deliverSingle(adapter, { address: record.address, text: chunk.text, parseMode: chunk.parseMode, replyToMessageId: record.replyToMessageId }, chunk.plainFallback, options.isCurrent);
+        const prepared = renderInlineImages(chunk.text, chunk.inlineImages ?? []);
+        result = await deliverSingle(adapter, { address: record.address, text: prepared, parseMode: chunk.parseMode, replyToMessageId: record.replyToMessageId }, chunk.plainFallback, options.isCurrent);
       }
       if (!result.ok) throw new Error(result.error || '回答发送失败');
       chunk.sent = true; chunk.messageId = result.messageId; lastMessageId = result.messageId;
@@ -140,13 +216,20 @@ export async function deliverResponse(adapter: BaseChannelAdapter, address: Chan
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : '生成图片记录无效' };
   }
+  let inline: { text: string; images: InlineResponseImage[] } = { text: responseText, images: [] };
+  try {
+    checkCurrent(options);
+    if (adapter.channelType === 'feishu') inline = await snapshotInlineImages(responseText, options.workingDirectory, { count: images.size, bytes: totalBytes, images: [...images.values()] });
+    for (const [id, image] of images) if (inline.images.some(item => item.image.sha256 === image.sha256)) images.delete(id);
+    checkCurrent(options);
+  } catch (error) { return { ok: false, error: error instanceof Error ? error.message : '正文图片准备失败' }; }
   const identity = options.turnId || replyToMessageId || randomUUID();
-  const imageIdentity = [...images.values()].map(image => [image.id, image.sha256]);
+  const imageIdentity = [...images.values(), ...inline.images.map(item => item.image)].map(image => [image.id, image.sha256]);
   const id = createHash('sha256').update(JSON.stringify([address.channelType, address.chatId, sessionId, identity, responseText, ...imageIdentity])).digest('hex').slice(0, 20);
   const existing = list(store, address).find(record => record.id === id);
   const now = new Date().toISOString();
-  const record: ResponseDeliveryRecord = existing ?? { id, sessionId, address: { ...address }, responseText, replyToMessageId, chunks: [
-    ...chunks(adapter.channelType, responseText),
+  const record: ResponseDeliveryRecord = existing ?? { id, sessionId, address: { ...address }, responseText: inline.text, replyToMessageId, chunks: [
+    ...(inline.images.length ? [{ kind: 'text' as const, text: inline.text, parseMode: 'Markdown' as const, inlineImages: inline.images, sent: false }] : chunks(adapter.channelType, inline.text)),
     ...[...images.values()].map(image => ({ kind: 'image' as const, image, sendUuid: randomUUID(), sent: false })),
   ], status: 'pending', attempts: 0, createdAt: now, updatedAt: now };
   return attempt(adapter, store, record, options);

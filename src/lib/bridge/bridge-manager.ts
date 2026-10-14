@@ -31,6 +31,7 @@ import { clearUserInputRequests, forwardUserInputRequest, handleUserInputRespons
 import { deliver, deliverSingle } from './delivery-layer.js';
 import { deliverResponse, retryResponseDelivery, getResponseDeliveryStatus } from './response-delivery.js';
 import { abortable, settleWithin } from './internal/abort.js';
+import { describePendingInlineImages } from './internal/inline-images.js';
 import { getBridgeContext } from './context.js';
 import { ChatAdmissionGate, ModelSelectionCoordinator, describeModelPreferences } from './internal/model-selection.js';
 import { escapeHtml } from './adapters/telegram-utils.js';
@@ -1536,7 +1537,7 @@ async function handleMessage(
 
   const onStreamCardText = hasStreamingCards ? (fullText: string) => {
     if (!isCurrent()) return;
-    try { adapter.onStreamText!(msg.address.chatId, fullText); } catch { /* non-critical */ }
+    try { adapter.onStreamText!(msg.address.chatId, adapter.channelType === 'feishu' ? describePendingInlineImages(fullText) : fullText); } catch { /* non-critical */ }
   } : undefined;
 
   const onToolEvent = (toolId: string, toolName: string, status: 'running' | 'complete' | 'error') => {
@@ -1691,14 +1692,14 @@ async function handleMessage(
     // Finalize streaming card if adapter supports it.
     // onStreamEnd awaits any in-flight card creation and returns true if a card
     // was actually finalized (meaning content is already visible to the user).
-    const finalize = async () => {
+    const finalize = async (preparedText = responseText) => {
       if (!isCurrent()) return false;
       if (hasStreamingCards && adapter.onStreamEnd) {
         const status = result.errorCode === 'abort' ? 'interrupted' : result.hasError ? 'error' : 'completed';
         return adapter.onStreamEnd(
           msg.address.chatId,
           status,
-          responseText,
+          preparedText,
           ctxFooter ? { ctx: ctxFooter } : undefined,
         );
       }
@@ -1716,7 +1717,7 @@ async function handleMessage(
     // 图文进入同一待发记录；流卡仅确认文字，纯图也必须走持久投递。
     if (hasOutput) {
       const sent = await abortable(deliverResponse(adapter, msg.address, responseText, binding.codepilotSessionId, msg.messageId, {
-        turnId: context.turnId, isCurrent, finalize, images: generatedImages,
+        turnId: context.turnId, isCurrent, finalize, images: generatedImages, workingDirectory: binding.workingDirectory,
       }), taskAbort.signal);
       if (!sent.ok && isCurrent()) {
         console.warn('[bridge-manager] 回答未送达，可通过 /retry 重投已有回答。');

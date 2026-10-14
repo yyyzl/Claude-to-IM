@@ -111,3 +111,24 @@ test('损坏JSON的错误cause不回显原始图片数据', t => {
   assert.ok(!inspect(failure).includes(PNG.slice(0, 8)), '错误cause不能回显媒体片段');
   assert.equal(fs.readFileSync(file, 'utf8'), PNG);
 });
+
+for (const damage of ['marker', 'key', 'image', 'progress', 'kind', 'duplicate', 'code-reference'] as const) {
+  test(`正文图片持久快照严格拒绝损坏 ${damage}`, () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-inline-store-'));
+    const file = path.join(root, 'store.json');
+    const item: Record<string, unknown> = { marker: 'bridge-inline-fixture', image, imageKey: 'img_fixture' };
+    const chunk: Record<string, unknown> = { kind: 'text', text: '![图](bridge-inline-fixture)', parseMode: 'Markdown', inlineImages: [item], sent: false };
+    if (damage === 'marker') item.marker = 'another-marker';
+    if (damage === 'key') item.imageKey = 'bad)key';
+    if (damage === 'image') item.image = { ...image, sha256: 'bad' };
+    if (damage === 'progress') { chunk.sent = true; item.imageKey = undefined; }
+    if (damage === 'kind') chunk.parseMode = 'plain';
+    if (damage === 'duplicate') chunk.inlineImages = [item, structuredClone(item)];
+    if (damage === 'code-reference') chunk.text = '`![图](bridge-inline-fixture)`';
+    const row = { ...record(), chunks: [chunk] };
+    const payload = JSON.stringify({ sessions: {}, bindings: {}, messages: {}, channelOffsets: {}, responseDeliveries: { [row.id]: row } });
+    fs.writeFileSync(file, payload);
+    assert.throws(() => new JsonFileBridgeStore({ projectRoot: root, dataPath: file }), /存储|persist|corrupt/i);
+    assert.equal(fs.readFileSync(file, 'utf8'), payload);
+  });
+}

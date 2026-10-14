@@ -4,8 +4,11 @@ import childProcess from 'node:child_process';
 import net from 'node:net';
 import { syncBuiltinESMExports } from 'node:module';
 import { setTimeout as delay } from 'node:timers/promises';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { initBridgeContext, getBridgeContext } from '../../lib/bridge/context.js';
-import type { BridgeSession, BridgeStore } from '../../lib/bridge/host.js';
+import type { BridgeSession, BridgeStore, ResponseDeliveryRecord } from '../../lib/bridge/host.js';
 import type { ChannelBinding, InboundMessage, OutboundMessage } from '../../lib/bridge/types.js';
 import { FakeClient } from './codex-test-transport.js';
 import { ChatRateLimiter } from '../../lib/bridge/security/rate-limiter.js';
@@ -133,6 +136,68 @@ test('忙时连续补充进入原 Codex 回合和同一真实飞书卡片，收�
     assert.ok(blocks.some(block => block.type === 'text' && block.text === '覆盖补充的最终答复'));
     assert.deepEqual(f.acked, [1, 2, 3]);
   } finally { receipt.resolve({ turnId: 'turn' }); await f.cleanup(); }
+});
+
+test('真实manager传绑定目录，运行态说明待上传图，结束上传并在原卡按序显示', async () => {
+  const f = fixture();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-inline-manager-'));
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==';
+  fs.writeFileSync(path.join(root, 'preview.png'), Buffer.from(png, 'base64'));
+  f.binding().workingDirectory = root;
+  const uploads: string[] = [];
+  f.adapter.uploadImage = async image => { uploads.push(image.sha256); return { ok: true, imageKey: 'img_inline_manager' }; };
+  const text = '前文\n![图](preview.png)\n后文';
+  try {
+    await f.launch(); f.push('图文问题'); await until(() => f.turns.length === 1);
+    f.client.publish('item/started', { threadId: 'thread', turnId: 'turn', item: { type: 'agentMessage', id: 'inline-answer', phase: 'final_answer' } });
+    f.client.publish('item/agentMessage/delta', { threadId: 'thread', turnId: 'turn', itemId: 'inline-answer', delta: text });
+    await until(() => f.calls.some(call => call.kind === 'batch' && String(call.request.data.actions).includes('等待上传')));
+    assert.equal(uploads.length, 0, '运行增量不能读取或上传图片');
+    f.client.publish('item/completed', { threadId: 'thread', turnId: 'turn', item: { type: 'agentMessage', id: 'inline-answer', phase: 'final_answer', text } });
+    f.client.publish('turn/completed', { threadId: 'thread', turnId: 'turn', turn: { id: 'turn', status: 'completed' } });
+    await until(() => f.acked.length === 1);
+    assert.equal(uploads.length, 1); assert.equal(f.turns.length, 1);
+    assert.equal(f.calls.filter(call => call.kind === 'card.create').length, 1);
+    const actions = f.calls.filter(call => call.kind === 'batch').flatMap(call => JSON.parse(String(call.request.data.actions))) as Array<{ params: { element_id?: string; partial_element?: { content?: string } } }>;
+    assert.ok(actions.some(action => action.params.element_id === 'streaming_content' && action.params.partial_element?.content === '前文\n![图](img_inline_manager)\n后文'));
+    assert.ok(actions.every(action => !action.params.partial_element?.content?.includes('](preview.png)')));
+  } finally { await f.cleanup(); }
+});
+
+test('正文图片上传失败收尾原卡为待补发预览，记录未确认且retry仍交付图片', async () => {
+  const f = fixture();
+  const rows = new Map<string, ResponseDeliveryRecord>();
+  f.store.saveResponseDelivery = row => { rows.set(row.id, structuredClone(row)); };
+  f.store.getResponseDelivery = id => rows.get(id) ?? null;
+  f.store.listResponseDeliveries = () => [...rows.values()];
+  f.store.flush = async () => {};
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-inline-failure-'));
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==';
+  fs.writeFileSync(path.join(root, 'preview.png'), Buffer.from(png, 'base64'));
+  // 独立聊天隔离共享投递限流桶，失败通知与补发不消耗其它用例的额度。
+  const chatId = `inline-failure-${path.basename(root)}`;
+  f.store.upsertChannelBinding({ ...f.binding(), chatId, workingDirectory: root });
+  let uploads = 0;
+  f.adapter.uploadImage = async () => ++uploads === 1
+    ? { ok: false, error: '合成上传失败' } : { ok: true, imageKey: 'img_retry_preview' };
+  const text = '前文\n![图](preview.png)\n后文';
+  try {
+    await f.launch(); f.push('图文问题', 'owner', undefined, chatId); await until(() => f.turns.length === 1);
+    f.client.publish('item/started', { threadId: 'thread', turnId: 'turn', item: { type: 'agentMessage', id: 'answer', phase: 'final_answer' } });
+    f.client.publish('item/agentMessage/delta', { threadId: 'thread', turnId: 'turn', itemId: 'answer', delta: text });
+    await until(() => f.calls.some(call => call.kind === 'batch' && String(call.request.data.actions).includes('等待上传')));
+    f.complete(text); await until(() => f.acked.length === 1);
+    const actions = f.calls.filter(call => call.kind === 'batch').flatMap(call => JSON.parse(String(call.request.data.actions))) as Array<{ params: { element_id?: string; partial_element?: { content?: string } } }>;
+    assert.equal(actions.filter(action => action.params.element_id === 'streaming_content').at(-1)?.params.partial_element?.content, '前文\n[图片：图（图片待补发）]\n后文');
+    assert.match(actions.filter(action => action.params.element_id === 'task_status').at(-1)?.params.partial_element?.content ?? '', /完成/);
+    assert.equal(f.internal.activeCards.size, 0);
+    const row = [...rows.values()][0];
+    assert.equal(row.status, 'failed'); assert.ok(row.chunks.every(chunk => !chunk.sent));
+    f.push(`/retry ${row.id}`, 'owner', undefined, chatId);
+    await until(() => rows.get(row.id)?.status === 'delivered');
+    assert.equal(uploads, 2); assert.equal(f.turns.length, 1);
+    assert.ok(f.calls.some(call => call.kind === 'message.create' && String(call.request.data.content).includes('img_retry_preview')));
+  } finally { await f.cleanup(); }
 });
 
 for (const outcome of ['accepted', 'unknown']) {

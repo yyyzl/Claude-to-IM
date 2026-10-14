@@ -29,6 +29,7 @@ import type {
 import type { GeneratedImage, UserInputRequest, UserInputPhase } from '../host.js';
 import type { ImageUploadResult } from '../channel-adapter.js';
 import { decodeGeneratedImage } from '../internal/generated-image.js';
+import { markdownImageSpans } from '../internal/inline-images.js';
 import type { FileAttachment } from '../types.js';
 import type { ToolCallInfo } from '../types.js';
 import { BaseChannelAdapter, registerAdapterFactory } from '../channel-adapter.js';
@@ -1332,7 +1333,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         },
       });
 
-      if (res?.data?.message_id) {
+      if (res?.code === 0 && res.data?.message_id) {
         return { ok: true, messageId: res.data.message_id };
       }
       console.warn('[feishu-adapter] Card send failed:', res?.msg, res?.code);
@@ -1340,6 +1341,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
       console.warn('[feishu-adapter] Card send error, falling back to post:', err instanceof Error ? err.message : err);
     }
 
+    // 图片必须由完整卡片确认；普通富文本降级可能只显示损坏占位。
+    if (markdownImageSpans(text).length) return { ok: false, httpStatus: 400, error: '飞书图文卡片发送失败，可手动补发' };
     // Fallback to post
     return this.sendAsPost(chatId, text);
   }

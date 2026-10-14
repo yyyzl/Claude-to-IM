@@ -4,6 +4,7 @@ import path from "node:path";
 import type { BridgeApiProvider, ChannelSessionHistoryEntry, ResponseDeliveryRecord } from "../../src/lib/bridge/host.js";
 import type { ChannelBinding } from "../../src/lib/bridge/types.js";
 import { validateGeneratedImage, checkGeneratedImageBudget } from "../../src/lib/bridge/internal/generated-image.js";
+import { markdownImageSpans } from "../../src/lib/bridge/internal/inline-images.js";
 export type { ChannelBinding } from "../../src/lib/bridge/types.js";
 
 import { resolveBridgeSetting } from "./settings.ts";
@@ -524,6 +525,7 @@ async function atomicWrite(target: string, content: string): Promise<void> {
 function validateResponseChunks(chunks: unknown): void {
   if (!Array.isArray(chunks)) throw new Error('Invalid response chunks');
   const imageIds = new Set<string>();
+  const inlineIdentities = new Map<string, { sha256: string; imageKey?: string }>();
   let imageBytes = 0;
   for (const value of chunks) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid response chunk');
@@ -543,6 +545,27 @@ function validateResponseChunks(chunks: unknown): void {
       if ((chunk.kind !== undefined && chunk.kind !== 'text') || typeof chunk.text !== 'string'
         || typeof chunk.parseMode !== 'string' || !['HTML', 'Markdown', 'plain'].includes(chunk.parseMode)
         || (chunk.plainFallback !== undefined && typeof chunk.plainFallback !== 'string')) throw new Error('Invalid text delivery');
+      if (chunk.inlineImages !== undefined) {
+        if (chunk.parseMode !== 'Markdown' || !Array.isArray(chunk.inlineImages) || !chunk.inlineImages.length) throw new Error('Invalid inline images');
+        const markers = new Set<string>();
+        const sources = new Set(markdownImageSpans(chunk.text).map(span => span.source));
+        for (const value of chunk.inlineImages) {
+          if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid inline image');
+          const item = value as Record<string, unknown>;
+          if (typeof item.marker !== 'string' || !item.marker.trim() || item.marker.length > 2048 || /[\s()<>]/.test(item.marker)
+            || markers.has(item.marker) || !sources.has(item.marker)
+            || (item.imageKey !== undefined && (typeof item.imageKey !== 'string' || !item.imageKey.trim() || item.imageKey.length > 2048 || /[\s()<>]/.test(item.imageKey)))
+            || (chunk.sent && item.imageKey === undefined)) throw new Error('Invalid inline image identifiers');
+          markers.add(item.marker);
+          const image = validateGeneratedImage(item.image);
+          const previous = inlineIdentities.get(image.id);
+          if (imageIds.has(image.id) && !previous) throw new Error('Duplicate generated image');
+          if (previous && (previous.sha256 !== image.sha256 || previous.imageKey !== item.imageKey)) throw new Error('Inconsistent inline image');
+          if (!previous) { imageIds.add(image.id); imageBytes += image.byteLength; checkGeneratedImageBudget(imageIds.size, imageBytes); }
+          inlineIdentities.set(image.id, { sha256: image.sha256, imageKey: item.imageKey as string | undefined });
+          item.image = image;
+        }
+      }
     }
   }
 }

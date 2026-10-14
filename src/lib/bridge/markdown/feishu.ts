@@ -1,6 +1,7 @@
 import type { ModelSelectionResponse, ModelSelectionView } from '../types.js';
 import type { UserInputRequest, UserInputPhase } from '../host.js';
 import { findFastServiceTier } from '../internal/model-capabilities.js';
+import { markdownImageSpans } from '../internal/inline-images.js';
 
 /**
  * Feishu-specific Markdown processing.
@@ -18,6 +19,7 @@ import { findFastServiceTier } from '../internal/model-capabilities.js';
  * Used by send() to decide between card and post rendering.
  */
 export function hasComplexMarkdown(text: string): boolean {
+  if (markdownImageSpans(text).length) return true;
   // Fenced code blocks
   if (/```[\s\S]*?```/.test(text)) return true;
   // Tables: header row followed by separator row with pipes and dashes
@@ -81,6 +83,8 @@ export function splitFeishuMarkdown(text: string, budget = 28_000): string[] {
   if (!text) return [];
   const chunks: string[] = [];
   let rest = text;
+  const imageSpans = markdownImageSpans(text);
+  let consumed = 0;
   let fence: { marker: string; language: string } | undefined;
   const nextFence = (part: string) => {
     let current = fence;
@@ -107,10 +111,16 @@ export function splitFeishuMarkdown(text: string, budget = 28_000): string[] {
     if (best < rest.length) {
       const boundary = rest.lastIndexOf('\n', best - 1) + 1;
       if (boundary > best / 2) best = boundary;
+      const crossed = imageSpans.find(span => span.start < consumed + best && span.end > consumed + best);
+      if (crossed) {
+        best = crossed.start - consumed;
+        if (!best) throw new Error('飞书图片引用超过字节预算');
+      }
     }
     const raw = rest.slice(0, best);
     chunks.push(render(raw));
     fence = nextFence(raw);
+    consumed += best;
     rest = rest.slice(best);
   }
   return chunks;

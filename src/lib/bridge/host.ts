@@ -145,8 +145,15 @@ export interface OutboundRefInput {
   purpose: string;
 }
 
+/** 正文显式图片的快照；marker 只用于已解析图片的位置，不从工具路径推断。 */
+export interface InlineResponseImage {
+  marker: string;
+  image: GeneratedImage;
+  imageKey?: string;
+}
+
 export type ResponseChunk =
-  | { kind?: 'text'; text: string; parseMode: 'HTML' | 'Markdown' | 'plain'; plainFallback?: string; sent: boolean; messageId?: string }
+  | { kind?: 'text'; text: string; parseMode: 'HTML' | 'Markdown' | 'plain'; plainFallback?: string; inlineImages?: InlineResponseImage[]; sent: boolean; messageId?: string }
   | { kind: 'image'; image: GeneratedImage; imageKey?: string; sendUuid: string; sent: boolean; messageId?: string };
 
 /** 可重投的最终回答；每块成功后立即持久化进度。 */

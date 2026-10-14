@@ -70,3 +70,18 @@ test('图片上传异常及SDK自动multipart日志不输出媒体、令牌或�
   assert.doesNotMatch(combined, /synthetic-secret-never-log|iVBORw0KGgo|Buffer|Authorization/);
   assert.match(combined, /400|999/);
 });
+
+test('混排图片使用卡片且完整成功回执才确认，失败不落入post/text假成功', async () => {
+  const text = '前文\n![一](img_fixture_one)\n中间\n![二](img_fixture_two)\n后文';
+  const f = fixture();
+  assert.equal((await f.adapter.send({ address: { channelType: 'feishu', chatId: 'original-chat' }, text, parseMode: 'Markdown' })).ok, true);
+  const request = f.messages[0] as { data: { msg_type: string; content: string } };
+  assert.equal(request.data.msg_type, 'interactive');
+  assert.equal(JSON.parse(request.data.content).body.elements[0].content, text);
+  for (const response of [{ code: 999, data: { message_id: 'must-not-count' } }, { code: 0 }, { data: { message_id: 'missing-code' } }]) {
+    const failed = fixture(); let calls = 0;
+    failed.client.im.message.create = async () => { calls++; return response; };
+    assert.equal((await failed.adapter.send({ address: { channelType: 'feishu', chatId: 'chat' }, text, parseMode: 'Markdown' })).ok, false);
+    assert.equal(calls, 1);
+  }
+});
