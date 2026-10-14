@@ -16,6 +16,9 @@ import type {
   TokenUsage,
   MessageContentBlock,
   UserInputRequest,
+  ActiveTurnInput,
+  TurnInputResult,
+  BridgeStore,
 } from './host.js';
 import { getBridgeContext } from './context.js';
 import crypto from 'crypto';
@@ -71,6 +74,69 @@ export interface InteractionCallbacks {
   isCurrent?: () => boolean;
   onUserInputRequest?: (request: UserInputRequest) => Promise<void>;
   onProgress?: (text: string) => void;
+  onActiveTurnInput?: (input: ActiveTurnInput) => void;
+}
+
+/** 同步登记来源，串行提交；历史封口后迟到收据不能再插入 user。 */
+function createTurnInputs(store: BridgeStore, sessionId: string, signal: AbortSignal, interactions?: InteractionCallbacks) {
+  let provider: ActiveTurnInput | undefined;
+  let accepting = true;
+  let finalized = false;
+  let historyError = false;
+  let tail = Promise.resolve();
+  let settlement: Promise<void> | undefined;
+  const pending = new Set<{ dispatched: boolean; resolve: (result: TurnInputResult) => void }>();
+  const seal = () => { accepting = false; provider?.seal(); };
+  const input: ActiveTurnInput = {
+    seal,
+    submitText: text => {
+      if (!accepting) return Promise.resolve({ status: 'not-submitted', reason: 'turn-ended' });
+      let resolve: (result: TurnInputResult) => void = () => {};
+      const result = new Promise<TurnInputResult>(done => { resolve = done; });
+      const entry = { dispatched: false, resolve };
+      pending.add(entry);
+      tail = tail.then(async () => {
+        if (finalized) return;
+        let receipt: TurnInputResult;
+        if (signal.aborted || interactions?.isCurrent?.() === false) receipt = { status: 'not-submitted', reason: 'cancelled' };
+        else if (!provider) receipt = { status: 'not-submitted', reason: 'unavailable' };
+        else {
+          entry.dispatched = true;
+          // 初始化中的 ready 等待不是 RPC 超时；provider 只限制已调用的请求。
+          try { receipt = await provider.submitText(text); }
+          catch { receipt = { status: 'unknown' }; }
+        }
+        if (finalized) return;
+        if (receipt.status === 'accepted') {
+          try { store.addMessage(sessionId, 'user', text); }
+          catch { historyError = true; receipt = { status: 'accepted', historyError: true }; }
+        }
+        pending.delete(entry);
+        resolve(receipt);
+      });
+      return result;
+    },
+  };
+  return {
+    get historyError() { return historyError; },
+    publish(value: ActiveTurnInput) { provider = value; interactions?.onActiveTurnInput?.(input); },
+    settle(): Promise<void> {
+      if (settlement) return settlement;
+      seal();
+      settlement = (async () => {
+        let timer: NodeJS.Timeout | undefined;
+        try {
+          await Promise.race([tail, new Promise<void>(done => { timer = setTimeout(done, 3_500); })]);
+        } finally {
+          if (timer) clearTimeout(timer);
+          finalized = true;
+          for (const entry of pending) entry.resolve(entry.dispatched ? { status: 'unknown' } : { status: 'not-submitted', reason: 'cancelled' });
+          pending.clear();
+        }
+      })();
+      return settlement;
+    },
+  };
 }
 
 export interface ConversationResult {
@@ -232,6 +298,7 @@ export async function processMessage(
     }
 
     let acceptingEvents = true;
+    const inputs = createTurnInputs(store, sessionId, abortController.signal, interactions);
     try {
       abortController.signal.throwIfAborted();
       const stream = llm.streamChat({
@@ -248,6 +315,7 @@ export async function processMessage(
         provider: resolvedProvider,
         conversationHistory: historyMsgs,
         files,
+        onActiveTurnInput: input => inputs.publish(input),
         onRuntimeStatusChange: (status: string) => {
           if (!acceptingEvents || abortController.signal.aborted || interactions?.isCurrent?.() === false) return;
           try { store.setSessionRuntimeStatus(sessionId, status); } catch { /* best effort */ }
@@ -257,8 +325,9 @@ export async function processMessage(
       // Consume the stream server-side (replicate collectStreamResponse pattern).
       // Permission requests are forwarded immediately via the callback during streaming
       // because the stream blocks until permission is resolved — we can't wait until after.
-      return await consumeStream(stream, sessionId, binding, onPermissionRequest, onPartialText, onToolEvent, abortController.signal, interactions);
+      return await consumeStream(stream, sessionId, binding, onPermissionRequest, onPartialText, onToolEvent, abortController.signal, interactions, inputs);
     } finally {
+      await inputs.settle();
       acceptingEvents = false;
       abortSignal?.removeEventListener('abort', forwardAbort);
       if (timeoutTimer) clearTimeout(timeoutTimer);
@@ -283,6 +352,7 @@ async function consumeStream(
   onToolEvent?: OnToolEvent,
   abortSignal?: AbortSignal,
   interactions?: InteractionCallbacks,
+  inputs?: ReturnType<typeof createTurnInputs>,
 ): Promise<ConversationResult> {
   const { store } = getBridgeContext();
   const reader = stream.getReader();
@@ -303,6 +373,7 @@ async function consumeStream(
   const generatedImageIds = new Set<string>();
   let generatedImageBytes = 0;
   let capturedSdkSessionId: string | null = null;
+  let assistantSaveAttempted = false;
 
   try {
     while (true) {
@@ -508,7 +579,9 @@ async function consumeStream(
     }
 
     // Save assistant message
-    if (contentBlocks.length > 0) {
+    await inputs?.settle();
+    if (inputs?.historyError) { hasError = true; errorMessage = '补充已接收，但会话记录保存失败；请勿自动重送。'; }
+    if (contentBlocks.length > 0 && !inputs?.historyError) {
       const hasToolBlocks = contentBlocks.some(
         (b) => b.type === 'tool_use' || b.type === 'tool_result'
       );
@@ -521,6 +594,7 @@ async function consumeStream(
             .trim();
 
       if (content) {
+        assistantSaveAttempted = true;
         store.addMessage(sessionId, 'assistant', content, tokenUsage ? JSON.stringify(tokenUsage) : null);
       }
     }
@@ -546,11 +620,12 @@ async function consumeStream(
       sdkSessionId: capturedSdkSessionId,
     };
   } catch (e) {
+    await inputs?.settle();
     // Best-effort save on stream error
     if (currentText.trim()) {
       contentBlocks.push({ type: 'text', text: currentText });
     }
-    if (contentBlocks.length > 0) {
+    if (contentBlocks.length > 0 && !inputs?.historyError && !assistantSaveAttempted) {
       const hasToolBlocks = contentBlocks.some(
         (b) => b.type === 'tool_use' || b.type === 'tool_result'
       );
@@ -582,7 +657,7 @@ async function consumeStream(
       tokenUsage,
       hasError: true,
       errorCode: timeoutReason ? 'timeout' : (isAbort ? 'abort' : 'error'),
-      errorMessage: timeoutReason
+      errorMessage: inputs?.historyError ? '补充已接收，但会话记录保存失败；请勿自动重送。' : timeoutReason
         ? timeoutReason.message
         : (isAbort ? 'Task stopped by user' : (e instanceof Error ? e.message : 'Stream consumption error')),
       permissionRequests,

@@ -250,6 +250,18 @@ export interface BridgeStore {
 
 // ── Host Interface: LLM Provider ─────────────────────────────
 
+/** 接收事实与本地记录分开；未知结果不得自动重送。 */
+export type TurnInputResult =
+  | { status: 'accepted'; historyError?: boolean }
+  | { status: 'not-submitted'; reason: 'turn-ended' | 'cancelled' | 'unavailable' }
+  | { status: 'unknown' };
+
+/** 仅属于本次 stream；封口后不再接受新输入，已发出的请求仍结算收据。 */
+export interface ActiveTurnInput {
+  submitText(text: string): Promise<TurnInputResult>;
+  seal(): void;
+}
+
 /** Parameters for starting an LLM stream. */
 export interface StreamChatParams {
   prompt: string;
@@ -267,6 +279,7 @@ export interface StreamChatParams {
   conversationHistory?: Array<{ role: 'user' | 'assistant'; content: string }>;
   files?: FileAttachment[];
   onRuntimeStatusChange?: (status: string) => void;
+  onActiveTurnInput?: (input: ActiveTurnInput) => void;
 }
 
 /** 账号额度的公开窗口；时间是服务端 Unix 秒，周期是实际分钟数。 */

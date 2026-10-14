@@ -29,6 +29,30 @@
 
 `/sessions` 表示当前 channel/chat 关联过的会话，不是同渠道所有聊天的当前 bindings。完整会话 ID 必须可直接用于 `/bind`；历史关联在绑定变更时与 bindings 一起持久化。旧数据只迁移能证明归属的当前绑定，不根据标题或全部 sessions 猜测归属；宿主缺历史能力时只列当前聊天当前会话并说明限制。
 
+### 当前回合的即时补充
+
+`StreamChatParams.onActiveTurnInput?` 发布本次 stream 的 `ActiveTurnInput`，由 engine 包装后交给 manager；其 `submitText(text)` 返回 `TurnInputResult`，`seal()` 封闭新输入准入。句柄通过单次调用的 closure 绑定原回合，不按“最新 session/thread”查找另一个任务，也不比较 manager、engine、provider 各自不同的取消控制器来猜归属。
+
+| 结果 | 必须语义 |
+| --- | --- |
+| `accepted` | 收据的 remote turnId 与原 expectedTurnId 精确一致。`historyError` 只表示本地记录失败，不撤销远端接收事实，不重送。 |
+| `not-submitted` | 调用 RPC 前已确认未提交；区分 turn-ended、cancelled、unavailable，只有仍属于原会话、未取消且适合继续处理的来源可移交既有后轮。 |
+| `unknown` | RPC 已调用后的异常、超时、断连或坏/错 ID 收据。明确提示，不自动重送或启动第二轮；后来看到回合完成不能证明这条补充未被接收。 |
+
+Codex 在初始化前提供句柄；等待 remote turnId、collector 订阅并处理 early backlog 后才能提交 `turn/steer`。精确匹配完成、失败、中断以及取消/断连/epoch 变化当场关闭新准入。卡片存在或 manager busy 包含投递收尾，不能据此判定模型仍活跃。可选 clientUserMessageId 没有声明幂等保证，不作为自动重放依据。
+
+engine 的 submit 必须同步登记 pending，再按顺序异步提交，控制消费循环不等待网络。正常初始化等待本轮 ready，不用 engine 的提前逐条超时制造“已经报未知、稍后才发送”的行为。provider 约束已发 RPC；engine 在正常/错误/取消收尾统一封口并有界结算，再保存 assistant。成功记录顺序为原 user、补充 user、assistant；结算结束后的迟到收据不能在 assistant 后再补 user，也不能由 catch 重跑记录/提交。
+
+manager 持有原来源组，提交中及已接收来源不能同时留在可 flush 的后轮缓冲。成功/未知/终结取消的即时来源跟随原任务确认；确认未提交并移交后轮的来源归后轮确认。范围限定飞书 Codex、开启追加、同原发送者的无附件普通文字，复用 sanitizeInput、大小与截断审计；命令、控制、其他来源/provider/channel/附件保留原路径。确认接收后更新原卡，不再调用 onMessageStart 或为该来源开新过程卡。
+
+原卡 notifyAppend 必须检查原 UI owner。携带原补充 messageId 作为 replyToMessageId 的独立事实通知按 ownsTurn 检查原取消信号、chat generation、bridge epoch、binding ID 和 session ID，仍纳入 taskPromises；正常 finally 清理原 UI 或同会话开启新卡不能吞掉限流/重试中的提示，stop/new/bind/停机则取消旧通知。是否渲染为平台回复沿用适配器能力。
+
+案例：正常接收“排除隐藏目录”后继续更新原卡，历史为原 user → 补充 user → assistant；基础边界是模型已结束、卡仍在收尾，此时确认未提交的补充进入下一轮一次；坏回执（错 turnId、超时或断连）只报告 unknown，不以回合完成推断可安全重送。
+
+测试锚点：`src/__tests__/unit/bridge-codex-llm.test.ts` 断言精确 threadId/expectedTurnId、ready/backlog 和旧 closure 隔离；`bridge-conversation-engine.test.ts` 断言同步登记、连续 user 在 assistant 前、记录失败保留 accepted 和收尾后迟到收据不写历史；`bridge-feishu-live-append.test.ts` 用真实 manager/provider 与内存传输断言一回合、一张卡、来源确认、后轮顺序及 stop/new/bind/停机隔离，还须挂起限流验证 unknown/记录失败提示在正常收尾后发送、控制取消后不发送，且始终保留原 address/replyToMessageId、不更新新卡。测试须硬阻断真实模型与平台，单测 15 秒、每批外层 60 秒。
+
+错误：`if (result.status !== 'accepted') scheduleNext(message)` 会把 unknown 重送。正确：仅在 `result.status === 'not-submitted'`、未取消且原会话归属有效时移交后轮；accepted/unknown 来源由原任务收尾确认。
+
 ### 投递与权限
 
 `ResponseDeliveryRecord` 保留 ID、所属地址/会话、待发正文、分块及 sent/messageId、状态、尝试次数和时间。必须先 save + await flush，再进行平台发送；每块成功后更新进度。保存失败不可降级成无记录发送。只有宿主确实实现完整能力才称持久化；内存降级须明确重启可能丢失。
@@ -69,6 +93,8 @@ JSON 写入采用同目录临时文件、同步内容后原子替换，并保留
 | --- | --- |
 | 合并/排队期间 stop | 不启动被取消的模型请求，消息得到明确处理 |
 | 旧回合晚到或绑定切走再切回 | 不更新新 binding、状态或卡片 |
+| 补充成功回执晚于模型完成 | 接收事实仍成立，补充 user 在原 assistant 前结算；不自动后轮 |
+| 即时补充请求结果未知、收尾后回执迟到 | 不重送、不迁入新任务、不在最终记录之后再追加 user |
 | 待发记录 flush 失败 | 不发送，返回可定位的持久化错误 |
 | 第 N 块失败 | 保留前 N-1 块进度；补发不重调模型 |
 | 流卡收尾成功且仍有图片 | 只确认文字，继续上传并发送图片 |

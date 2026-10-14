@@ -21,6 +21,7 @@ import type {
 } from './types.js';
 import { createAdapter, getRegisteredTypes } from './channel-adapter.js';
 import type { BaseChannelAdapter } from './channel-adapter.js';
+import type { ActiveTurnInput, TurnInputResult } from './host.js';
 // Side-effect import: triggers self-registration of all adapter factories
 import './adapters/index.js';
 import * as router from './channel-router.js';
@@ -186,6 +187,20 @@ interface ActiveChatTask {
   abort: AbortController;
   sessionId: string;
   startedAt: number;
+  context: TurnContext;
+  ownerUserId: string;
+  backend: string;
+  input?: ActiveTurnInput;
+  closing: boolean;
+  appends: LiveAppend[];
+  acceptedCount: number;
+}
+
+interface LiveAppend {
+  message: InboundMessage;
+  text: string;
+  result?: TurnInputResult;
+  pending?: Promise<void>;
 }
 
 /** Timestamped tool call entry for /status live context display. */
@@ -343,17 +358,23 @@ function getChatTaskKey(address: ChannelAddress): string {
   return `${address.channelType}:${address.chatId}`;
 }
 
-function registerActiveTask(address: ChannelAddress, sessionId: string, abort: AbortController): void {
+function registerActiveTask(address: ChannelAddress, sessionId: string, context: TurnContext): ActiveChatTask {
   const state = getState();
+  const abort = context.abort;
   const startedAt = Date.now();
   state.activeTasks.set(sessionId, abort);
   state.activeTaskStartedAt.set(sessionId, startedAt);
-  state.activeTasksByChat.set(getChatTaskKey(address), {
+  const task: ActiveChatTask = {
     abort,
     sessionId,
     startedAt,
-  });
+    context, ownerUserId: address.userId || '',
+    backend: (getBridgeContext().store.getSetting('bridge_llm_backend') || context.binding.backend || '').trim().toLowerCase(),
+    closing: false, appends: [], acceptedCount: 0,
+  };
+  state.activeTasksByChat.set(getChatTaskKey(address), task);
   state.uiOwners.set(getChatTaskKey(address), abort);
+  return task;
 }
 
 function clearActiveTask(address: ChannelAddress, sessionId: string, abort: AbortController): void {
@@ -629,6 +650,78 @@ function appendMessageToChat(chatKey: string, msg: InboundMessage): void {
   state.pendingAppends.set(chatKey, list);
 }
 
+function sanitizeMessageInput(adapter: BaseChannelAdapter, msg: InboundMessage, effectiveText: string): string {
+  const { text, truncated } = sanitizeInput(effectiveText);
+  if (truncated) {
+    console.warn(`[bridge-manager] Input truncated from ${effectiveText.length} to ${text.length} chars for chat ${msg.address.chatId}`);
+    getBridgeContext().store.insertAuditLog({ channelType: adapter.channelType, chatId: msg.address.chatId,
+      direction: 'inbound', messageId: msg.messageId, summary: `[TRUNCATED] Input truncated from ${effectiveText.length} chars` });
+  }
+  return text;
+}
+
+function startLiveAppend(adapter: BaseChannelAdapter, task: ActiveChatTask, entry: LiveAppend): void {
+  if (!task.input || entry.pending) return;
+  const state = getState();
+  // 必须在准入调用栈同步调用 engine.submitText，让 EOF 栅栏立即看见该来源。
+  const submitted = task.input.submitText(entry.text);
+  const isCurrent = () => ownsTurn(task.context) && state.uiOwners.get(task.context.chatKey) === task.abort;
+  const pending = submitted.then(result => {
+    entry.result = result;
+    if (!isCurrent()) return;
+    let feedback: string | undefined;
+    if (result.status === 'accepted') {
+      task.acceptedCount++;
+      let notified = false;
+      try { notified = adapter.notifyAppend?.(entry.message.address.chatId, task.acceptedCount, entry.text) ?? false; }
+      catch { /* 展示失败不能撤销已成立的接收事实。 */ }
+      if (result.historyError) feedback = '补充已接收，但会话记录保存失败；请勿自动重送。';
+      else if (!notified) feedback = '✓ 已追加到当前任务。';
+    } else if (result.status === 'unknown') feedback = '补充接收结果未知，未自动重送。请结合当前答复确认后再发送。';
+    if (feedback) {
+      // 独立事实通知归属原消息及代际；正常卡片收尾不能吞掉仍在限流中的提示。
+      const notice = deliverSingle(adapter, { address: entry.message.address, text: feedback, parseMode: 'plain', replyToMessageId: entry.message.messageId }, undefined, () => ownsTurn(task.context))
+        .then(() => {}).catch(() => {}).finally(() => state.taskPromises.delete(notice));
+      state.taskPromises.add(notice);
+    }
+  }).catch(() => { entry.result ??= { status: 'unknown' }; }).finally(() => state.taskPromises.delete(pending));
+  entry.pending = pending;
+  state.taskPromises.add(pending);
+}
+
+function tryLiveAppend(adapter: BaseChannelAdapter, msg: InboundMessage, task: ActiveChatTask): boolean {
+  const state = getState();
+  const key = task.context.chatKey;
+  if (adapter.channelType !== 'feishu' || task.backend !== 'codex' || task.closing
+    || !task.ownerUserId || task.ownerUserId !== msg.address.userId || msg.attachments?.length
+    || msg.callbackData || msg.userInputResponse || msg.modelSelectionResponse
+    || msg.text.trim().startsWith('/') || !ownsTurn(task.context)
+    || state.activeTasksByChat.get(key) !== task
+    || state.pendingAppends.get(key)?.length || state.inputDebounceBuffers.get(key)?.messages.length
+    || [...state.queuedTurns].some(turn => !turn.started && turn.context.chatKey === key)
+    || task.appends.some(entry => entry.result?.status === 'not-submitted')) return false;
+  const text = sanitizeMessageInput(adapter, msg, msg.text.trim());
+  if (!text || text.startsWith('/')) return false;
+  const entry: LiveAppend = { message: msg, text };
+  task.appends.push(entry);
+  startLiveAppend(adapter, task, entry);
+  return true;
+}
+
+/** 收据未结算时不让后来的 legacy 来源超车；连续同 sender 才合并后轮。 */
+function scheduleAppendGroups(adapter: BaseChannelAdapter, messages: InboundMessage[], context: TurnContext): void {
+  let group: InboundMessage[] = [];
+  const flush = () => {
+    if (group.length) scheduleMessages(adapter, group, { ...context, turnId: randomUUID(), abort: new AbortController() });
+    group = [];
+  };
+  for (const message of messages) {
+    if (group.length && group[0].address.userId !== message.address.userId) flush();
+    group.push(message);
+  }
+  flush();
+}
+
 /** 原子取出并清除指定 chatKey 的所有追加消息。 */
 function drainPendingAppends(chatKey: string): InboundMessage[] {
   const state = getState();
@@ -766,6 +859,7 @@ function enqueueRegularMessage(
   if (isAppendEnabled(adapter.channelType)) {
     const activeTask = getActiveTaskForChat(msg.address);
     if (activeTask && !activeTask.abort.signal.aborted) {
+      if (tryLiveAppend(adapter, msg, activeTask)) return;
       const chatKey = getChatTaskKey(msg.address);
       // 群聊保护：不同 userId 的消息不混合（与 debounce 路径保持一致）。
       // 遇到不同用户时先 flush 旧 buffer，再开新 buffer。
@@ -773,7 +867,7 @@ function enqueueRegularMessage(
       if (existing && existing.length > 0) {
         const prevUserId = existing[0].address.userId || '';
         const nextUserId = msg.address.userId || '';
-        if (prevUserId && nextUserId && prevUserId !== nextUserId) {
+        if (prevUserId && nextUserId && prevUserId !== nextUserId && activeTask.appends.length === 0) {
           flushPendingAppends(adapter, chatKey);
         }
       }
@@ -781,7 +875,7 @@ function enqueueRegularMessage(
       const appendList = getState().pendingAppends.get(chatKey);
       const appendCount = appendList ? appendList.length : 1;
       // 优先在流式卡片上显示追加提示（飞书），fallback 为独立文本消息
-      const notifiedOnCard = adapter.notifyAppend?.(
+      const notifiedOnCard = adapter.channelType === 'feishu' && activeTask.backend === 'codex' ? false : adapter.notifyAppend?.(
         msg.address.chatId, appendCount, msg.text?.trim() || '',
       ) ?? false;
       if (!notifiedOnCard) {
@@ -1311,17 +1405,7 @@ async function handleMessage(
   }
 
   // Sanitize general message text before routing to conversation engine
-  const { text, truncated } = sanitizeInput(effectiveText);
-  if (truncated) {
-    console.warn(`[bridge-manager] Input truncated from ${effectiveText.length} to ${text.length} chars for chat ${msg.address.chatId}`);
-    store.insertAuditLog({
-      channelType: adapter.channelType,
-      chatId: msg.address.chatId,
-      direction: 'inbound',
-      messageId: msg.messageId,
-      summary: `[TRUNCATED] Input truncated from ${effectiveText.length} chars`,
-    });
-  }
+  const text = sanitizeMessageInput(adapter, msg, effectiveText);
 
   if (!text && !hasAttachments) { ack(); return; }
 
@@ -1334,11 +1418,11 @@ async function handleMessage(
       codexModelPreferences: context.binding.codexModelPreferences ? { ...context.binding.codexModelPreferences } : undefined,
       sdkSessionId: store.getChannelBinding(context.binding.channelType, context.binding.chatId)?.sdkSessionId ?? '',
     };
-    registerActiveTask(msg.address, binding.codepilotSessionId, context.abort);
-    return { context, binding };
+    const activeTask = registerActiveTask(msg.address, binding.codepilotSessionId, context);
+    return { context, binding, activeTask };
   });
   if (!admitted) { ack(); return; }
-  const { context, binding } = admitted;
+  const { context, binding, activeTask } = admitted;
   const isCurrent = () => ownsTurn(context) && getState().uiOwners.get(context.chatKey) === context.abort;
 
   // Notify adapter that message processing is starting (e.g., typing indicator)
@@ -1470,6 +1554,10 @@ async function handleMessage(
       );
     }, taskAbort.signal, hasAttachments ? msg.attachments : undefined, onPartialText, onToolEvent, {
       isCurrent,
+      onActiveTurnInput: input => {
+        activeTask.input = input;
+        for (const entry of activeTask.appends) startLiveAppend(adapter, activeTask, entry);
+      },
       onUserInputRequest: async request => {
         if (!isCurrent()) {
           getBridgeContext().permissions.resolvePendingPermission(request.requestId, { behavior: 'deny', message: '任务已取消' });
@@ -1631,6 +1719,15 @@ async function handleMessage(
   } catch (error) {
     if (!taskAbort.signal.aborted) throw error;
   } finally {
+    activeTask.closing = true;
+    activeTask.input?.seal();
+    for (const entry of activeTask.appends) {
+      if (!entry.pending) entry.result = { status: 'not-submitted', reason: taskAbort.signal.aborted ? 'cancelled' : 'unavailable' };
+    }
+    await Promise.all(activeTask.appends.map(entry => entry.pending));
+    const followUps = activeTask.appends.filter(entry => entry.result?.status === 'not-submitted'
+      && entry.result.reason !== 'cancelled' && ownsTurn(context));
+    const transferred = new Set(followUps);
     // Clean up preview state
     clearUserInputRequests(binding.codepilotSessionId);
     if (previewState) {
@@ -1651,10 +1748,15 @@ async function handleMessage(
     }
     // Commit the offset only after full processing (success or failure)
     ack();
+    createAckForMergedMessages(adapter, activeTask.appends.filter(entry => !transferred.has(entry)).map(entry => entry.message))();
 
     // ── 排出追加消息 ──
     // 当前任务已完成，activeTask 已清除。缓冲中的追加消息合并为一条后续轮次。
-    if (ownedUi) flushPendingAppends(adapter, getChatTaskKey(msg.address));
+    if (ownedUi) {
+      if (activeTask.appends.length) {
+        scheduleAppendGroups(adapter, [...followUps.map(entry => entry.message), ...drainPendingAppends(context.chatKey)], context);
+      } else flushPendingAppends(adapter, getChatTaskKey(msg.address));
+    }
   }
 }
 

@@ -1,7 +1,7 @@
 /** 将锁定版本 Codex app-server 的公开双向协议适配为桥接 SSE。 */
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
-import type { AccountQuota, GeneratedImage, LLMProvider, StreamChatParams, TokenUsage, UserInputQuestion } from '../../src/lib/bridge/host.js';
+import type { AccountQuota, ActiveTurnInput, TurnInputResult, GeneratedImage, LLMProvider, StreamChatParams, TokenUsage, UserInputQuestion } from '../../src/lib/bridge/host.js';
 import type { CodexModelPreferences, ModelCatalog } from '../../src/lib/bridge/types.js';
 import { findFastServiceTier } from '../../src/lib/bridge/internal/model-capabilities.js';
 import { createGeneratedImage, checkGeneratedImageBudget } from '../../src/lib/bridge/internal/generated-image.js';
@@ -168,13 +168,48 @@ export class CodexAppServerLLMProvider implements LLMProvider {
     if (externalSignal?.aborted) onAbort();
     else externalSignal?.addEventListener('abort', onAbort, { once: true });
     let cancelled = false;
+    let threadId: string | undefined;
+    let active: ActiveTurn | undefined;
+    let inputClosed: Extract<TurnInputResult, { status: 'not-submitted' }>['reason'] | undefined;
+    let markReady: () => void = () => {};
+    const ready = new Promise<void>(resolve => { markReady = resolve; });
+    const closeInput = (reason: NonNullable<typeof inputClosed> = 'turn-ended') => {
+      inputClosed ??= reason;
+      markReady();
+    };
+    const closeOnAbort = () => closeInput('cancelled');
+    abort.signal.addEventListener('abort', closeOnAbort, { once: true });
+    const offInputDisconnect = this.client.onDisconnect(() => closeInput('unavailable'));
+    const input: ActiveTurnInput = {
+      seal: () => closeInput(),
+      submitText: async text => {
+        await ready;
+        if (inputClosed) return { status: 'not-submitted', reason: inputClosed };
+        if (abort.signal.aborted) return { status: 'not-submitted', reason: 'cancelled' };
+        const expectedTurnId = active?.turnId;
+        if (epoch !== this.connectionEpoch || !threadId || !expectedTurnId || this.activeTurns.get(threadId) !== active) {
+          return { status: 'not-submitted', reason: 'unavailable' };
+        }
+        // 从调用 request 起无法证明未发送；不解析远端错误或因 completed 自动重放。
+        let timer: NodeJS.Timeout | undefined;
+        try {
+          const receipt = await Promise.race([
+            this.client.request('turn/steer', {
+              threadId, expectedTurnId, input: [{ type: 'text', text, text_elements: [] }],
+            }, 3_000),
+            new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('输入回执超时')), 3_000); }),
+          ]);
+          return record(receipt).turnId === expectedTurnId ? { status: 'accepted' } : { status: 'unknown' };
+        } catch { return { status: 'unknown' }; }
+        finally { if (timer) clearTimeout(timer); }
+      },
+    };
+    params.onActiveTurnInput?.(input);
     return new ReadableStream<string>({
       start: async controller => {
         const send: SendEvent = (type, data) => {
           if (!cancelled) controller.enqueue(`data: ${JSON.stringify({ type, data: typeof data === 'string' ? data : JSON.stringify(data) })}\n`);
         };
-        let threadId: string | undefined;
-        let active: ActiveTurn | undefined;
         let keepAlive: NodeJS.Timeout | undefined;
         try {
           if (abort.signal.aborted) throw abortError();
@@ -208,6 +243,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
           if (!abort.signal.aborted) send('status', { session_id: threadId, model: selection.model.model, reasoning_effort: selection.effort, service_tier: selection.serviceTierForTurn });
           const result = await this.collectTurnText({
             threadId, turnId, signal: abort.signal, onDelta: delta => send('text', delta), onProgress: text => send('progress', text),
+            onInputReady: markReady, onInputClosed: closeInput,
             onGeneratedImage: image => send('generated_image', image),
             onToolEvent: (id, name, status, item) => {
               if (status === 'running') send('tool_use', { id, name, input: item ?? {} });
@@ -220,6 +256,9 @@ export class CodexAppServerLLMProvider implements LLMProvider {
           send('error', toErrorMessage(error));
           send('result', { is_error: true, error_code: error instanceof Error && error.name === 'AbortError' ? 'abort' : error instanceof Error && error.name === 'TimeoutError' ? 'timeout' : 'error', session_id: threadId ?? null });
         } finally {
+          closeInput(abort.signal.aborted ? 'cancelled' : 'turn-ended');
+          offInputDisconnect();
+          abort.signal.removeEventListener('abort', closeOnAbort);
           if (keepAlive) clearInterval(keepAlive);
           abort.abort();
           externalSignal?.removeEventListener('abort', onAbort);
@@ -421,6 +460,8 @@ export class CodexAppServerLLMProvider implements LLMProvider {
   private async collectTurnText(opts: {
     threadId: string; turnId: string; signal: AbortSignal; onDelta: (delta: string) => void;
     onProgress?: (text: string) => void;
+    onInputReady?: () => void;
+    onInputClosed?: () => void;
     onGeneratedImage?: (image: GeneratedImage) => void;
     onToolEvent?: (id: string, name: string, status: 'running' | 'complete' | 'error', item?: Record<string, unknown>) => void;
   }): Promise<TurnResult> {
@@ -450,7 +491,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
     const matches = (message: JsonRpcMessage) => getNotifThreadId(message) === opts.threadId && getNotifTurnId(message) === opts.turnId;
     try {
       await new Promise<void>((resolve, reject) => {
-        const fail = (error: Error) => { accepting = false; reject(error); };
+        const fail = (error: Error) => { accepting = false; opts.onInputClosed?.(); reject(error); };
         rejectTurn = fail;
         const idleMs = this.options.turnIdleTimeoutMs ?? 0;
         const refreshIdle = () => { if (idleTimer) clearTimeout(idleTimer); if (idleMs > 0) idleTimer = setTimeout(() => fail(turnTimeoutError('Codex 长时间没有进展，已请求中断')), idleMs); };
@@ -525,6 +566,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
             // 远端错误可能回显图片或请求配置，不能传播到普通 SSE、历史和日志。
             fail(new Error('Codex 回合执行失败，请稍后重试。'));
           } else if (message.method === 'turn/completed') {
+            opts.onInputClosed?.();
             const turn = record(params.turn); completed = true;
             if (pendingImageIds.size) imageNotice('部分图片生成未完成，没有对应的可交付图片。');
             if (turn.status === 'failed') fail(new Error('Codex 回合执行失败，请稍后重试。'));
@@ -540,6 +582,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
         if (timeoutMs > 0) timeout = setTimeout(() => fail(turnTimeoutError('Codex turn 执行超时，已请求中断')), timeoutMs);
         refreshIdle();
         for (const message of this.client.drainBacklog(matches)) handle(message);
+        opts.onInputReady?.();
       });
       if (finalTotal) this.previousUsage.set(opts.threadId, finalTotal);
       return { text, usage, lastUsage, contextWindow, contextTokens, emittedFinalText };
