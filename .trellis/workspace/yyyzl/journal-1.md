@@ -1820,3 +1820,42 @@ Three major features: (1) CLI rewrite with spec-review/code-review/review-fix su
 ### Next Steps
 
 - 文件双向收发与跨重启去重仍为后续需求，尚未建立独立任务
+
+
+## Session 38: 飞书 Codex 即时追加复用原卡的本地交付
+<!-- trellis-session: v=2 fp=f97cc95a8a9ffc75 -->
+
+**Date**: 2026-10-14
+**Task**: 飞书 Codex 即时追加复用原卡的本地交付
+**Branch**: `feat/feishu-codex-live-append`
+
+### Summary
+
+完成飞书 Codex 运行中同发送者纯文本补充，复用原回合和原卡；独立检查修复限流中的结果提示被正常收尾吞掉。用户确认两笔本地提交，当前子任务已归档，父任务及去重/文件子任务继续规划。
+
+### Main Changes
+
+- 每次stream输入句柄与精确turn/steer；同步登记、串行提交、原会话历史收尾栅栏；来源唯一归属及原卡追加提示。
+- 业务4文件、测试3文件、说明与规范3文件；既有28份规划资料单独提交；截图排除。
+- unknown不自动重送；模型已结束时正常后轮；独立状态通知正常收尾后仍可发送，stop/new/bind/停机仍隔离。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3093711` | docs: 记录飞书可靠性与文件功能的分阶段规划 |
+| `638aa8b` | feat: 支持飞书 Codex 当前回合即时追加 |
+
+### Testing
+
+- [OK] 最终全量825/825通过，17.5秒，后台进程树硬超时60秒；typecheck、build、diff检查和独立trellis-check通过。
+- [OK] GitNexus上游影响与变更范围结合实际源码、完整diff及组合测试核对；CRITICAL已告知，FTS不可用。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 运行中的桥接尚未重启；随后由用户在飞书联调即时追加和实际模型答复质量。
+- 继续按即时追加→入站去重→文件双向收发顺序推进；后两项保持planning，文件入口及旧Codex线程兼容仍待收敛。
