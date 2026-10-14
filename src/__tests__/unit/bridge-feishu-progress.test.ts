@@ -35,6 +35,7 @@ function fixture() {
   const calls: Call[] = [];
   const cards = new Map<string, Card>();
   const intermediateSizes: number[] = [];
+  const beforeDeletion: Card[] = [];
   const partialFailure: { afterElement: string | null; code: number; throws: boolean } = { afterElement: null, code: 200860, throws: false };
   let deleteFailure = false;
   let cardCount = 0;
@@ -65,6 +66,8 @@ function fixture() {
       for (const action of actions) {
         if (action.action === 'delete_elements') {
           assert.deepEqual(action.params, { element_ids: ['progress_history'] });
+          // 只记录辅助删除前实际平台实体，删除后content()不再返回历史。
+          beforeDeletion.push(structuredClone(card));
           if (deleteFailure) return { code: 200860 };
           card.body.elements = card.body.elements.filter(element => !action.params.element_ids.includes(element.element_id));
           measure(card); continue;
@@ -98,7 +101,7 @@ function fixture() {
   const adapter = new FeishuAdapter();
   const internal = adapter as unknown as { restClient: unknown; running: boolean; createStreamingCard(chat: string): Promise<boolean> };
   internal.restClient = { cardkit: { v1: { card: methods, cardElement: methods } }, im: { message: { create: async () => ({ code: 0, data: { message_id: 'message-1' } }), reply: async () => ({ code: 0, data: { message_id: 'message-1' } }) } } };
-  const f = { adapter, internal, methods, calls, cards, intermediateSizes, partialFailure, rejectEmptyDelete: () => { deleteFailure = true; }, content: (id: string, cardId = 'card-1') => find(cards.get(cardId)!.body.elements, id)?.content ?? '' };
+  const f = { adapter, internal, methods, calls, cards, intermediateSizes, beforeDeletion, partialFailure, rejectDelete: () => { deleteFailure = true; }, content: (id: string, cardId = 'card-1') => find(cards.get(cardId)!.body.elements, id)?.content ?? '', contentBeforeDeletion: (id: string) => find(beforeDeletion.at(-1)?.body.elements ?? [], id)?.content ?? '' };
   fixtures.push(f); return f;
 }
 const pump = () => new Promise<void>(resolve => setImmediate(resolve));
@@ -124,7 +127,7 @@ test('完成态只有答复与唯一状态行，无真实历史时正文确认�
 });
 
 test('空入口辅助删除失败不否认完整回答已确认，也不重发正文', async () => {
-  const f = fixture(); await f.internal.createStreamingCard('chat'); f.rejectEmptyDelete();
+  const f = fixture(); await f.internal.createStreamingCard('chat'); f.rejectDelete();
   assert.equal(await f.adapter.onStreamEnd('chat', 'completed', '已确认送达的全文'), true);
   assert.equal(f.content('streaming_content'), '已确认送达的全文');
   const batches = f.calls.filter(call => call.method === 'batchUpdate');
@@ -132,8 +135,10 @@ test('空入口辅助删除失败不否认完整回答已确认，也不重发�
   assert.equal(batches.flatMap(call => JSON.parse(String(call.request.data.actions))).filter(action => action.params.element_id === 'streaming_content').length, 1);
 });
 
-test('正文确认晚到且原任务已换代，不继续发旧空入口删除请求', async () => {
+test('有历史的正文确认晚到且原任务已换代，不继续发旧过程删除请求', async () => {
   const f = fixture(); await f.internal.createStreamingCard('chat');
+  f.adapter.onToolEvent('chat', [{ id: 'old-step', name: '旧任务的真实步骤', status: 'complete' }]); await tick();
+  assert.match(f.content('history_content'), /旧任务的真实步骤/);
   const pending = deferred<void>(); const original = f.methods.batchUpdate; const issued: Request[] = [];
   f.methods.batchUpdate = async request => { issued.push(request); await pending.promise; return original(request); };
   const ending = f.adapter.onStreamEnd('chat', 'completed', '旧任务答复');
@@ -148,16 +153,51 @@ test('正文确认晚到且原任务已换代，不继续发旧空入口删除�
   } finally { pending.resolve(); await ending; }
 });
 
-test('有ctx或追加详情即保留原过程入口，完成后外部不显示诊断或追加', async () => {
+test('有步骤、追加和ctx且已展开的过程，成功后彻底移除入口只留答复与状态', async () => {
+  const f = fixture(); await f.internal.createStreamingCard('chat');
+  f.adapter.onToolEvent('chat', [{ id: 'step', name: '真实核对步骤', status: 'complete' }]);
+  f.adapter.notifyAppend('chat', 1, '追加的验收要求'); await tick();
+  const card = f.cards.get('card-1')!; const config = structuredClone(card.config);
+  const panel = find(card.body.elements, 'progress_history')!; panel.expanded = true;
+  assert.match(f.content('task_status'), /真实核对步骤/); assert.match(f.content('history_content'), /追加的验收要求/);
+  const before = f.calls.length;
+  assert.equal(await f.adapter.onStreamEnd('chat', 'completed', '最终完整答复', { ctx: 'ctx 13% (33k/258.4k)' }), true);
+  assert.equal(f.content('streaming_content'), '最终完整答复'); assert.match(f.content('task_status'), /^✅ 已完成 · [^\n]+$/);
+  assert.deepEqual(card.body.elements.map(element => element.element_id), ['streaming_content', 'task_status']);
+  assert.equal(f.content('history_content'), ''); assert.deepEqual(card.config, config);
+  const batches = f.calls.slice(before).filter(call => call.method === 'batchUpdate');
+  assert.equal(batches.length, 2);
+  assert.ok(actionsOf(batches[0].request).some(action => action.params.element_id === 'streaming_content'));
+  assert.deepEqual(JSON.parse(String(batches[1].request.data.actions)), [{ action: 'delete_elements', params: { element_ids: ['progress_history'] } }]);
+  assert.match(f.contentBeforeDeletion('history_content'), /ctx 13%/); assert.match(f.contentBeforeDeletion('history_content'), /真实核对步骤/);
+  assert.equal(find(f.beforeDeletion[0].body.elements, 'progress_history')?.expanded, true, '删除前未重置展开状态');
+  assert.ok(f.intermediateSizes.every(size => size <= 30_000));
+});
+
+test('有历史的成功辅助删除失败仍确认全文，不重复正文或恢复运行态', async () => {
+  const f = fixture(); await f.internal.createStreamingCard('chat');
+  f.adapter.onToolEvent('chat', [{ id: 'step', name: '真实完成步骤', status: 'complete' }]); await tick();
+  f.rejectDelete(); const before = f.calls.length;
+  assert.equal(await f.adapter.onStreamEnd('chat', 'completed', '已确认的完整答复'), true);
+  assert.equal(f.content('streaming_content'), '已确认的完整答复'); assert.match(f.content('task_status'), /^✅ 已完成 · [^\n]+$/);
+  const batches = f.calls.slice(before).filter(call => call.method === 'batchUpdate');
+  assert.equal(batches.length, 2);
+  assert.equal(batches.flatMap(call => JSON.parse(String(call.request.data.actions))).filter(action => action.params.element_id === 'streaming_content').length, 1);
+  assert.deepEqual(JSON.parse(String(batches[1].request.data.actions)), [{ action: 'delete_elements', params: { element_ids: ['progress_history'] } }]);
+  assert.match(f.content('history_content'), /真实完成步骤/, '删除失败时真实实体保留，不伪造清理成功');
+});
+
+test('即使只有ctx或追加详情，成功后也移除过程入口', async () => {
   for (const kind of ['ctx', 'append'] as const) {
     const f = fixture(); await f.internal.createStreamingCard('chat');
     const panel = find(f.cards.get('card-1')!.body.elements, 'progress_history')!; panel.expanded = true;
     if (kind === 'append') f.adapter.notifyAppend('chat', 2, '补充核对');
     assert.equal(await f.adapter.onStreamEnd('chat', 'completed', '最终答复', kind === 'ctx' ? { ctx: 'ctx 13% (33k/258.4k)' } : undefined), true);
     assert.match(f.content('task_status'), /^✅ 已完成 · [^\n]+$/);
-    assert.match(f.content('history_content'), kind === 'ctx' ? /ctx 13%/ : /\+2 追加/);
-    assert.equal(find(f.cards.get('card-1')!.body.elements, 'progress_history'), panel); assert.equal(panel.expanded, true);
-    assert.equal(f.calls.some(call => JSON.stringify(call.request).includes('delete_elements')), false);
+    assert.match(f.contentBeforeDeletion('history_content'), kind === 'ctx' ? /ctx 13%/ : /\+2 追加/);
+    assert.equal(find(f.cards.get('card-1')!.body.elements, 'progress_history'), undefined);
+    assert.equal(f.content('history_content'), ''); assert.equal(panel.expanded, true, '删除前未主动收起历史');
+    assert.equal(f.calls.filter(call => JSON.stringify(call.request).includes('delete_elements')).length, 1);
   }
 });
 
@@ -169,7 +209,8 @@ test('长预览提示与追加独立，文本缩短会撤提示，完整终态�
   assert.doesNotMatch(f.content('task_status'), /分段/);
   assert.equal(await f.adapter.onStreamEnd('chat', 'completed', '完整最终答复'), true);
   assert.match(f.content('task_status'), /^✅ 已完成 · [^\n]+$/);
-  assert.match(f.content('history_content'), /补充说明/);
+  assert.match(f.contentBeforeDeletion('history_content'), /补充说明/);
+  assert.equal(find(f.cards.get('card-1')!.body.elements, 'progress_history'), undefined);
 });
 
 /** 三叶子布局下重建可达反例：目标历史与旧缓存相等，失败前缀已扩大平台历史。 */
@@ -329,7 +370,7 @@ test('心跳遵守频控退避，恢复时发送最新事件而非旧快照', as
   assert.match(f.content('task_status'), /已用时 5/);
 });
 
-test('收尾局部更新原正文/页脚并保留历史，不重发expanded，完成步骤不再外显', async () => {
+test('成功收尾局部确认答复和状态后移除过程，不重发expanded', async () => {
   const f = fixture(); await f.internal.createStreamingCard('chat');
   const names = ['完成过的命令1', '完成过的命令2', '完成过的命令3'];
   f.adapter.onToolEvent('chat', names.map(name => ({ id: name, name, status: 'complete' }))); await tick();
@@ -339,11 +380,14 @@ test('收尾局部更新原正文/页脚并保留历史，不重发expanded，�
   f.calls.length = 0;
   assert.equal(await f.adapter.onStreamEnd('chat', 'completed', '完整最终回答', { ctx: 'ctx 42% (84k/200k)' }), true);
   assert.equal(f.content('streaming_content'), '完整最终回答');
-  assert.match(f.content('task_status'), /^✅ 已完成 · [^\n]+$/); assert.match(f.content('history_content'), /ctx 42%/);
+  assert.match(f.content('task_status'), /^✅ 已完成 · [^\n]+$/); assert.match(f.contentBeforeDeletion('history_content'), /ctx 42%/);
   assert.match(f.content('task_status'), /^✅ 已完成 · [^\n]+(?:\n完整回答将在下方分段发送。)?$/);
-  for (const name of names) assert.ok(f.content('history_content').includes(name));
+  for (const name of names) assert.ok(f.contentBeforeDeletion('history_content').includes(name));
+  assert.equal(find(f.cards.get('card-1')!.body.elements, 'progress_history'), undefined);
+  assert.equal(f.content('history_content'), '');
   assert.equal(panel.expanded, true);
-  assert.deepEqual(f.calls.map(call => call.method), ['batchUpdate']);
+  assert.deepEqual(f.calls.map(call => call.method), ['batchUpdate', 'batchUpdate']);
+  assert.deepEqual(JSON.parse(String(f.calls[1].request.data.actions)), [{ action: 'delete_elements', params: { element_ids: ['progress_history'] } }]);
   assert.equal(f.cards.get('card-1')!.config.streaming_mode, false);
   assert.deepEqual(f.cards.get('card-1')!.config.summary, { content: '任务回复' });
   assert.equal(f.adapter.hasActiveCard('chat'), false);
@@ -354,18 +398,21 @@ test('终态错误醒目保留，取消明确中断，最终正文不混入工�
     const f = fixture(); await f.internal.createStreamingCard('chat');
     f.adapter.onToolEvent('chat', [{ id: 'err', name: '失败的检查', status: 'error' },
       ...[1, 2, 3].map(index => ({ id: `done${index}`, name: `最近完成${index}`, status: 'complete' as const }))]); await tick();
+    const panel = find(f.cards.get('card-1')!.body.elements, 'progress_history')!; panel.expanded = true;
     assert.equal(await f.adapter.onStreamEnd('chat', status, status === 'error' ? '失败说明' : ''), true);
     assert.match(f.content('task_status'), status === 'error' ? /出错/ : /中断/);
     assert.match(f.content('task_status'), /❌.*失败的检查/);
     assert.doesNotMatch(f.content('task_status'), /最近完成/);
     assert.match(f.content('history_content'), /最近完成1/);
+    assert.equal(find(f.cards.get('card-1')!.body.elements, 'progress_history'), panel); assert.equal(panel.expanded, true);
+    assert.equal(f.beforeDeletion.length, 0, '必要错误/中断诊断历史不删除');
     assert.doesNotMatch(f.content('streaming_content'), /失败的检查/);
     assert.equal(f.calls.some(call => call.method === 'content' || call.method === 'settings'), false);
   }
 });
 
 for (const code of [200860, 99991400]) {
-  test(`运行batch写入三条后返回${code}，成功终态仍明确清空外部进度并保留历史`, async () => {
+  test(`运行batch写入三条后返回${code}，成功终态校准后移除过程`, async () => {
     const f = fixture(); await f.internal.createStreamingCard('chat');
     const card = f.cards.get('card-1')!;
     const config = structuredClone(card.config);
@@ -379,32 +426,35 @@ for (const code of [200860, 99991400]) {
     assert.equal(await f.adapter.onStreamEnd('chat', 'completed', '恢复后的完整正文'), true);
     assert.match(f.content('task_status'), /^✅ 已完成 · [^\n]+$/, '不能依据落后的sentView保留运行进度');
     assert.equal(f.content('streaming_content'), '恢复后的完整正文');
-    for (const name of ['步骤1', '步骤2', '步骤3']) assert.ok(f.content('history_content').includes(name));
+    for (const name of ['步骤1', '步骤2', '步骤3']) assert.ok(f.contentBeforeDeletion('history_content').includes(name));
     const batches = f.calls.filter(call => call.method === 'batchUpdate');
-    const reset = actionsOf(batches.at(-2)!.request);
+    const reset = actionsOf(batches.at(-3)!.request);
     assert.equal(reset[0].params.element_id, 'task_status', '先清空并让出旧摘要空间');
     assert.equal(new Set(reset.map(action => action.params.element_id)).size, 2);
-    assert.ok(isReset(batches.at(-2)!.request));
-    assert.equal(actionsOf(batches.at(-1)!.request)[0].params.element_id, 'streaming_content');
+    assert.ok(isReset(batches.at(-3)!.request));
+    assert.equal(actionsOf(batches.at(-2)!.request)[0].params.element_id, 'streaming_content');
+    assert.deepEqual(JSON.parse(String(batches.at(-1)!.request.data.actions)), [{ action: 'delete_elements', params: { element_ids: ['progress_history'] } }]);
     assert.deepEqual(card.config, config); assert.equal(panel.expanded, true);
-    assert.equal(find(card.body.elements, 'progress_history'), panel);
+    assert.equal(find(card.body.elements, 'progress_history'), undefined);
+    assert.equal(f.content('history_content'), '');
     assert.equal(f.calls.some(call => call.method === 'content' || call.method === 'settings' || call.method === 'update'), false);
     assert.equal(f.adapter.hasActiveCard('chat'), false);
     assert.ok(f.intermediateSizes.every(size => size <= 30_000));
     const sequences = f.calls.filter(call => call.method === 'batchUpdate').map(call => Number(call.request.data.sequence));
-    assert.deepEqual(sequences, [1, 2, 3]);
+    assert.deepEqual(sequences, [1, 2, 3, 4]);
   });
 }
 
-test('整体成功后此前工具失败明细仅留历史，不能继续作为当前错误外显', async () => {
+test('整体成功后移除已恢复工具失败与全部过程，不能继续作为当前错误外显', async () => {
   const f = fixture(); await f.internal.createStreamingCard('chat');
   f.adapter.onToolEvent('chat', [{ id: 'old-error', name: '已处理的早期失败', status: 'error' },
     ...[1, 2, 3].map(index => ({ id: `done${index}`, name: `恢复步骤${index}`, status: 'complete' as const }))]); await tick();
   assert.match(f.content('task_status'), /❌.*已处理的早期失败/);
   assert.equal(await f.adapter.onStreamEnd('chat', 'completed', '问题已处理，任务成功完成'), true);
   assert.match(f.content('task_status'), /^✅ 已完成 · [^\n]+(?:\n完整回答将在下方分段发送。)?$/);
-  assert.match(f.content('history_content'), /❌.*已处理的早期失败/);
-  assert.match(f.content('history_content'), /恢复步骤3/);
+  assert.match(f.contentBeforeDeletion('history_content'), /❌.*已处理的早期失败/);
+  assert.match(f.contentBeforeDeletion('history_content'), /恢复步骤3/);
+  assert.equal(find(f.cards.get('card-1')!.body.elements, 'progress_history'), undefined);
   assert.match(f.content('task_status'), /已完成/);
   assert.equal(f.content('streaming_content'), '问题已处理，任务成功完成');
 });
@@ -416,7 +466,8 @@ test('部分运行更新失败后，超限正文的终态预览也清空进度�
   await tick(); assert.match(f.content('task_status'), /预览步骤3/);
   assert.equal(await f.adapter.onStreamEnd('chat', 'completed', '超长完整正文😀'.repeat(8_000)), false);
   assert.match(f.content('task_status'), /^✅ 已完成 · [^\n]+(?:\n完整回答将在下方分段发送。)?$/);
-  assert.match(f.content('history_content'), /预览步骤1/);
+  assert.match(f.contentBeforeDeletion('history_content'), /预览步骤1/);
+  assert.equal(find(f.cards.get('card-1')!.body.elements, 'progress_history'), undefined);
   assert.match(f.content('task_status'), /完整回答.*分段发送/);
   assert.doesNotMatch(f.content('streaming_content'), /超长完整正文/);
   assert.equal(f.calls.some(call => call.method === 'settings' || call.method === 'content' || call.method === 'update'), false);
@@ -462,12 +513,17 @@ for (const outcome of ['code', 'frequency', 'exception'] as const) {
     const before = f.calls.length;
     assert.equal(await f.adapter.onStreamEnd('chat', 'completed', finalText), true);
     assert.equal(f.content('streaming_content'), finalText);
-    assert.equal(f.content('history_content'), seededHistory, '目标历史与旧缓存同文时也必须校准平台增长');
+    assert.equal(f.contentBeforeDeletion('history_content'), seededHistory, '辅助删除前，目标历史与旧缓存同文时也必须校准平台增长');
+    assert.equal(f.content('history_content'), '', '删除后真实实体不再含历史内容');
+    assert.equal(find(card.body.elements, 'progress_history'), undefined);
     assert.match(f.content('task_status'), /^✅ 已完成 · [^\n]+(?:\n完整回答将在下方分段发送。)?$/);
     const batches = f.calls.slice(before).filter(call => call.method === 'batchUpdate');
-    assert.equal(batches.length, 2); assert.ok(isReset(batches[0].request));
+    assert.equal(batches.length, 3); assert.ok(isReset(batches[0].request));
     assert.equal(actionsOf(batches[0].request)[0].params.element_id, 'task_status');
     assert.equal(actionsOf(batches[1].request)[0].params.element_id, 'streaming_content');
+    assert.deepEqual(JSON.parse(String(batches[2].request.data.actions)), [{ action: 'delete_elements', params: { element_ids: ['progress_history'] } }]);
+    const sequences = batches.map(batch => Number(batch.request.data.sequence));
+    assert.deepEqual(sequences, [sequences[0], sequences[0] + 1, sequences[0] + 2]);
     assert.deepEqual(card.config, config); assert.equal(panel.expanded, true);
     assert.equal(f.calls.some(call => call.method === 'settings' || call.method === 'content' || call.method === 'update'), false);
     assert.ok(f.intermediateSizes.every(size => size <= 30_000));
@@ -481,11 +537,11 @@ test('不确定状态后一次普通diff成功仍保留收尾校准，不能凭�
   const before = f.calls.length;
   assert.equal(await f.adapter.onStreamEnd('chat', 'completed', finalText), true);
   const batches = f.calls.slice(before).filter(call => call.method === 'batchUpdate');
-  assert.equal(batches.length, 2); assert.ok(isReset(batches[0].request));
+  assert.equal(batches.length, 3); assert.ok(isReset(batches[0].request));
   assert.equal(f.content('streaming_content'), finalText);
 });
 
-test('校准先保留正文清详情，再写较短最终正文，最后恢复更大的完整历史', async () => {
+test('校准先保留正文清详情，再写短终态恢复正确历史，成功确认后移除过程', async () => {
   const f = fixture(); await runtimeBudgetFailure(f);
   const previousBody = f.content('streaming_content'); const previousHistory = f.content('history_content');
   const original = f.methods.batchUpdate; let observedReset = false;
@@ -496,7 +552,8 @@ test('校准先保留正文清详情，再写较短最终正文，最后恢复�
   };
   assert.equal(await f.adapter.onStreamEnd('chat', 'completed', '较短的完整答复'), true);
   assert.equal(observedReset, true); assert.equal(f.content('streaming_content'), '较短的完整答复');
-  assert.ok(f.content('history_content').length > previousHistory.length);
+  assert.ok(f.contentBeforeDeletion('history_content').length > previousHistory.length);
+  assert.equal(find(f.cards.get('card-1')!.body.elements, 'progress_history'), undefined);
   assert.ok(f.intermediateSizes.every(size => size <= 30_000));
 });
 
@@ -549,8 +606,9 @@ test('不确定状态下超限终态只恢复已确认正文预览，返回false
   const before = f.calls.length;
   assert.equal(await f.adapter.onStreamEnd('chat', 'completed', '完整回答😀'.repeat(8_000)), false);
   const batches = f.calls.slice(before).filter(call => call.method === 'batchUpdate');
-  assert.equal(batches.length, 2); assert.ok(isReset(batches[0].request));
+  assert.equal(batches.length, 3); assert.ok(isReset(batches[0].request));
   assert.equal(f.content('streaming_content'), 'x'.repeat(19_500));
-  assert.match(f.content('task_status'), /完整回答.*分段/); assert.notEqual(f.content('history_content'), ' ');
+  assert.match(f.content('task_status'), /完整回答.*分段/); assert.notEqual(f.contentBeforeDeletion('history_content'), ' ');
+  assert.equal(find(f.cards.get('card-1')!.body.elements, 'progress_history'), undefined);
   assert.match(f.content('task_status'), /^✅ 已完成 · [^\n]+\n完整回答将在下方分段发送。$/); assert.ok(f.intermediateSizes.every(size => size <= 30_000));
 });

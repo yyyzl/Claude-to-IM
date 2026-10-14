@@ -944,7 +944,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
           ...resetIds.filter(id => terminalView[id] !== ' ').map(id => contentAction(id, terminalView[id]))];
       }
       if (actions.length) {
-        // 收尾同样只改原Markdown，不更新配置，以保留用户已展开的历史。
+        // 正文确认只改原Markdown；不更新配置或重置仍需保留的历史。
         assertFeishuSuccess(await client.cardkit.v1.card.batchUpdate({
           path: { card_id: state.cardId },
           data: { actions: JSON.stringify(actions), sequence: ++state.sequence },
@@ -953,18 +953,18 @@ export class FeishuAdapter extends BaseChannelAdapter {
       }
       // 预览更新不能确认完整正文已送达；仅完整视图的成功回执才返回true。
       updated = view !== null;
-      if (!terminalView.history_content.trim()
+      if ((status === 'completed' || !terminalView.history_content.trim())
         && this.cardGenerations.get(chatId) === generation && this.activeCards.get(chatId) === state) {
-        // 无内容便不留下空的展开入口。辅助删除失败不能推翻已确认的正文。
+        // 成功只留答复和状态；错误/中断只删除空入口。辅助失败不推翻正文确认。
         try {
           const request = {
             path: { card_id: state.cardId },
             data: { actions: JSON.stringify([{ action: 'delete_elements', params: { element_ids: ['progress_history'] } }]), sequence: ++state.sequence },
           };
-          if (Buffer.byteLength(JSON.stringify(request), 'utf8') > FEISHU_CARD_BYTES) throw new Error('空执行过程清理请求超过 30KB');
+          if (Buffer.byteLength(JSON.stringify(request), 'utf8') > FEISHU_CARD_BYTES) throw new Error('执行过程清理请求超过 30KB');
           assertFeishuSuccess(await client.cardkit.v1.card.batchUpdate(request));
         } catch (err) {
-          console.warn(`[feishu-adapter] 空执行过程入口清理失败：${toErrorMessage(err)}`);
+          console.warn(`[feishu-adapter] 执行过程入口清理失败：${toErrorMessage(err)}`);
         }
       }
     } catch (err) {

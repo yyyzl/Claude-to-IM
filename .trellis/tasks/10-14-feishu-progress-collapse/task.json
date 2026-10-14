@@ -30,14 +30,14 @@
     "src/__tests__/unit/bridge-feishu-live-append.test.ts",
     "src/__tests__/unit/bridge-feishu-progress.test.ts"
   ],
-  "notes": "S7完成卡设计已实现：3叶子、正文优先、唯一状态/耗时、辅助归历史、无过程去空入口。相关156/156、typecheck/build及独立检查PASS；桌面/窄屏/展开本地预览已查看，真实飞书新版效果尚未加载复验。图刷新与完整detect/diff核对通过；按用户最新指令先作本地提交，合并推送另行处理；未重启或归档。",
+  "notes": "S8按用户最新决定移除成功卡整个执行过程面板，仅保留答复与唯一状态/耗时；运行、错误/中断必要过程保留。相关84/84、独立158/158、typecheck/build PASS，实际业务增量只涉及finalizeCard。S7已本地提交25f10d6；S8按用户本次指令本地提交，未推送、未重启或归档，真实飞书效果待加载复验。",
   "meta": {
     "phase": "ready_to_commit",
-    "approved_product_summary": "当前进度常显、最近进展常显、历史折叠、异常待操作醒目、完整最终投递",
+    "approved_product_summary": "运行时真实进度与历史可见；成功仅最终答复和唯一状态/耗时，不保留执行过程入口；异常必要信息及完整分段投递保留",
     "approval": "用户在具体展示方案后明确要求按照这个去优化；未扩大产品范围",
     "approved_rendering": "用户明确选择保留展开状态，使用普通动态局部刷新，接受取消逐字动画",
-    "validation": "S7布局RED5/5、实际Adapter新增RED4/4→相关82/82；独立相关156/156、typecheck与主会话build PASS。真实前缀故障/目标历史等于旧缓存/空面板辅助失败覆盖；8源码SHA冻结一致。新索引4,964节点/13,203边，detect30变化/41受影响、partial/truncated均false，实际diff核对。桌面/390px/展开本地JSON预览已查看，不等同真实飞书效果",
-    "restart_verification": "S6b loaded at 21:53:26 after 21:53:24 build; source matches923freeze; browser running card observed; user subsequently provided completed screenshot",
-    "active_bug": "S7源码及本地验证完成；新版终态正文优先、唯一状态/耗时、过程按需展开。待用户下次一键重启后新建卡生效，旧卡不自动重排"
+    "validation": "S8新增RED2/2→相关84/84；独立相关158/158、typecheck、build PASS，2源码SHA匹配冻结、实际diff检查通过。有历史成功删除/错误中断保留/辅助失败不撤正文ACK/换代/S6b逐action预算与前缀故障均覆盖；本次真实飞书S8效果未复验",
+    "restart_verification": "用户已提供S7真实完成卡截图，显示唯一完成行与执行过程入口；S8移除入口的新构建未由本会话重启加载",
+    "active_bug": "S8源码及检查完成：成功后移除执行过程面板，运行/错误/中断保留必要过程。待用户下次重启后新卡加载，旧卡不自动重排"
   }
 }
