@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 39
-- **Last Active**: 2026-10-14
+- **Total Sessions**: 40
+- **Last Active**: 2026-10-15
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1897 | Active |
+| `journal-1.md` | ~1933 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 40 | 2026-10-15 | 飞书正文图片混排修复 | `6a2ee68` | `fix/feishu-inline-images` |
 | 39 | 2026-10-14 | 飞书 Codex 非阻塞问答与原卡补充 | `0ca950c7d2f82c4577840b3293168b1ea06f9b0c` | `feat/feishu-codex-async-questions` |
 | 38 | 2026-10-14 | 飞书 Codex 即时追加复用原卡的本地交付 | `3093711`, `638aa8b` | `feat/feishu-codex-live-append` |
 | 37 | 2026-10-13 | 额度功能联调确认与主分支交付 | `b43dc4f`, `2d6eac4` | `main` |

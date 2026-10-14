@@ -1895,3 +1895,39 @@ Three major features: (1) CLI rewrite with spec-review/code-review/review-fix su
 ### Next Steps
 
 - 父任务继续协调去重和文件子任务的最终规划；本次仅交付问答。
+
+
+## Session 40: 飞书正文图片混排修复
+<!-- trellis-session: v=2 fp=02cef35c5fb81619 -->
+
+**Date**: 2026-10-15
+**Task**: 飞书正文图片混排修复
+**Branch**: `fix/feishu-inline-images`
+
+### Summary
+
+修复正文明确引用PNG的上传与同卡保序、持久补发、取消隔离和失败卡收尾；独立检查及最终167项相关测试通过。
+
+### Main Changes
+
+- 受限本地PNG快照、上传key检查点与正文转换
+- 表格和说明转义保留；上传失败原卡收尾但outbox仍未确认
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6a2ee68` | fix: 修复飞书回复中本地图片混排与补发 |
+
+### Testing
+
+- [OK] 最终167/167相关回归、typecheck/build通过；先前950/950全量快照通过
+- [OK] 截图对应真实正文与PNG离线fake交付验证通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 真实飞书客户端显示联调与服务重启尚未执行
