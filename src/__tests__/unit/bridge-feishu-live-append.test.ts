@@ -124,7 +124,8 @@ test('忙时连续补充进入原 Codex 回合和同一真实飞书卡片，收�
     f.complete(); await until(() => f.acked.length === 3);
     assert.equal(f.client.calls.filter(row => row.method === 'turn/start').length, 1);
     assert.equal(f.calls.filter(row => row.kind === 'card.create').length, 1);
-    assert.equal(f.calls.filter(row => row.kind === 'card.update').length, 1);
+    assert.equal(f.calls.filter(row => row.kind === 'card.update').length, 0);
+    assert.equal(f.calls.filter(row => row.kind === 'batch' && JSON.parse(String(row.request.data.actions)).some((action: { params: { element_id: string; partial_element?: { content?: string } } }) => action.params.element_id === 'task_status' && action.params.partial_element?.content?.startsWith('✅ 已完成'))).length, 1);
     assert.deepEqual(f.records.slice(0, 3).map(row => [row.role, row.text]), [['user', '原问题'], ['user', '补充1'], ['user', '补充2']]);
     assert.equal(f.records[3].role, 'assistant');
     const blocks = JSON.parse(f.records[3].text) as Array<{ type: string; text?: string; id?: string }>;
@@ -178,9 +179,15 @@ test('初始化时补充等待原 turn ready；early completed 只将未提交�
 });
 
 test('模型已结束而原卡还在收尾，补充走正常后轮且来源由后轮确认', async () => {
-  const f = fixture(); const finalize = deferred<PlatformResponse>(); const update = f.transport.cardkit.v1.card.update;
+  const f = fixture(); const finalize = deferred<PlatformResponse>(); const update = f.transport.cardkit.v1.card.batchUpdate;
   let finalizing = false;
-  f.transport.cardkit.v1.card.update = async request => { finalizing = true; f.transport.cardkit.v1.card.update = update; return finalize.promise; };
+  f.transport.cardkit.v1.card.batchUpdate = async request => {
+    if (JSON.parse(String(request.data.actions)).some((action: { params: { element_id: string; partial_element?: { content?: string } } }) => action.params.element_id === 'task_status' && action.params.partial_element?.content?.startsWith('✅ 已完成'))) {
+      finalizing = true; f.transport.cardkit.v1.card.batchUpdate = update;
+      await finalize.promise;
+    }
+    return update(request);
+  };
   try {
     await f.launch(); f.push('原始'); await until(() => f.turns.length === 1); f.complete('第一轮'); await until(() => finalizing);
     const append = f.push('后来'); await until(() => f.consumed.length === 2); await delay(20);

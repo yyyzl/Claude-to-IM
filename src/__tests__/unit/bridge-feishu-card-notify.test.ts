@@ -1,138 +1,45 @@
-/**
- * Unit tests for Feishu streaming card completion notice.
- *
- * Goal:
- * - When a streaming card is finalized, send a new text message to trigger unread/push.
- * - Allow disabling via setting: bridge_feishu_stream_card_notify_on_complete=false
- */
-
+/** 完成通知只在完整正文已写入后发送，沿用现有启用配置。 */
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { initBridgeContext } from '../../lib/bridge/context';
-import { FeishuAdapter } from '../../lib/bridge/adapters/feishu-adapter';
-import type { BridgeStore } from '../../lib/bridge/host';
+import { initBridgeContext } from '../../lib/bridge/context.js';
+import { FeishuAdapter } from '../../lib/bridge/adapters/feishu-adapter.js';
+import type { BridgeStore } from '../../lib/bridge/host.js';
 
-function setupContext(settings: Record<string, string> = {}) {
-  delete (globalThis as Record<string, unknown>)['__bridge_context__'];
-  initBridgeContext({
-    store: {
-      getSetting: (key: string) => settings[key] ?? null,
-    } as unknown as BridgeStore,
-    llm: { streamChat: () => new ReadableStream() },
-    permissions: { resolvePendingPermission: () => false },
-    lifecycle: {},
-  });
+type Request = { path?: Record<string, string>; data: Record<string, unknown> };
+async function fixture(settings: Record<string, string> = {}) {
+  initBridgeContext({ store: { getSetting: (key: string) => settings[key] ?? null } as unknown as BridgeStore,
+    llm: { streamChat: () => new ReadableStream() }, permissions: { resolvePendingPermission: () => false }, lifecycle: {} });
+  const adapter = new FeishuAdapter();
+  const calls: Array<{ method: string; request: Request }> = [];
+  const call = (method: string) => async (request: Request) => { calls.push({ method, request }); return { code: 0, data: { card_id: 'card-1', message_id: 'message-1' } }; };
+  const internal = adapter as unknown as { restClient: unknown; createStreamingCard(chatId: string): Promise<boolean> };
+  internal.restClient = { cardkit: { v1: { card: { create: call('card.create'), batchUpdate: call('batch'), settings: call('settings') } } }, im: { message: { create: call('message.create') } } };
+  assert.equal(await internal.createStreamingCard('chat'), true);
+  calls.length = 0;
+  return { adapter, calls };
 }
 
-function seedActiveCard(adapter: FeishuAdapter, chatId: string, startTime: number) {
-  (adapter as any).activeCards.set(chatId, {
-    cardId: 'card-1',
-    messageId: 'msg-1',
-    sequence: 0,
-    startTime,
-    toolCalls: [],
-    thinking: false,
-    pendingText: null,
-    lastUpdateAt: 0,
-    throttleTimer: null,
-    nextFlushAt: null,
-    inFlight: false,
-    needsFlush: false,
-    cooldownUntil: 0,
-    rateLimitBackoffMs: 5_000,
-    lastRateLimitLogAt: 0,
+describe('飞书过程卡完成通知', () => {
+  beforeEach(() => { delete (globalThis as Record<string, unknown>).__bridge_context__; });
+  it('默认启用：局部收尾后发送一条通知，并清理原卡', async () => {
+    const { adapter, calls } = await fixture();
+    assert.equal(await adapter.onStreamEnd('chat', 'completed', 'hello'), true);
+    assert.deepEqual(calls.map(call => call.method), ['batch', 'batch', 'message.create']);
+    assert.equal(calls[0].request.data.sequence, 1);
+    const notice = calls[2].request.data;
+    assert.equal(notice.receive_id, 'chat'); assert.equal(notice.msg_type, 'text');
+    assert.match(JSON.parse(String(notice.content)).text, /任务已完成/);
+    assert.match(JSON.parse(String(notice.content)).text, /耗时/);
+    assert.equal(adapter.hasActiveCard('chat'), false);
   });
-}
-
-describe('feishu-adapter - streaming card completion notice', () => {
-  beforeEach(() => {
-    delete (globalThis as Record<string, unknown>)['__bridge_context__'];
+  it('关闭配置时仍收尾原卡但不发通知', async () => {
+    const { adapter, calls } = await fixture({ bridge_feishu_stream_card_notify_on_complete: 'false' });
+    assert.equal(await adapter.onStreamEnd('chat', 'completed', 'hello'), true);
+    assert.deepEqual(calls.map(call => call.method), ['batch', 'batch']);
   });
-
-  it('sends a completion notice message after card finalized (default enabled)', async () => {
-    setupContext();
-
-    const adapter = new FeishuAdapter();
-    const calls: { update: any[]; create: any[] } = { update: [], create: [] };
-
-    (adapter as any).restClient = {
-      cardkit: {
-        v1: {
-          card: {
-            update: async (req: any) => {
-              calls.update.push(req);
-              return { data: {} };
-            },
-          },
-        },
-      },
-      im: {
-        message: {
-          create: async (req: any) => {
-            calls.create.push(req);
-            return { data: { message_id: 'msg-notify-1' } };
-          },
-        },
-      },
-    };
-
-    const chatId = 'chat-1';
-    seedActiveCard(adapter, chatId, Date.now() - 1200);
-
-    const ok = await adapter.onStreamEnd(chatId, 'completed', 'hello');
-    assert.equal(ok, true);
-
-    assert.equal(calls.update.length, 1);
-    assert.equal(calls.update[0]?.data?.sequence, 1);
-
-    assert.equal(calls.create.length, 1);
-    assert.equal(calls.create[0]?.data?.receive_id, chatId);
-    assert.equal(calls.create[0]?.data?.msg_type, 'text');
-    const payload = JSON.parse(calls.create[0]?.data?.content);
-    assert.match(payload.text, /任务已完成/);
-    assert.match(payload.text, /耗时/);
-
-    assert.equal((adapter as any).activeCards.has(chatId), false, 'Card state should be cleared after finalize');
-  });
-
-  it('does not send completion notice when disabled by setting', async () => {
-    setupContext({ bridge_feishu_stream_card_notify_on_complete: 'false' });
-
-    const adapter = new FeishuAdapter();
-    const calls: { update: any[]; create: any[] } = { update: [], create: [] };
-
-    (adapter as any).restClient = {
-      cardkit: { v1: { card: { update: async (req: any) => { calls.update.push(req); return { data: {} }; } } } },
-      im: { message: { create: async (req: any) => { calls.create.push(req); return { data: { message_id: 'msg-notify-1' } }; } } },
-    };
-
-    const chatId = 'chat-2';
-    seedActiveCard(adapter, chatId, Date.now() - 500);
-
-    const ok = await adapter.onStreamEnd(chatId, 'completed', 'hello');
-    assert.equal(ok, true);
-    assert.equal(calls.update.length, 1);
-    assert.equal(calls.create.length, 0);
-  });
-
-  it('does not send error notice when responseText is empty (avoid duplicate error messages)', async () => {
-    setupContext();
-
-    const adapter = new FeishuAdapter();
-    const calls: { update: any[]; create: any[] } = { update: [], create: [] };
-
-    (adapter as any).restClient = {
-      cardkit: { v1: { card: { update: async (req: any) => { calls.update.push(req); return { data: {} }; } } } },
-      im: { message: { create: async (req: any) => { calls.create.push(req); return { data: { message_id: 'msg-notify-1' } }; } } },
-    };
-
-    const chatId = 'chat-3';
-    seedActiveCard(adapter, chatId, Date.now() - 500);
-
-    const ok = await adapter.onStreamEnd(chatId, 'error', '');
-    assert.equal(ok, true);
-    assert.equal(calls.update.length, 1);
-    assert.equal(calls.create.length, 0);
+  it('空正文错误回合不重复发送错误通知', async () => {
+    const { adapter, calls } = await fixture();
+    assert.equal(await adapter.onStreamEnd('chat', 'error', ''), true);
+    assert.deepEqual(calls.map(call => call.method), ['batch', 'batch']);
   });
 });
-

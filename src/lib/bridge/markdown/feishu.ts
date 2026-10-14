@@ -1,4 +1,4 @@
-import type { ModelSelectionResponse, ModelSelectionView, ToolCallInfo } from '../types.js';
+import type { ModelSelectionResponse, ModelSelectionView } from '../types.js';
 import type { UserInputRequest, UserInputPhase } from '../host.js';
 import { findFastServiceTier } from '../internal/model-capabilities.js';
 
@@ -140,19 +140,6 @@ export function htmlToFeishuMarkdown(html: string): string {
 }
 
 /**
- * Build tool progress markdown lines.
- * Each tool shows an icon based on status: 🔄 Running, ✅ Complete, ❌ Error.
- */
-export function buildToolProgressMarkdown(tools: ToolCallInfo[]): string {
-  if (tools.length === 0) return '';
-  const lines = tools.map((tc) => {
-    const icon = tc.status === 'running' ? '🔄' : tc.status === 'complete' ? '✅' : '❌';
-    return `${icon} \`${tc.name}\``;
-  });
-  return lines.join('\n');
-}
-
-/**
  * Format elapsed time for card footer.
  */
 export function formatElapsed(ms: number): string {
@@ -162,59 +149,6 @@ export function formatElapsed(ms: number): string {
   const min = Math.floor(sec / 60);
   const remSec = Math.floor(sec % 60);
   return `${min}m ${remSec}s`;
-}
-
-/**
- * Build the final card JSON (schema 2.0) with text, tool progress, and footer.
- */
-export function buildFinalCardJson(
-  text: string,
-  tools: ToolCallInfo[],
-  footer: { status: string; elapsed: string; ctx?: string } | null,
-): string {
-  const elements: Array<Record<string, unknown>> = [];
-
-  // Main text content
-  let content = preprocessFeishuMarkdown(text);
-  const toolMd = buildToolProgressMarkdown(tools);
-  if (toolMd) {
-    content = content ? `${content}\n\n${toolMd}` : toolMd;
-  }
-
-  if (content) {
-    elements.push({
-      tag: 'markdown',
-      content,
-      text_align: 'left',
-      text_size: 'normal',
-    });
-  }
-
-  // Footer
-  if (footer) {
-    const parts: string[] = [];
-    if (footer.status) parts.push(footer.status);
-    if (footer.elapsed) parts.push(footer.elapsed);
-    if (footer.ctx) parts.push(footer.ctx);
-    if (parts.length > 0) {
-      elements.push({ tag: 'hr' });
-      elements.push({
-        tag: 'markdown',
-        content: parts.join(' · '),
-        text_size: 'notation',
-      });
-    }
-  }
-
-  return JSON.stringify({
-    schema: '2.0',
-    config: {
-      wide_screen_mode: true,
-      streaming_mode: false,
-      summary: { content: `${footer?.status || ''} ${text.replace(/\s+/g, ' ').trim()}`.trim().slice(0, 120) || '任务已结束' },
-    },
-    body: { elements },
-  });
 }
 
 // ── Workflow progress card ────────────────────────────────────

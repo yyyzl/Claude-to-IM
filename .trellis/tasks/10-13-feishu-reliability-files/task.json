@@ -22,10 +22,11 @@
     "10-13-feishu-inbound-dedup",
     "10-13-feishu-file-io",
     "10-13-feishu-codex-live-append",
-    "10-14-feishu-codex-async-questions"
+    "10-14-feishu-codex-async-questions",
+    "10-14-feishu-progress-collapse"
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "即时追加已合入main并归档。问答S6经894单测/typecheck/build与第3轮真实问答、原卡追加验收，用户已授权本批提交推送，按既定三笔收尾并整合main。去重和文件仍planning，父任务继续协调。",
+  "notes": "即时追加与问答均已交付main并归档；用户新增实时进度与历史折叠优化，作为第五子任务优先推进。去重和文件仍planning，父任务继续协调。",
   "meta": {}
 }

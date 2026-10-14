@@ -1,0 +1,43 @@
+{
+  "id": "feishu-progress-collapse",
+  "name": "feishu-progress-collapse",
+  "title": "飞书实时进度与历史折叠",
+  "description": "当前动作与最近进展常显，历史命令和长日志折叠，保持真实实时状态及超限完整投递",
+  "status": "in_progress",
+  "dev_type": "backend",
+  "scope": "feishu-progress",
+  "package": null,
+  "priority": "P1",
+  "creator": "yyyzl",
+  "assignee": "yyyzl",
+  "createdAt": "2026-10-14",
+  "completedAt": null,
+  "branch": "feat/feishu-progress-collapse",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "10-13-feishu-reliability-files",
+  "relatedFiles": [
+    "src/lib/bridge/adapters/feishu-adapter.ts",
+    "src/lib/bridge/markdown/feishu.ts",
+    "src/lib/bridge/markdown/feishu-progress.ts",
+    "src/__tests__/unit/bridge-feishu-streaming.test.ts",
+    "src/__tests__/unit/bridge-feishu-final-card.test.ts",
+    "src/__tests__/unit/bridge-feishu-card-notify.test.ts",
+    "src/__tests__/unit/bridge-feishu-live-append.test.ts",
+    "src/__tests__/unit/bridge-feishu-progress.test.ts"
+  ],
+  "notes": "S7完成卡设计已实现：3叶子、正文优先、唯一状态/耗时、辅助归历史、无过程去空入口。相关156/156、typecheck/build及独立检查PASS；桌面/窄屏/展开本地预览已查看，真实飞书新版效果尚未加载复验。图刷新与完整detect/diff核对通过；按用户最新指令先作本地提交，合并推送另行处理；未重启或归档。",
+  "meta": {
+    "phase": "ready_to_commit",
+    "approved_product_summary": "当前进度常显、最近进展常显、历史折叠、异常待操作醒目、完整最终投递",
+    "approval": "用户在具体展示方案后明确要求按照这个去优化；未扩大产品范围",
+    "approved_rendering": "用户明确选择保留展开状态，使用普通动态局部刷新，接受取消逐字动画",
+    "validation": "S7布局RED5/5、实际Adapter新增RED4/4→相关82/82；独立相关156/156、typecheck与主会话build PASS。真实前缀故障/目标历史等于旧缓存/空面板辅助失败覆盖；8源码SHA冻结一致。新索引4,964节点/13,203边，detect30变化/41受影响、partial/truncated均false，实际diff核对。桌面/390px/展开本地JSON预览已查看，不等同真实飞书效果",
+    "restart_verification": "S6b loaded at 21:53:26 after 21:53:24 build; source matches923freeze; browser running card observed; user subsequently provided completed screenshot",
+    "active_bug": "S7源码及本地验证完成；新版终态正文优先、唯一状态/耗时、过程按需展开。待用户下次一键重启后新建卡生效，旧卡不自动重排"
+  }
+}

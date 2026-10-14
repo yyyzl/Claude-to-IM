@@ -1,0 +1,14 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端开发与检查入口"}
+{"file": ".trellis/spec/backend/module-boundaries.md", "reason": "展示层与核心模型/投递职责边界"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "外部平台DTO和内部工具快照"}
+{"file": ".trellis/spec/backend/reliability-contracts.md", "reason": "单卡串行、取消、超限完整投递、问答和原卡追加合同"}
+{"file": ".trellis/spec/backend/testing-guidelines.md", "reason": "fake SDK与真实平台隔离、60秒进程树截止"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "最小范围和旧逻辑清理"}
+{"file": ".trellis/spec/backend/integration-guidelines.md", "reason": "不扩展宿主或模型核心接口"}
+{"file": ".trellis/tasks/10-14-feishu-progress-collapse/research/platform-collapse.md", "reason": "官方面板与局部更新合同和未保证边界"}
+{"file": ".trellis/tasks/10-14-feishu-progress-collapse/research/flow-boundaries.md", "reason": "当前执行流与回归边界"}
+{"file": ".trellis/tasks/10-14-feishu-progress-collapse/design.md", "reason": "已批准展示方案的技术合同"}
+{"file": ".trellis/tasks/10-14-feishu-progress-collapse/plan.md", "reason": "逐片RED到GREEN执行计划"}
+{"file": ".trellis/tasks/10-14-feishu-progress-collapse/research/live-collapse.md", "reason": "真实客户端配置更新重置展开的证据及用户选择普通动态卡"}
+{"file": ".trellis/tasks/10-14-feishu-progress-collapse/research/terminal-progress.md", "reason": "完成态进展残留的可复现缓存差异与真实原因边界"}
+{"file": ".trellis/tasks/10-14-feishu-progress-collapse/research/terminal-platform.md", "reason": "平台空白更新与只读API合同，不猜空格根因"}

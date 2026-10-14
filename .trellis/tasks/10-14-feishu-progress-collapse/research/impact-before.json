@@ -1,0 +1,1917 @@
+{
+  "repo": "Claude-to-IM",
+  "worktree": "G:/project/Claude-to-IM",
+  "indexedCommit": "41a698387a148d87b8c569708027e39e8a120bac",
+  "results": [
+    {
+      "requested": {
+        "target": "buildToolProgressMarkdown",
+        "file_path": "src/lib/bridge/markdown/feishu.ts",
+        "kind": "Function"
+      },
+      "result": {
+        "target": {
+          "id": "Function:src/lib/bridge/markdown/feishu.ts:buildToolProgressMarkdown",
+          "name": "buildToolProgressMarkdown",
+          "type": "Function",
+          "filePath": "src/lib/bridge/markdown/feishu.ts"
+        },
+        "direction": "upstream",
+        "impactedCount": 9,
+        "risk": "CRITICAL",
+        "riskSharedAxes": "LOW",
+        "riskScale": {
+          "comparableAcrossKinds": true,
+          "unusedAxes": []
+        },
+        "epistemic": "exact",
+        "summary": {
+          "direct": 2,
+          "processes_affected": 5,
+          "modules_affected": 3
+        },
+        "byDepthCounts": {
+          "1": 2,
+          "2": 2,
+          "3": 5
+        },
+        "affected_processes": [
+          {
+            "name": "onStreamEnd",
+            "type": "Function",
+            "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+            "affected_process_count": 6,
+            "total_hits": 14,
+            "earliest_broken_step": 1
+          },
+          {
+            "name": "onStreamText",
+            "type": "Function",
+            "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+            "affected_process_count": 7,
+            "total_hits": 14,
+            "earliest_broken_step": 2
+          },
+          {
+            "name": "onProgress",
+            "type": "Function",
+            "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+            "affected_process_count": 7,
+            "total_hits": 12,
+            "earliest_broken_step": 1
+          },
+          {
+            "name": "onToolEvent",
+            "type": "Function",
+            "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+            "affected_process_count": 5,
+            "total_hits": 12,
+            "earliest_broken_step": 2
+          },
+          {
+            "name": "flushCardUpdate",
+            "type": "Function",
+            "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+            "affected_process_count": 3,
+            "total_hits": 6,
+            "earliest_broken_step": 1
+          }
+        ],
+        "affected_modules": [
+          {
+            "name": "Adapters",
+            "hits": 5,
+            "impact": "direct"
+          },
+          {
+            "name": "Internal",
+            "hits": 2,
+            "impact": "indirect"
+          },
+          {
+            "name": "Markdown",
+            "hits": 2,
+            "impact": "direct"
+          }
+        ],
+        "byDepth": {
+          "1": [
+            {
+              "depth": 1,
+              "id": "Function:src/lib/bridge/markdown/feishu.ts:buildFinalCardJson",
+              "name": "buildFinalCardJson",
+              "filePath": "src/lib/bridge/markdown/feishu.ts",
+              "relationType": "CALLS",
+              "confidence": 0.85,
+              "processes": [
+                {
+                  "id": "proc_249_onstreamend",
+                  "label": "OnStreamEnd → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 3
+                },
+                {
+                  "id": "proc_283_onstreamend",
+                  "label": "OnStreamEnd → PreprocessFeishuMarkdown",
+                  "processType": "cross_community",
+                  "step": 3
+                }
+              ]
+            },
+            {
+              "depth": 1,
+              "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.flushCardUpdate#1",
+              "name": "flushCardUpdate",
+              "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+              "relationType": "CALLS",
+              "confidence": 0.85,
+              "processes": [
+                {
+                  "id": "proc_163_ontoolevent",
+                  "label": "OnToolEvent → AssertFeishuSuccess",
+                  "processType": "cross_community",
+                  "step": 4
+                },
+                {
+                  "id": "proc_219_flushcardupdate",
+                  "label": "FlushCardUpdate → Clamp",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_38_onstreamtext",
+                  "label": "OnStreamText → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 4
+                },
+                {
+                  "id": "proc_164_ontoolevent",
+                  "label": "OnToolEvent → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 4
+                },
+                {
+                  "id": "proc_218_onprogress",
+                  "label": "OnProgress → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 3
+                },
+                {
+                  "id": "proc_220_flushcardupdate",
+                  "label": "FlushCardUpdate → ParsePositiveInt",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_37_onstreamtext",
+                  "label": "OnStreamText → AssertFeishuSuccess",
+                  "processType": "cross_community",
+                  "step": 4
+                },
+                {
+                  "id": "proc_370_flushcardupdate",
+                  "label": "FlushCardUpdate → GetBridgeContext",
+                  "processType": "cross_community",
+                  "step": 1
+                }
+              ]
+            }
+          ],
+          "2": [
+            {
+              "depth": 2,
+              "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.finalizeCard#4",
+              "name": "finalizeCard",
+              "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+              "relationType": "CALLS",
+              "confidence": 0.85,
+              "processes": [
+                {
+                  "id": "proc_249_onstreamend",
+                  "label": "OnStreamEnd → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_36_onstreamend",
+                  "label": "OnStreamEnd → PickString",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_35_onstreamend",
+                  "label": "OnStreamEnd → NormalizeNumericCode",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_120_onstreamend",
+                  "label": "OnStreamEnd → FormatElapsed",
+                  "processType": "intra_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_283_onstreamend",
+                  "label": "OnStreamEnd → PreprocessFeishuMarkdown",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_274_onstreamend",
+                  "label": "OnStreamEnd → AssertFeishuSuccess",
+                  "processType": "cross_community",
+                  "step": 2
+                }
+              ]
+            },
+            {
+              "depth": 2,
+              "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.scheduleCardUpdate#1",
+              "name": "scheduleCardUpdate",
+              "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+              "relationType": "CALLS",
+              "confidence": 0.85,
+              "processes": [
+                {
+                  "id": "proc_37_onstreamtext",
+                  "label": "OnStreamText → AssertFeishuSuccess",
+                  "processType": "cross_community",
+                  "step": 3
+                },
+                {
+                  "id": "proc_250_onprogress",
+                  "label": "OnProgress → Clamp",
+                  "processType": "intra_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_220_flushcardupdate",
+                  "label": "FlushCardUpdate → ParsePositiveInt",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_318_ontoolevent",
+                  "label": "OnToolEvent → GetBridgeContext",
+                  "processType": "cross_community",
+                  "step": 3
+                },
+                {
+                  "id": "proc_370_flushcardupdate",
+                  "label": "FlushCardUpdate → GetBridgeContext",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_380_onprogress",
+                  "label": "OnProgress → GetBridgeContext",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_40_onstreamtext",
+                  "label": "OnStreamText → ParsePositiveInt",
+                  "processType": "cross_community",
+                  "step": 3
+                },
+                {
+                  "id": "proc_163_ontoolevent",
+                  "label": "OnToolEvent → AssertFeishuSuccess",
+                  "processType": "cross_community",
+                  "step": 3
+                },
+                {
+                  "id": "proc_251_onprogress",
+                  "label": "OnProgress → ParsePositiveInt",
+                  "processType": "intra_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_309_onstreamtext",
+                  "label": "OnStreamText → GetBridgeContext",
+                  "processType": "cross_community",
+                  "step": 3
+                },
+                {
+                  "id": "proc_165_ontoolevent",
+                  "label": "OnToolEvent → Clamp",
+                  "processType": "intra_community",
+                  "step": 3
+                },
+                {
+                  "id": "proc_166_ontoolevent",
+                  "label": "OnToolEvent → ParsePositiveInt",
+                  "processType": "intra_community",
+                  "step": 3
+                },
+                {
+                  "id": "proc_38_onstreamtext",
+                  "label": "OnStreamText → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 3
+                },
+                {
+                  "id": "proc_219_flushcardupdate",
+                  "label": "FlushCardUpdate → Clamp",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_164_ontoolevent",
+                  "label": "OnToolEvent → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 3
+                },
+                {
+                  "id": "proc_39_onstreamtext",
+                  "label": "OnStreamText → Clamp",
+                  "processType": "cross_community",
+                  "step": 3
+                },
+                {
+                  "id": "proc_218_onprogress",
+                  "label": "OnProgress → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 2
+                }
+              ]
+            }
+          ],
+          "3": [
+            {
+              "depth": 3,
+              "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.notifyAppend#3",
+              "name": "notifyAppend",
+              "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+              "relationType": "CALLS",
+              "confidence": 0.85,
+              "processes": []
+            },
+            {
+              "depth": 3,
+              "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.onProgress#2",
+              "name": "onProgress",
+              "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+              "relationType": "CALLS",
+              "confidence": 0.85,
+              "processes": [
+                {
+                  "id": "proc_369_onprogress",
+                  "label": "OnProgress → Resolve",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_380_onprogress",
+                  "label": "OnProgress → GetBridgeContext",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_251_onprogress",
+                  "label": "OnProgress → ParsePositiveInt",
+                  "processType": "intra_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_250_onprogress",
+                  "label": "OnProgress → Clamp",
+                  "processType": "intra_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_218_onprogress",
+                  "label": "OnProgress → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_248_onprogress",
+                  "label": "OnProgress → AssertFeishuSuccess",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_353_onprogress",
+                  "label": "OnProgress → UpdateInteractionMessage",
+                  "processType": "cross_community",
+                  "step": 1
+                }
+              ]
+            },
+            {
+              "depth": 3,
+              "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.onStreamEnd#4",
+              "name": "onStreamEnd",
+              "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+              "relationType": "CALLS",
+              "confidence": 0.85,
+              "processes": [
+                {
+                  "id": "proc_35_onstreamend",
+                  "label": "OnStreamEnd → NormalizeNumericCode",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_283_onstreamend",
+                  "label": "OnStreamEnd → PreprocessFeishuMarkdown",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_120_onstreamend",
+                  "label": "OnStreamEnd → FormatElapsed",
+                  "processType": "intra_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_274_onstreamend",
+                  "label": "OnStreamEnd → AssertFeishuSuccess",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_249_onstreamend",
+                  "label": "OnStreamEnd → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_36_onstreamend",
+                  "label": "OnStreamEnd → PickString",
+                  "processType": "cross_community",
+                  "step": 1
+                }
+              ]
+            },
+            {
+              "depth": 3,
+              "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.updateCardContent#2",
+              "name": "updateCardContent",
+              "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+              "relationType": "CALLS",
+              "confidence": 0.85,
+              "processes": [
+                {
+                  "id": "proc_39_onstreamtext",
+                  "label": "OnStreamText → Clamp",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_37_onstreamtext",
+                  "label": "OnStreamText → AssertFeishuSuccess",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_280_onstreamtext",
+                  "label": "OnStreamText → BuildCardContent",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_40_onstreamtext",
+                  "label": "OnStreamText → ParsePositiveInt",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_309_onstreamtext",
+                  "label": "OnStreamText → GetBridgeContext",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_38_onstreamtext",
+                  "label": "OnStreamText → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_282_onstreamtext",
+                  "label": "OnStreamText → HasComplexMarkdown",
+                  "processType": "cross_community",
+                  "step": 2
+                }
+              ]
+            },
+            {
+              "depth": 3,
+              "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.updateToolProgress#2",
+              "name": "updateToolProgress",
+              "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+              "relationType": "CALLS",
+              "confidence": 0.85,
+              "processes": [
+                {
+                  "id": "proc_165_ontoolevent",
+                  "label": "OnToolEvent → Clamp",
+                  "processType": "intra_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_164_ontoolevent",
+                  "label": "OnToolEvent → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_166_ontoolevent",
+                  "label": "OnToolEvent → ParsePositiveInt",
+                  "processType": "intra_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_318_ontoolevent",
+                  "label": "OnToolEvent → GetBridgeContext",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_163_ontoolevent",
+                  "label": "OnToolEvent → AssertFeishuSuccess",
+                  "processType": "cross_community",
+                  "step": 2
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "requested": {
+        "target": "buildFinalCardJson",
+        "file_path": "src/lib/bridge/markdown/feishu.ts",
+        "kind": "Function"
+      },
+      "result": {
+        "target": {
+          "id": "Function:src/lib/bridge/markdown/feishu.ts:buildFinalCardJson",
+          "name": "buildFinalCardJson",
+          "type": "Function",
+          "filePath": "src/lib/bridge/markdown/feishu.ts"
+        },
+        "direction": "upstream",
+        "impactedCount": 2,
+        "risk": "LOW",
+        "riskSharedAxes": "LOW",
+        "riskScale": {
+          "comparableAcrossKinds": true,
+          "unusedAxes": []
+        },
+        "epistemic": "exact",
+        "summary": {
+          "direct": 1,
+          "processes_affected": 1,
+          "modules_affected": 1
+        },
+        "byDepthCounts": {
+          "1": 1,
+          "2": 1
+        },
+        "affected_processes": [
+          {
+            "name": "onStreamEnd",
+            "type": "Function",
+            "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+            "affected_process_count": 6,
+            "total_hits": 12,
+            "earliest_broken_step": 1
+          }
+        ],
+        "affected_modules": [
+          {
+            "name": "Internal",
+            "hits": 2,
+            "impact": "direct"
+          }
+        ],
+        "byDepth": {
+          "1": [
+            {
+              "depth": 1,
+              "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.finalizeCard#4",
+              "name": "finalizeCard",
+              "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+              "relationType": "CALLS",
+              "confidence": 0.85,
+              "processes": [
+                {
+                  "id": "proc_36_onstreamend",
+                  "label": "OnStreamEnd → PickString",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_35_onstreamend",
+                  "label": "OnStreamEnd → NormalizeNumericCode",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_120_onstreamend",
+                  "label": "OnStreamEnd → FormatElapsed",
+                  "processType": "intra_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_249_onstreamend",
+                  "label": "OnStreamEnd → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_283_onstreamend",
+                  "label": "OnStreamEnd → PreprocessFeishuMarkdown",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_274_onstreamend",
+                  "label": "OnStreamEnd → AssertFeishuSuccess",
+                  "processType": "cross_community",
+                  "step": 2
+                }
+              ]
+            }
+          ],
+          "2": [
+            {
+              "depth": 2,
+              "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.onStreamEnd#4",
+              "name": "onStreamEnd",
+              "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+              "relationType": "CALLS",
+              "confidence": 0.85,
+              "processes": [
+                {
+                  "id": "proc_35_onstreamend",
+                  "label": "OnStreamEnd → NormalizeNumericCode",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_283_onstreamend",
+                  "label": "OnStreamEnd → PreprocessFeishuMarkdown",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_120_onstreamend",
+                  "label": "OnStreamEnd → FormatElapsed",
+                  "processType": "intra_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_274_onstreamend",
+                  "label": "OnStreamEnd → AssertFeishuSuccess",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_249_onstreamend",
+                  "label": "OnStreamEnd → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_36_onstreamend",
+                  "label": "OnStreamEnd → PickString",
+                  "processType": "cross_community",
+                  "step": 1
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "requested": {
+        "target": "createStreamingCard",
+        "file_path": "src/lib/bridge/adapters/feishu-adapter.ts",
+        "kind": "Method"
+      },
+      "result": {
+        "target": {
+          "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.createStreamingCard#2",
+          "name": "createStreamingCard",
+          "type": "Method",
+          "filePath": "src/lib/bridge/adapters/feishu-adapter.ts"
+        },
+        "direction": "upstream",
+        "impactedCount": 3,
+        "risk": "HIGH",
+        "riskSharedAxes": "LOW",
+        "riskScale": {
+          "comparableAcrossKinds": true,
+          "unusedAxes": []
+        },
+        "epistemic": "exact",
+        "summary": {
+          "direct": 3,
+          "processes_affected": 3,
+          "modules_affected": 2
+        },
+        "byDepthCounts": {
+          "1": 3
+        },
+        "affected_processes": [
+          {
+            "name": "onStreamText",
+            "type": "Function",
+            "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+            "affected_process_count": 9,
+            "total_hits": 9,
+            "earliest_broken_step": 1
+          },
+          {
+            "name": "onProgress",
+            "type": "Function",
+            "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+            "affected_process_count": 7,
+            "total_hits": 7,
+            "earliest_broken_step": 1
+          },
+          {
+            "name": "onMessageStart",
+            "type": "Function",
+            "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+            "affected_process_count": 3,
+            "total_hits": 3,
+            "earliest_broken_step": 1
+          }
+        ],
+        "affected_modules": [
+          {
+            "name": "Adapters",
+            "hits": 2,
+            "impact": "direct"
+          },
+          {
+            "name": "Markdown",
+            "hits": 1,
+            "impact": "direct"
+          }
+        ],
+        "byDepth": {
+          "1": [
+            {
+              "depth": 1,
+              "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.onMessageStart#1",
+              "name": "onMessageStart",
+              "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+              "relationType": "CALLS",
+              "confidence": 0.85,
+              "processes": [
+                {
+                  "id": "proc_217_onmessagestart",
+                  "label": "OnMessageStart → AssertFeishuSuccess",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_348_onmessagestart",
+                  "label": "OnMessageStart → UpdateInteractionMessage",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_364_onmessagestart",
+                  "label": "OnMessageStart → Resolve",
+                  "processType": "cross_community",
+                  "step": 1
+                }
+              ]
+            },
+            {
+              "depth": 1,
+              "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.onProgress#2",
+              "name": "onProgress",
+              "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+              "relationType": "CALLS",
+              "confidence": 0.85,
+              "processes": [
+                {
+                  "id": "proc_369_onprogress",
+                  "label": "OnProgress → Resolve",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_380_onprogress",
+                  "label": "OnProgress → GetBridgeContext",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_251_onprogress",
+                  "label": "OnProgress → ParsePositiveInt",
+                  "processType": "intra_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_250_onprogress",
+                  "label": "OnProgress → Clamp",
+                  "processType": "intra_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_218_onprogress",
+                  "label": "OnProgress → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_248_onprogress",
+                  "label": "OnProgress → AssertFeishuSuccess",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_353_onprogress",
+                  "label": "OnProgress → UpdateInteractionMessage",
+                  "processType": "cross_community",
+                  "step": 1
+                }
+              ]
+            },
+            {
+              "depth": 1,
+              "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.onStreamText#2",
+              "name": "onStreamText",
+              "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+              "relationType": "CALLS",
+              "confidence": 0.85,
+              "processes": [
+                {
+                  "id": "proc_37_onstreamtext",
+                  "label": "OnStreamText → AssertFeishuSuccess",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_280_onstreamtext",
+                  "label": "OnStreamText → BuildCardContent",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_40_onstreamtext",
+                  "label": "OnStreamText → ParsePositiveInt",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_309_onstreamtext",
+                  "label": "OnStreamText → GetBridgeContext",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_374_onstreamtext",
+                  "label": "OnStreamText → Resolve",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_282_onstreamtext",
+                  "label": "OnStreamText → HasComplexMarkdown",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_358_onstreamtext",
+                  "label": "OnStreamText → UpdateInteractionMessage",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_38_onstreamtext",
+                  "label": "OnStreamText → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_39_onstreamtext",
+                  "label": "OnStreamText → Clamp",
+                  "processType": "cross_community",
+                  "step": 1
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "requested": {
+        "target": "flushCardUpdate",
+        "file_path": "src/lib/bridge/adapters/feishu-adapter.ts",
+        "kind": "Method"
+      },
+      "result": {
+        "target": {
+          "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.flushCardUpdate#1",
+          "name": "flushCardUpdate",
+          "type": "Method",
+          "filePath": "src/lib/bridge/adapters/feishu-adapter.ts"
+        },
+        "direction": "upstream",
+        "impactedCount": 7,
+        "risk": "HIGH",
+        "riskSharedAxes": "LOW",
+        "riskScale": {
+          "comparableAcrossKinds": true,
+          "unusedAxes": []
+        },
+        "epistemic": "exact",
+        "summary": {
+          "direct": 1,
+          "processes_affected": 4,
+          "modules_affected": 2
+        },
+        "byDepthCounts": {
+          "1": 1,
+          "2": 4,
+          "3": 2
+        },
+        "affected_processes": [
+          {
+            "name": "onStreamText",
+            "type": "Function",
+            "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+            "affected_process_count": 9,
+            "total_hits": 21,
+            "earliest_broken_step": 1
+          },
+          {
+            "name": "onToolEvent",
+            "type": "Function",
+            "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+            "affected_process_count": 5,
+            "total_hits": 15,
+            "earliest_broken_step": 1
+          },
+          {
+            "name": "onProgress",
+            "type": "Function",
+            "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+            "affected_process_count": 7,
+            "total_hits": 11,
+            "earliest_broken_step": 1
+          },
+          {
+            "name": "flushCardUpdate",
+            "type": "Function",
+            "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+            "affected_process_count": 3,
+            "total_hits": 3,
+            "earliest_broken_step": 2
+          }
+        ],
+        "affected_modules": [
+          {
+            "name": "Adapters",
+            "hits": 5,
+            "impact": "direct"
+          },
+          {
+            "name": "Markdown",
+            "hits": 2,
+            "impact": "indirect"
+          }
+        ],
+        "byDepth": {
+          "1": [
+            {
+              "depth": 1,
+              "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.scheduleCardUpdate#1",
+              "name": "scheduleCardUpdate",
+              "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+              "relationType": "CALLS",
+              "confidence": 0.85,
+              "processes": [
+                {
+                  "id": "proc_165_ontoolevent",
+                  "label": "OnToolEvent → Clamp",
+                  "processType": "intra_community",
+                  "step": 3
+                },
+                {
+                  "id": "proc_37_onstreamtext",
+                  "label": "OnStreamText → AssertFeishuSuccess",
+                  "processType": "cross_community",
+                  "step": 3
+                },
+                {
+                  "id": "proc_250_onprogress",
+                  "label": "OnProgress → Clamp",
+                  "processType": "intra_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_220_flushcardupdate",
+                  "label": "FlushCardUpdate → ParsePositiveInt",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_318_ontoolevent",
+                  "label": "OnToolEvent → GetBridgeContext",
+                  "processType": "cross_community",
+                  "step": 3
+                },
+                {
+                  "id": "proc_370_flushcardupdate",
+                  "label": "FlushCardUpdate → GetBridgeContext",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_380_onprogress",
+                  "label": "OnProgress → GetBridgeContext",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_40_onstreamtext",
+                  "label": "OnStreamText → ParsePositiveInt",
+                  "processType": "cross_community",
+                  "step": 3
+                },
+                {
+                  "id": "proc_163_ontoolevent",
+                  "label": "OnToolEvent → AssertFeishuSuccess",
+                  "processType": "cross_community",
+                  "step": 3
+                },
+                {
+                  "id": "proc_251_onprogress",
+                  "label": "OnProgress → ParsePositiveInt",
+                  "processType": "intra_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_309_onstreamtext",
+                  "label": "OnStreamText → GetBridgeContext",
+                  "processType": "cross_community",
+                  "step": 3
+                },
+                {
+                  "id": "proc_166_ontoolevent",
+                  "label": "OnToolEvent → ParsePositiveInt",
+                  "processType": "intra_community",
+                  "step": 3
+                },
+                {
+                  "id": "proc_38_onstreamtext",
+                  "label": "OnStreamText → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 3
+                },
+                {
+                  "id": "proc_219_flushcardupdate",
+                  "label": "FlushCardUpdate → Clamp",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_164_ontoolevent",
+                  "label": "OnToolEvent → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 3
+                },
+                {
+                  "id": "proc_39_onstreamtext",
+                  "label": "OnStreamText → Clamp",
+                  "processType": "cross_community",
+                  "step": 3
+                },
+                {
+                  "id": "proc_218_onprogress",
+                  "label": "OnProgress → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 2
+                }
+              ]
+            }
+          ],
+          "2": [
+            {
+              "depth": 2,
+              "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.notifyAppend#3",
+              "name": "notifyAppend",
+              "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+              "relationType": "CALLS",
+              "confidence": 0.85,
+              "processes": []
+            },
+            {
+              "depth": 2,
+              "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.onProgress#2",
+              "name": "onProgress",
+              "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+              "relationType": "CALLS",
+              "confidence": 0.85,
+              "processes": [
+                {
+                  "id": "proc_218_onprogress",
+                  "label": "OnProgress → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_248_onprogress",
+                  "label": "OnProgress → AssertFeishuSuccess",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_369_onprogress",
+                  "label": "OnProgress → Resolve",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_380_onprogress",
+                  "label": "OnProgress → GetBridgeContext",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_251_onprogress",
+                  "label": "OnProgress → ParsePositiveInt",
+                  "processType": "intra_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_250_onprogress",
+                  "label": "OnProgress → Clamp",
+                  "processType": "intra_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_353_onprogress",
+                  "label": "OnProgress → UpdateInteractionMessage",
+                  "processType": "cross_community",
+                  "step": 1
+                }
+              ]
+            },
+            {
+              "depth": 2,
+              "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.updateCardContent#2",
+              "name": "updateCardContent",
+              "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+              "relationType": "CALLS",
+              "confidence": 0.85,
+              "processes": [
+                {
+                  "id": "proc_38_onstreamtext",
+                  "label": "OnStreamText → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_37_onstreamtext",
+                  "label": "OnStreamText → AssertFeishuSuccess",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_280_onstreamtext",
+                  "label": "OnStreamText → BuildCardContent",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_40_onstreamtext",
+                  "label": "OnStreamText → ParsePositiveInt",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_309_onstreamtext",
+                  "label": "OnStreamText → GetBridgeContext",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_39_onstreamtext",
+                  "label": "OnStreamText → Clamp",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_282_onstreamtext",
+                  "label": "OnStreamText → HasComplexMarkdown",
+                  "processType": "cross_community",
+                  "step": 2
+                }
+              ]
+            },
+            {
+              "depth": 2,
+              "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.updateToolProgress#2",
+              "name": "updateToolProgress",
+              "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+              "relationType": "CALLS",
+              "confidence": 0.85,
+              "processes": [
+                {
+                  "id": "proc_165_ontoolevent",
+                  "label": "OnToolEvent → Clamp",
+                  "processType": "intra_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_164_ontoolevent",
+                  "label": "OnToolEvent → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_166_ontoolevent",
+                  "label": "OnToolEvent → ParsePositiveInt",
+                  "processType": "intra_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_318_ontoolevent",
+                  "label": "OnToolEvent → GetBridgeContext",
+                  "processType": "cross_community",
+                  "step": 2
+                },
+                {
+                  "id": "proc_163_ontoolevent",
+                  "label": "OnToolEvent → AssertFeishuSuccess",
+                  "processType": "cross_community",
+                  "step": 2
+                }
+              ]
+            }
+          ],
+          "3": [
+            {
+              "depth": 3,
+              "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.onStreamText#2",
+              "name": "onStreamText",
+              "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+              "relationType": "CALLS",
+              "confidence": 0.85,
+              "processes": [
+                {
+                  "id": "proc_374_onstreamtext",
+                  "label": "OnStreamText → Resolve",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_37_onstreamtext",
+                  "label": "OnStreamText → AssertFeishuSuccess",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_280_onstreamtext",
+                  "label": "OnStreamText → BuildCardContent",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_40_onstreamtext",
+                  "label": "OnStreamText → ParsePositiveInt",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_309_onstreamtext",
+                  "label": "OnStreamText → GetBridgeContext",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_282_onstreamtext",
+                  "label": "OnStreamText → HasComplexMarkdown",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_358_onstreamtext",
+                  "label": "OnStreamText → UpdateInteractionMessage",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_38_onstreamtext",
+                  "label": "OnStreamText → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_39_onstreamtext",
+                  "label": "OnStreamText → Clamp",
+                  "processType": "cross_community",
+                  "step": 1
+                }
+              ]
+            },
+            {
+              "depth": 3,
+              "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.onToolEvent#2",
+              "name": "onToolEvent",
+              "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+              "relationType": "CALLS",
+              "confidence": 0.85,
+              "processes": [
+                {
+                  "id": "proc_165_ontoolevent",
+                  "label": "OnToolEvent → Clamp",
+                  "processType": "intra_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_164_ontoolevent",
+                  "label": "OnToolEvent → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_166_ontoolevent",
+                  "label": "OnToolEvent → ParsePositiveInt",
+                  "processType": "intra_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_163_ontoolevent",
+                  "label": "OnToolEvent → AssertFeishuSuccess",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_318_ontoolevent",
+                  "label": "OnToolEvent → GetBridgeContext",
+                  "processType": "cross_community",
+                  "step": 1
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "requested": {
+        "target": "updateCardContent",
+        "file_path": "src/lib/bridge/adapters/feishu-adapter.ts",
+        "kind": "Method"
+      },
+      "result": {
+        "target": {
+          "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.updateCardContent#2",
+          "name": "updateCardContent",
+          "type": "Method",
+          "filePath": "src/lib/bridge/adapters/feishu-adapter.ts"
+        },
+        "direction": "upstream",
+        "impactedCount": 1,
+        "risk": "LOW",
+        "riskSharedAxes": "LOW",
+        "riskScale": {
+          "comparableAcrossKinds": true,
+          "unusedAxes": []
+        },
+        "epistemic": "exact",
+        "summary": {
+          "direct": 1,
+          "processes_affected": 1,
+          "modules_affected": 1
+        },
+        "byDepthCounts": {
+          "1": 1
+        },
+        "affected_processes": [
+          {
+            "name": "onStreamText",
+            "type": "Function",
+            "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+            "affected_process_count": 9,
+            "total_hits": 9,
+            "earliest_broken_step": 1
+          }
+        ],
+        "affected_modules": [
+          {
+            "name": "Markdown",
+            "hits": 1,
+            "impact": "direct"
+          }
+        ],
+        "byDepth": {
+          "1": [
+            {
+              "depth": 1,
+              "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.onStreamText#2",
+              "name": "onStreamText",
+              "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+              "relationType": "CALLS",
+              "confidence": 0.85,
+              "processes": [
+                {
+                  "id": "proc_374_onstreamtext",
+                  "label": "OnStreamText → Resolve",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_37_onstreamtext",
+                  "label": "OnStreamText → AssertFeishuSuccess",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_280_onstreamtext",
+                  "label": "OnStreamText → BuildCardContent",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_40_onstreamtext",
+                  "label": "OnStreamText → ParsePositiveInt",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_309_onstreamtext",
+                  "label": "OnStreamText → GetBridgeContext",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_282_onstreamtext",
+                  "label": "OnStreamText → HasComplexMarkdown",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_358_onstreamtext",
+                  "label": "OnStreamText → UpdateInteractionMessage",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_38_onstreamtext",
+                  "label": "OnStreamText → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_39_onstreamtext",
+                  "label": "OnStreamText → Clamp",
+                  "processType": "cross_community",
+                  "step": 1
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "requested": {
+        "target": "updateToolProgress",
+        "file_path": "src/lib/bridge/adapters/feishu-adapter.ts",
+        "kind": "Method"
+      },
+      "result": {
+        "target": {
+          "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.updateToolProgress#2",
+          "name": "updateToolProgress",
+          "type": "Method",
+          "filePath": "src/lib/bridge/adapters/feishu-adapter.ts"
+        },
+        "direction": "upstream",
+        "impactedCount": 1,
+        "risk": "LOW",
+        "riskSharedAxes": "LOW",
+        "riskScale": {
+          "comparableAcrossKinds": true,
+          "unusedAxes": []
+        },
+        "epistemic": "exact",
+        "summary": {
+          "direct": 1,
+          "processes_affected": 1,
+          "modules_affected": 1
+        },
+        "byDepthCounts": {
+          "1": 1
+        },
+        "affected_processes": [
+          {
+            "name": "onToolEvent",
+            "type": "Function",
+            "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+            "affected_process_count": 5,
+            "total_hits": 5,
+            "earliest_broken_step": 1
+          }
+        ],
+        "affected_modules": [
+          {
+            "name": "Adapters",
+            "hits": 1,
+            "impact": "direct"
+          }
+        ],
+        "byDepth": {
+          "1": [
+            {
+              "depth": 1,
+              "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.onToolEvent#2",
+              "name": "onToolEvent",
+              "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+              "relationType": "CALLS",
+              "confidence": 0.85,
+              "processes": [
+                {
+                  "id": "proc_164_ontoolevent",
+                  "label": "OnToolEvent → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_166_ontoolevent",
+                  "label": "OnToolEvent → ParsePositiveInt",
+                  "processType": "intra_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_165_ontoolevent",
+                  "label": "OnToolEvent → Clamp",
+                  "processType": "intra_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_163_ontoolevent",
+                  "label": "OnToolEvent → AssertFeishuSuccess",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_318_ontoolevent",
+                  "label": "OnToolEvent → GetBridgeContext",
+                  "processType": "cross_community",
+                  "step": 1
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "requested": {
+        "target": "finalizeCard",
+        "file_path": "src/lib/bridge/adapters/feishu-adapter.ts",
+        "kind": "Method"
+      },
+      "result": {
+        "target": {
+          "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.finalizeCard#4",
+          "name": "finalizeCard",
+          "type": "Method",
+          "filePath": "src/lib/bridge/adapters/feishu-adapter.ts"
+        },
+        "direction": "upstream",
+        "impactedCount": 1,
+        "risk": "LOW",
+        "riskSharedAxes": "LOW",
+        "riskScale": {
+          "comparableAcrossKinds": true,
+          "unusedAxes": []
+        },
+        "epistemic": "exact",
+        "summary": {
+          "direct": 1,
+          "processes_affected": 1,
+          "modules_affected": 1
+        },
+        "byDepthCounts": {
+          "1": 1
+        },
+        "affected_processes": [
+          {
+            "name": "onStreamEnd",
+            "type": "Function",
+            "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+            "affected_process_count": 6,
+            "total_hits": 6,
+            "earliest_broken_step": 1
+          }
+        ],
+        "affected_modules": [
+          {
+            "name": "Internal",
+            "hits": 1,
+            "impact": "direct"
+          }
+        ],
+        "byDepth": {
+          "1": [
+            {
+              "depth": 1,
+              "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.onStreamEnd#4",
+              "name": "onStreamEnd",
+              "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+              "relationType": "CALLS",
+              "confidence": 0.85,
+              "processes": [
+                {
+                  "id": "proc_120_onstreamend",
+                  "label": "OnStreamEnd → FormatElapsed",
+                  "processType": "intra_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_274_onstreamend",
+                  "label": "OnStreamEnd → AssertFeishuSuccess",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_35_onstreamend",
+                  "label": "OnStreamEnd → NormalizeNumericCode",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_283_onstreamend",
+                  "label": "OnStreamEnd → PreprocessFeishuMarkdown",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_249_onstreamend",
+                  "label": "OnStreamEnd → BuildToolProgressMarkdown",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_36_onstreamend",
+                  "label": "OnStreamEnd → PickString",
+                  "processType": "cross_community",
+                  "step": 1
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "requested": {
+        "target": "onProgress",
+        "file_path": "src/lib/bridge/adapters/feishu-adapter.ts",
+        "kind": "Method"
+      },
+      "result": {
+        "target": {
+          "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.onProgress#2",
+          "name": "onProgress",
+          "type": "Method",
+          "filePath": "src/lib/bridge/adapters/feishu-adapter.ts"
+        },
+        "direction": "upstream",
+        "impactedCount": 0,
+        "risk": "UNKNOWN",
+        "riskSharedAxes": "UNKNOWN",
+        "riskScale": {
+          "comparableAcrossKinds": true,
+          "unusedAxes": []
+        },
+        "riskNote": "No callers resolved. Absence of edges is not evidence the symbol is unused: a caller reaching it through a reference class this index does not record — plain-object property access, a bare-identifier read of a module-scope const — produces no edge to find. Confirm with a text search before treating the change as safe.",
+        "epistemic": "exact",
+        "summary": {
+          "direct": 0,
+          "processes_affected": 0,
+          "modules_affected": 0
+        },
+        "byDepthCounts": {},
+        "affected_processes": [],
+        "affected_modules": [],
+        "byDepth": {}
+      }
+    },
+    {
+      "requested": {
+        "target": "onToolEvent",
+        "file_path": "src/lib/bridge/adapters/feishu-adapter.ts",
+        "kind": "Method"
+      },
+      "result": {
+        "target": {
+          "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.onToolEvent#2",
+          "name": "onToolEvent",
+          "type": "Method",
+          "filePath": "src/lib/bridge/adapters/feishu-adapter.ts"
+        },
+        "direction": "upstream",
+        "impactedCount": 0,
+        "risk": "UNKNOWN",
+        "riskSharedAxes": "UNKNOWN",
+        "riskScale": {
+          "comparableAcrossKinds": true,
+          "unusedAxes": []
+        },
+        "riskNote": "No callers resolved. Absence of edges is not evidence the symbol is unused: a caller reaching it through a reference class this index does not record — plain-object property access, a bare-identifier read of a module-scope const — produces no edge to find. Confirm with a text search before treating the change as safe.",
+        "epistemic": "exact",
+        "summary": {
+          "direct": 0,
+          "processes_affected": 0,
+          "modules_affected": 0
+        },
+        "byDepthCounts": {},
+        "affected_processes": [],
+        "affected_modules": [],
+        "byDepth": {}
+      }
+    },
+    {
+      "requested": {
+        "target": "onStreamEnd",
+        "file_path": "src/lib/bridge/adapters/feishu-adapter.ts",
+        "kind": "Method"
+      },
+      "result": {
+        "target": {
+          "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.onStreamEnd#4",
+          "name": "onStreamEnd",
+          "type": "Method",
+          "filePath": "src/lib/bridge/adapters/feishu-adapter.ts"
+        },
+        "direction": "upstream",
+        "impactedCount": 0,
+        "risk": "UNKNOWN",
+        "riskSharedAxes": "UNKNOWN",
+        "riskScale": {
+          "comparableAcrossKinds": true,
+          "unusedAxes": []
+        },
+        "riskNote": "No callers resolved. Absence of edges is not evidence the symbol is unused: a caller reaching it through a reference class this index does not record — plain-object property access, a bare-identifier read of a module-scope const — produces no edge to find. Confirm with a text search before treating the change as safe.",
+        "epistemic": "exact",
+        "summary": {
+          "direct": 0,
+          "processes_affected": 0,
+          "modules_affected": 0
+        },
+        "byDepthCounts": {},
+        "affected_processes": [],
+        "affected_modules": [],
+        "byDepth": {}
+      }
+    },
+    {
+      "requested": {
+        "target": "stop",
+        "file_path": "src/lib/bridge/adapters/feishu-adapter.ts",
+        "kind": "Method"
+      },
+      "result": {
+        "target": {
+          "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.stop#0",
+          "name": "stop",
+          "type": "Method",
+          "filePath": "src/lib/bridge/adapters/feishu-adapter.ts"
+        },
+        "direction": "upstream",
+        "impactedCount": 0,
+        "risk": "UNKNOWN",
+        "riskSharedAxes": "UNKNOWN",
+        "riskScale": {
+          "comparableAcrossKinds": true,
+          "unusedAxes": []
+        },
+        "riskNote": "No callers resolved. Absence of edges is not evidence the symbol is unused: a caller reaching it through a reference class this index does not record — plain-object property access, a bare-identifier read of a module-scope const — produces no edge to find. Confirm with a text search before treating the change as safe.",
+        "epistemic": "lower-bound",
+        "boundaries": [
+          "1 call site invoking `stop` was dropped at index time because the receiver's type could not be established (e.g. an unresolved constructor, factory or chained expression). Those callers are absent from this result — actual impact may be higher."
+        ],
+        "causes": {
+          "scopeExtractionFiles": 0,
+          "receiverTyping": 1,
+          "dispatchBoundary": 0,
+          "externalBoundary": 0,
+          "undecidedSatisfaction": 0,
+          "callableValueReferences": 0
+        },
+        "summary": {
+          "direct": 0,
+          "processes_affected": 0,
+          "modules_affected": 0
+        },
+        "byDepthCounts": {},
+        "affected_processes": [],
+        "affected_modules": [],
+        "byDepth": {}
+      }
+    },
+    {
+      "requested": {
+        "target": "cleanupCard",
+        "file_path": "src/lib/bridge/adapters/feishu-adapter.ts",
+        "kind": "Method",
+        "direction": "upstream",
+        "repo": "Claude-to-IM"
+      },
+      "result": {
+        "target": {
+          "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.cleanupCard#1",
+          "name": "cleanupCard",
+          "type": "Method",
+          "filePath": "src/lib/bridge/adapters/feishu-adapter.ts"
+        },
+        "direction": "upstream",
+        "impactedCount": 2,
+        "risk": "LOW",
+        "riskSharedAxes": "LOW",
+        "riskScale": {
+          "comparableAcrossKinds": true,
+          "unusedAxes": []
+        },
+        "epistemic": "exact",
+        "summary": {
+          "direct": 2,
+          "processes_affected": 1,
+          "modules_affected": 1
+        },
+        "byDepthCounts": {
+          "1": 2
+        },
+        "affected_processes": [
+          {
+            "name": "onMessageStart",
+            "type": "Function",
+            "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+            "affected_process_count": 3,
+            "total_hits": 3,
+            "earliest_broken_step": 1
+          }
+        ],
+        "affected_modules": [
+          {
+            "name": "Adapters",
+            "hits": 2,
+            "impact": "direct"
+          }
+        ],
+        "byDepth": {
+          "1": [
+            {
+              "depth": 1,
+              "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.onMessageEnd#1",
+              "name": "onMessageEnd",
+              "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+              "relationType": "CALLS",
+              "confidence": 0.85,
+              "processes": []
+            },
+            {
+              "depth": 1,
+              "id": "Method:src/lib/bridge/adapters/feishu-adapter.ts:FeishuAdapter.onMessageStart#1",
+              "name": "onMessageStart",
+              "filePath": "src/lib/bridge/adapters/feishu-adapter.ts",
+              "relationType": "CALLS",
+              "confidence": 0.85,
+              "processes": [
+                {
+                  "id": "proc_348_onmessagestart",
+                  "label": "OnMessageStart → UpdateInteractionMessage",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_217_onmessagestart",
+                  "label": "OnMessageStart → AssertFeishuSuccess",
+                  "processType": "cross_community",
+                  "step": 1
+                },
+                {
+                  "id": "proc_364_onmessagestart",
+                  "label": "OnMessageStart → Resolve",
+                  "processType": "cross_community",
+                  "step": 1
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "dynamicBoundaryEvidence": "公共onProgress/onToolEvent/onStreamEnd/stop的UNKNOWN静态结果以research/flow-boundaries.md第6节BaseChannelAdapter、bridge-manager当前源码和生命周期测试补证，未改写为低风险。"
+}

@@ -39,8 +39,6 @@ import {
   hasComplexMarkdown,
   buildCardContent,
   buildPostContent,
-  buildToolProgressMarkdown,
-  buildFinalCardJson,
   buildPermissionButtonCard,
   buildUserInputCard,
   buildModelSelectionCard,
@@ -49,6 +47,8 @@ import {
   splitFeishuMarkdown,
   feishuPayloadBytes,
 } from '../markdown/feishu.js';
+import { buildProgressCardJson, fitProgressView, progressActions, FEISHU_CARD_BYTES } from '../markdown/feishu-progress.js';
+import type { ProgressView } from '../markdown/feishu-progress.js';
 
 /** Max number of message_ids to keep for dedup. */
 const DEDUP_MAX = 1000;
@@ -59,15 +59,18 @@ const MAX_FILE_SIZE = 20 * 1024 * 1024;
 /** Feishu emoji type for typing indicator (same as Openclaw). */
 const TYPING_EMOJI = 'Typing';
 
-/** State for an active CardKit v1 streaming card. */
+/** 普通会话动态卡：固定组件树，只更新Markdown内容以保留历史阅读状态。 */
 interface FeishuCardState {
   cardId: string;
   messageId: string;
   sequence: number;
   startTime: number;
+  elapsedMs: number;
+  elapsedTimer: ReturnType<typeof setInterval> | null;
   toolCalls: ToolCallInfo[];
-  thinking: boolean;
   pendingText: string | null;
+  /** 当前正文只显示预览，独立于已接收的追加信息。 */
+  textOverflow: boolean;
   lastUpdateAt: number;
   throttleTimer: ReturnType<typeof setTimeout> | null;
   nextFlushAt: number | null;
@@ -75,22 +78,23 @@ interface FeishuCardState {
   operation: Promise<void> | null;
   closing: boolean;
   progress: string;
-  sentText: string;
-  sentProgress: string;
-  sentNotice: string;
+  sentView: ProgressView;
+  /** 运行batch未完整确认后，普通diff成功不能证明所有叶子已同步。 */
+  viewUncertain: boolean;
   needsFlush: boolean;
   cooldownUntil: number;
   rateLimitBackoffMs: number;
   lastRateLimitLogAt: number;
-  /** 追加消息提示，显示在流式卡片底部 */
+  /** 追加消息提示：运行时可见，终态归入执行过程。 */
   appendNotice: string | null;
 }
 
 /** Streaming card flush interval (ms). */
 const DEFAULT_CARD_THROTTLE_MS = 2_000;
-// 一轮最多两次写入，250ms 下限为收尾请求预留单卡 10 次/秒预算。
+// 每轮最多一次batch，250ms下限为终态请求预留单卡10次/秒预算。
 const MIN_CARD_THROTTLE_MS = 250;
 const MAX_CARD_THROTTLE_MS = 30_000;
+const CARD_ELAPSED_INTERVAL_MS = 5_000;
 
 /** Feishu request trigger frequency limit (rate-limit). */
 const FEISHU_TRIGGER_RATE_LIMIT_CODE = 99991400;
@@ -428,6 +432,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
     for (const [, state] of this.activeCards) {
       state.closing = true;
       if (state.throttleTimer) clearTimeout(state.throttleTimer);
+      if (state.elapsedTimer) clearInterval(state.elapsedTimer);
+      state.elapsedTimer = null;
     }
     this.activeCards.clear();
     this.cardCreatePromises.clear();
@@ -668,28 +674,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
     try {
       // Step 1: Create card via CardKit v1
-      const cardBody = {
-        schema: '2.0',
-        config: {
-          streaming_mode: true,
-          wide_screen_mode: true,
-          summary: { content: '思考中...' },
-          streaming_config: { print_frequency_ms: { default: 70 }, print_step: { default: 1 }, print_strategy: 'fast' },
-        },
-        body: {
-          elements: [{
-            tag: 'markdown',
-            content: ' ',
-            text_align: 'left',
-            text_size: 'normal',
-            element_id: 'streaming_content',
-          }, { tag: 'markdown', content: '💭 思考中…', element_id: 'tool_progress', text_size: 'notation' },
-          { tag: 'markdown', content: ' ', element_id: 'append_notice', text_size: 'notation' }],
-        },
-      };
+      const initialView = fitProgressView({ text: '', tools: [], progress: '', notice: '', elapsed: formatElapsed(0) })!;
 
       const createResp = await this.restClient.cardkit.v1.card.create({
-        data: { type: 'card_json', data: JSON.stringify(cardBody) },
+        data: { type: 'card_json', data: buildProgressCardJson(initialView) },
       });
       assertFeishuSuccess(createResp);
       if (this.cardGenerations.get(chatId) !== generation) return false;
@@ -727,13 +715,14 @@ export class FeishuAdapter extends BaseChannelAdapter {
       }
 
       // Store card state
-      this.activeCards.set(chatId, {
+      const state: FeishuCardState = {
         cardId,
         messageId,
         sequence: 0,
         startTime: Date.now(),
+        elapsedMs: 0,
+        elapsedTimer: null,
         toolCalls: [],
-        thinking: true,
         pendingText: null,
         lastUpdateAt: 0,
         throttleTimer: null,
@@ -742,15 +731,23 @@ export class FeishuAdapter extends BaseChannelAdapter {
         operation: null,
         closing: false,
         progress: '',
-        sentText: '',
-        sentProgress: '💭 思考中…',
-        sentNotice: '',
+        sentView: initialView,
+        viewUncertain: false,
         needsFlush: false,
         cooldownUntil: 0,
         rateLimitBackoffMs: DEFAULT_RATE_LIMIT_BACKOFF_MS,
         lastRateLimitLogAt: 0,
         appendNotice: null,
-      });
+        textOverflow: false,
+      };
+      this.activeCards.set(chatId, state);
+      state.elapsedTimer = setInterval(() => {
+        if (this.activeCards.get(chatId) !== state || state.closing) return;
+        // 心跳只表示真实经过时间，仍经过原串行、节流与退避队列。
+        state.elapsedMs = Math.max(0, Date.now() - state.startTime);
+        this.scheduleCardUpdate(chatId);
+      }, CARD_ELAPSED_INTERVAL_MS);
+      state.elapsedTimer.unref();
 
       console.log(`[feishu-adapter] Streaming card created: cardId=${cardId}, msgId=${messageId}`);
       return true;
@@ -816,13 +813,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const state = this.activeCards.get(chatId);
     if (!state || state.closing || !this.restClient) return;
 
-    // Clear thinking state once text arrives
-    if (state.thinking && text.trim()) {
-      state.thinking = false;
-    }
     const parts = splitFeishuMarkdown(text, 20_000);
     state.pendingText = parts[0] ?? '';
-    if (parts.length > 1) state.appendNotice = '正文较长，完整回答将在结束后分段发送。';
+    state.textOverflow = parts.length > 1;
     this.scheduleCardUpdate(chatId);
   }
 
@@ -836,40 +829,26 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (state.inFlight) { state.needsFlush = true; return; }
     if (state.cooldownUntil > Date.now()) { this.scheduleCardUpdate(chatId); return; }
 
-    const text = state.pendingText || '';
-    const progress = [state.progress, buildToolProgressMarkdown(state.toolCalls)].filter(Boolean).join('\n');
-    const notice = state.appendNotice || '';
-    if (text === state.sentText && progress === state.sentProgress && notice === state.sentNotice) return;
-    // 超长正文留给最终分块投递，不截断或谎报已完成。
-    if (Buffer.byteLength(JSON.stringify({ text, progress, notice }), 'utf8') > MAX_CARD_BYTES - 2_000) return;
+    const view = fitProgressView({ text: state.pendingText || '', tools: state.toolCalls, progress: state.progress, notice: state.appendNotice || '', elapsed: formatElapsed(state.elapsedMs), continuation: state.textOverflow ? '正文较长，完整回答将在结束后分段发送。' : undefined });
+    // 正文预览已有20KB预算；有界历史不能使实时状态停更。
+    if (!view) return;
+    const actions = progressActions(state.sentView, view);
+    if (!actions.length) return;
 
     state.inFlight = true;
     state.needsFlush = false;
     state.operation = (async () => {
       try {
-        if (text !== state.sentText && text) {
-          assertFeishuSuccess(await client.cardkit.v1.cardElement.content({
-            path: { card_id: state.cardId, element_id: 'streaming_content' },
-            data: { content: text, sequence: ++state.sequence },
-          }));
-          state.sentText = text;
-        }
-        // 收尾已开始时无需再写进度，最终卡会替换所有元素。
-        if (state.closing) return;
-        const actions: Array<Record<string, unknown>> = [];
-        if (progress !== state.sentProgress) actions.push({ action: 'partial_update_element', params: { element_id: 'tool_progress', partial_element: { content: progress || ' ' } } });
-        if (notice !== state.sentNotice) actions.push({ action: 'partial_update_element', params: { element_id: 'append_notice', partial_element: { content: notice || ' ' } } });
-        if (actions.length) {
-          assertFeishuSuccess(await client.cardkit.v1.card.batchUpdate({
-            path: { card_id: state.cardId },
-            data: { actions: JSON.stringify(actions), sequence: ++state.sequence },
-          }));
-          state.sentProgress = progress;
-          state.sentNotice = notice;
-        }
+        // 所有内容同批局部更新，缩减先于增长；不写配置或历史父面板。
+        assertFeishuSuccess(await client.cardkit.v1.card.batchUpdate({
+          path: { card_id: state.cardId },
+          data: { actions: JSON.stringify(actions), sequence: ++state.sequence },
+        }));
+        state.sentView = view;
         state.cooldownUntil = 0;
         state.rateLimitBackoffMs = DEFAULT_RATE_LIMIT_BACKOFF_MS;
       } catch (err) {
+        state.viewUncertain = true;
         const payload = findFeishuApiErrorPayload(err);
         if (payload?.code === FEISHU_TRIGGER_RATE_LIMIT_CODE) {
           const backoff = state.rateLimitBackoffMs;
@@ -902,7 +881,15 @@ export class FeishuAdapter extends BaseChannelAdapter {
   private updateToolProgress(chatId: string, tools: ToolCallInfo[]): void {
     const state = this.activeCards.get(chatId);
     if (!state || state.closing) return;
-    state.toolCalls = tools;
+    const previous = new Map(state.toolCalls.map(tool => [tool.id, tool]));
+    const snapshots = tools.map(tool => ({ id: tool.id, name: tool.name, status: tool.status }));
+    const changed = snapshots.filter(tool => {
+      const old = previous.get(tool.id);
+      return !old || old.name !== tool.name || old.status !== tool.status;
+    });
+    const current = new Map(snapshots.map(tool => [tool.id, tool]));
+    const changedIds = new Set(changed.map(tool => tool.id));
+    state.toolCalls = [...changed.reverse(), ...state.toolCalls.filter(tool => current.has(tool.id) && !changedIds.has(tool.id)).map(tool => current.get(tool.id)!)];
     this.scheduleCardUpdate(chatId);
   }
 
@@ -926,36 +913,66 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (state.throttleTimer) clearTimeout(state.throttleTimer);
     state.throttleTimer = null;
     state.nextFlushAt = null;
+    if (state.elapsedTimer) clearInterval(state.elapsedTimer);
+    state.elapsedTimer = null;
     if (state.operation) await state.operation;
     if (this.cardGenerations.get(chatId) !== generation || this.activeCards.get(chatId) !== state) return false;
 
-    const labels = { completed: '✅ 已完成', interrupted: '⚠️ 已中断', error: '❌ 出错' };
     const elapsed = formatElapsed(Date.now() - state.startTime);
-    const finalCardJson = buildFinalCardJson(responseText, [], { status: labels[status], elapsed, ...extras });
-    const summary = `${labels[status]} ${responseText.replace(/\s+/g, ' ').trim()}`.slice(0, 120);
+    const view = fitProgressView({ text: preprocessFeishuMarkdown(responseText), tools: state.toolCalls, progress: state.progress, notice: state.appendNotice || '', status, elapsed, ctx: extras?.ctx });
     let updated = false;
     try {
-      if (Buffer.byteLength(JSON.stringify({ card: { type: 'card_json', data: finalCardJson }, sequence: state.sequence + 1 }), 'utf8') > MAX_CARD_BYTES) throw new Error('最终卡片超过 30KB，转交完整回答投递');
-      assertFeishuSuccess(await client.cardkit.v1.card.update({
-        path: { card_id: state.cardId },
-        data: { card: { type: 'card_json', data: finalCardJson }, sequence: ++state.sequence },
-      }));
-      updated = true;
+      const terminalView = view ?? fitProgressView({ text: state.sentView.streaming_content, tools: state.toolCalls, progress: state.progress, notice: state.appendNotice || '', continuation: '完整回答将在下方分段发送。', status, elapsed, ctx: extras?.ctx });
+      if (!terminalView) throw new Error('最终卡片超过 30KB，转交完整回答投递');
+      const contentAction = (elementId: keyof ProgressView, content: string) => ({
+        action: 'partial_update_element' as const,
+        params: { element_id: elementId, partial_element: { content } },
+      });
+      let actions = progressActions(state.sentView, terminalView);
+      if (state.viewUncertain) {
+        const resetIds = (Object.keys(terminalView) as Array<keyof ProgressView>)
+          .filter(id => id !== 'streaming_content');
+        // 平台可能已应用失败batch的任意前缀。先缩减所有非正文叶子，保留旧正文。
+        assertFeishuSuccess(await client.cardkit.v1.card.batchUpdate({
+          path: { card_id: state.cardId },
+          data: { actions: JSON.stringify(resetIds.map(id => contentAction(id, ' '))), sequence: ++state.sequence },
+        }));
+        if (this.cardGenerations.get(chatId) !== generation || this.activeCards.get(chatId) !== state) return false;
+        // 空白基线已确认：正文先写，其余只从空白增长到已预算的完整目标。
+        // 不按不可信缓存排序，也不将两次请求的批量操作当作事务。
+        actions = [contentAction('streaming_content', terminalView.streaming_content),
+          ...resetIds.filter(id => terminalView[id] !== ' ').map(id => contentAction(id, terminalView[id]))];
+      }
+      if (actions.length) {
+        // 收尾同样只改原Markdown，不更新配置，以保留用户已展开的历史。
+        assertFeishuSuccess(await client.cardkit.v1.card.batchUpdate({
+          path: { card_id: state.cardId },
+          data: { actions: JSON.stringify(actions), sequence: ++state.sequence },
+        }));
+        state.sentView = terminalView;
+      }
+      // 预览更新不能确认完整正文已送达；仅完整视图的成功回执才返回true。
+      updated = view !== null;
+      if (!terminalView.history_content.trim()
+        && this.cardGenerations.get(chatId) === generation && this.activeCards.get(chatId) === state) {
+        // 无内容便不留下空的展开入口。辅助删除失败不能推翻已确认的正文。
+        try {
+          const request = {
+            path: { card_id: state.cardId },
+            data: { actions: JSON.stringify([{ action: 'delete_elements', params: { element_ids: ['progress_history'] } }]), sequence: ++state.sequence },
+          };
+          if (Buffer.byteLength(JSON.stringify(request), 'utf8') > FEISHU_CARD_BYTES) throw new Error('空执行过程清理请求超过 30KB');
+          assertFeishuSuccess(await client.cardkit.v1.card.batchUpdate(request));
+        } catch (err) {
+          console.warn(`[feishu-adapter] 空执行过程入口清理失败：${toErrorMessage(err)}`);
+        }
+      }
     } catch (err) {
       console.warn(`[feishu-adapter] 完成卡更新失败：${toErrorMessage(err)}`);
-      // 即使最终正文投递失败也结束流式状态；返回 false 让核心发送完整回答。
-      try {
-        if (this.cardGenerations.get(chatId) !== generation) return false;
-        assertFeishuSuccess(await client.cardkit.v1.card.settings({
-          path: { card_id: state.cardId },
-          data: { settings: JSON.stringify({ config: { streaming_mode: false, summary: { content: summary } } }), sequence: ++state.sequence },
-        }));
-      } catch (closeError) {
-        console.warn(`[feishu-adapter] 关闭流式卡失败：${toErrorMessage(closeError)}`);
-      }
     } finally {
       if (this.activeCards.get(chatId) === state) this.activeCards.delete(chatId);
     }
+    if (this.cardGenerations.get(chatId) !== generation) return false;
     const notifyEnabled = getBridgeContext().store.getSetting('bridge_feishu_stream_card_notify_on_complete') !== 'false';
     if (this.cardGenerations.get(chatId) === generation && updated && notifyEnabled && (status === 'completed' || (status === 'error' && responseText.trim()))) {
       try {
@@ -982,6 +999,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (state.throttleTimer) {
       clearTimeout(state.throttleTimer);
     }
+    state.throttleTimer = null;
+    if (state.elapsedTimer) clearInterval(state.elapsedTimer);
+    state.elapsedTimer = null;
     this.activeCards.delete(chatId);
   }
 
@@ -1032,6 +1052,16 @@ export class FeishuAdapter extends BaseChannelAdapter {
   }
 
   onToolEvent(chatId: string, tools: ToolCallInfo[]): void {
+    if (!this.activeCards.has(chatId)) {
+      // 建卡为异步；立即复制字段，避免manager原地改对象后重放另一状态。
+      const snapshots = tools.map(tool => ({ id: tool.id, name: tool.name, status: tool.status }));
+      const creating = this.createStreamingCard(chatId, this.lastIncomingMessageId.get(chatId));
+      const generation = this.cardGenerations.get(chatId);
+      void creating.then(ok => {
+        if (ok && this.cardGenerations.get(chatId) === generation) this.updateToolProgress(chatId, snapshots);
+      });
+      return;
+    }
     this.updateToolProgress(chatId, tools);
   }
 

@@ -139,31 +139,38 @@ describe('飞书流式卡片协议', () => {
     await internal.createStreamingCard('chat');
     calls.length = 0;
     const pending = deferred<Response>();
-    methods.content = async (request: Request) => { calls.push({ method: 'content', request }); return pending.promise; };
-    adapter.onStreamText('chat', '正文');
-    await tick();
-    const finishing = adapter.onStreamEnd('chat', 'completed', '正文完成');
-    adapter.onStreamText('chat', '不应发送');
-    await tick();
-    assert.equal(internal.activeCards.get('chat')?.closing, true);
-    assert.deepEqual(calls.map(c => c.method), ['content']);
-    pending.resolve({ code: 0 });
-    assert.equal(await finishing, true);
-    await tick();
-    assert.deepEqual(calls.map(c => c.method), ['content', 'update']);
-    assert.deepEqual(calls.map(c => c.request.data.sequence), [1, 2]);
+    methods.batchUpdate = async (request: Request) => { calls.push({ method: 'batchUpdate', request }); return pending.promise; };
+    let finishing: Promise<boolean> | undefined;
+    try {
+      adapter.onStreamText('chat', '正文');
+      await tick();
+      finishing = adapter.onStreamEnd('chat', 'completed', '正文完成');
+      adapter.onStreamText('chat', '不应发送');
+      await tick();
+      assert.equal(internal.activeCards.get('chat')?.closing, true);
+      assert.deepEqual(calls.map(c => c.method), ['batchUpdate']);
+      pending.resolve({ code: 0 });
+      assert.equal(await finishing, true);
+      await tick();
+      assert.deepEqual(calls.map(c => c.method), ['batchUpdate', 'batchUpdate', 'batchUpdate']);
+      assert.deepEqual(JSON.parse(String(calls[2].request.data.actions)), [{ action: 'delete_elements', params: { element_ids: ['progress_history'] } }]);
+      assert.deepEqual(calls.map(c => c.request.data.sequence), [1, 2, 3]);
+    } finally {
+      // 旧协议的预期RED也必须释放fixture，不能把悬挂promise算成功取证。
+      pending.resolve({ code: 0 });
+      if (finishing) await finishing;
+      adapter.onMessageEnd('chat');
+    }
   });
 
-  it('非零业务错误不能假成功，最终更新失败仍关闭流式并交还完整回答投递', async () => {
+  it('非零业务错误不能假成功，最终失败交还完整投递，普通卡无需关闭流式', async () => {
     const { adapter, internal, methods, calls } = fixture();
     await internal.createStreamingCard('chat');
-    methods.update = async (request: Request) => { calls.push({ method: 'update', request }); return { code: 200860 }; };
+    methods.batchUpdate = async (request: Request) => { calls.push({ method: 'batchUpdate', request }); return { code: 200860 }; };
     assert.equal(await adapter.onStreamEnd('chat', 'completed', '完整回答'), false);
-    const close = calls.find(c => c.method === 'settings');
-    assert.ok(close);
-    const config = JSON.parse(String(close.request.data.settings)).config;
-    assert.equal(config.streaming_mode, false);
-    assert.match(config.summary.content, /完整回答/);
+    const create = calls.find(c => c.method === 'create' && c.request.data.type === 'card_json')!;
+    assert.equal(JSON.parse(String(create.request.data.data)).config.streaming_mode, false);
+    assert.equal(calls.filter(c => c.method === 'settings').length, 0);
     assert.equal(calls.filter(c => c.method === 'content').length, 0);
   });
 
@@ -183,7 +190,11 @@ describe('飞书流式卡片协议', () => {
     adapter.onStreamText('chat', 'AB');
     await tick();
     assert.equal(calls.length, count);
-    assert.deepEqual(calls.filter(c => c.method === 'content').map(c => c.request.data.content), ['A', 'AB']);
+    const bodyWrites = calls.filter(c => c.method === 'batchUpdate').flatMap(c => JSON.parse(String(c.request.data.actions)))
+      .filter((action: { params: { element_id: string } }) => action.params.element_id === 'streaming_content')
+      .map((action: { params: { partial_element: { content: string } } }) => action.params.partial_element.content);
+    assert.deepEqual(bodyWrites, ['A', 'AB']);
+    assert.equal(calls.some(c => c.method === 'content' || c.method === 'settings'), false);
     assert.ok(calls.some(c => c.method === 'batchUpdate'));
     const sequences = calls.map(c => Number(c.request.data.sequence));
     assert.ok(sequences.every((seq, i) => i === 0 || seq > sequences[i - 1]));
@@ -193,7 +204,7 @@ describe('飞书流式卡片协议', () => {
   it('频控业务响应触发退避，收尾清理重试定时器', async () => {
     const { adapter, internal, methods } = fixture();
     await internal.createStreamingCard('chat');
-    methods.content = async () => ({ code: 99991400 });
+    methods.batchUpdate = async () => ({ code: 99991400 });
     adapter.onStreamText('chat', '最新正文');
     await tick();
     assert.ok((internal.activeCards.get('chat')?.cooldownUntil ?? 0) > Date.now());
@@ -261,13 +272,13 @@ describe('飞书流式卡片协议', () => {
     assert.deepEqual(message.userInputSupplementResponse.answers.constructor, ['要求']);
   });
 
-  it('超长回答结束流式但返回 false，交由核心投递全部内容', async () => {
+  it('超长回答返回 false交由核心完整投递，不写配置收尾', async () => {
     const { adapter, internal, calls } = fixture();
     await internal.createStreamingCard('chat');
     const text = '汉'.repeat(12_000);
     assert.equal(await adapter.onStreamEnd('chat', 'completed', text), false);
     assert.equal(calls.filter(call => call.method === 'update').length, 0);
-    assert.equal(calls.filter(call => call.method === 'settings').length, 1);
+    assert.equal(calls.filter(call => call.method === 'settings' || call.method === 'content').length, 0);
   });
 
   it('工作流更新与结束串行，失败请求也消耗序号', async () => {
