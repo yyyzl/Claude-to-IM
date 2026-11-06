@@ -1,5 +1,7 @@
 # 运行时版本与升级说明
 
+当前 Codex 聊天已改为默认跟随本机较新的可用正式版，显式 `bridge_codex_bin` 优先，项目依赖仅作无本机安装时的回退。启动日志和 `/status` 可查看实际来源与版本；更新本机 Codex 后需重启桥接。完整规则见 [Runner 文档](bridge-runner.zh-CN.md)。下文记录 2026-10-04 的升级基线，其中固定项目 CLI 的默认选择已被当前规则替代。
+
 2026-10-04 本轮更新固定了项目依赖：Claude Agent SDK `0.3.289`、Anthropic SDK `0.131.0`、Codex CLI `0.160.0`、飞书 Node SDK `1.74.0`；SDK 所需 MCP `1.32.0` 和 Zod `4.6.5` 一并锁定。Node.js 要求仍为 20 及以上。
 
 质量复核又升级了现有同主版本依赖 Discord SDK `14.27.0` 和 tsx `4.23.15`，同步消除了旧 undici / esbuild 传递依赖漏洞。最终 `npm audit` 报告为 0 项；没有使用强制修复或 overrides。

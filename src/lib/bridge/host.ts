@@ -311,7 +311,17 @@ export interface AccountQuota {
   buckets: AccountQuotaBucket[];
 }
 
+/** 启动时选定的运行时信息；不携带配置、认证或原始环境变量。 */
+export interface LLMRuntimeInfo {
+  readonly name: string;
+  readonly version: string;
+  readonly source: string;
+  readonly binary: string;
+}
+
 export interface LLMProvider {
+  /** 返回运行时快照，不发起网络请求或重新探测本机安装。 */
+  getRuntimeInfo?(): LLMRuntimeInfo | undefined;
   /** 当前登录账号的全局额度；不创建模型回合或修改聊天状态。 */
   getAccountQuota?(): Promise<AccountQuota>;
   /** Codex 模型目录；实现须返回完整、已验证的快照。 */

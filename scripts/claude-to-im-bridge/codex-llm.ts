@@ -1,16 +1,18 @@
-/** 将锁定版本 Codex app-server 的公开双向协议适配为桥接 SSE。 */
+/** 将选定的 Codex app-server 公开双向协议适配为桥接 SSE。 */
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
-import type { AccountQuota, ActiveTurnInput, TurnInputResult, GeneratedImage, LLMProvider, StreamChatParams, TokenUsage, UserInputQuestion, UserInputRequest } from '../../src/lib/bridge/host.js';
+import type { AccountQuota, ActiveTurnInput, TurnInputResult, GeneratedImage, LLMProvider, LLMRuntimeInfo, StreamChatParams, TokenUsage, UserInputQuestion, UserInputRequest } from '../../src/lib/bridge/host.js';
 import type { CodexModelPreferences, ModelCatalog } from '../../src/lib/bridge/types.js';
 import { findFastServiceTier } from '../../src/lib/bridge/internal/model-capabilities.js';
 import { createGeneratedImage, checkGeneratedImageBudget } from '../../src/lib/bridge/internal/generated-image.js';
 import type { InMemoryPermissionGateway } from './permissions.ts';
 import { JsonRpcAppServerClient, redactSensitive } from './codex-jsonrpc.ts';
 import type { JsonRpcMessage } from './codex-jsonrpc.ts';
-import { buildTurnSandboxPolicy, parseCodexModelPage, resolveCodexBinary, selectCodexEffort, selectCodexModel } from './codex-utils.ts';
+import { buildTurnSandboxPolicy, parseCodexModelPage, selectCodexEffort, selectCodexModel } from './codex-utils.ts';
 import type { CodexModelListItem } from './codex-utils.ts';
 import { parseCodexAccountQuota } from './codex-quota.ts';
+import { resolveCodexRuntime } from './codex-runtime.js';
+import type { CodexRuntime } from './codex-runtime.js';
 
 type CodexTransport = Pick<JsonRpcAppServerClient, 'request' | 'notify' | 'respond' | 'respondError' | 'onServerRequest' | 'onNotification' | 'onDisconnect' | 'drainBacklog' | 'stop' | 'isRunning'>;
 type SendEvent = (type: string, data: unknown) => void;
@@ -22,7 +24,8 @@ type TurnResult = { text: string; usage: TokenUsage | null; lastUsage: TokenUsag
 export interface CodexAppServerLLMProviderOptions {
   projectRoot: string;
   permissions: InMemoryPermissionGateway;
-  codexBin?: string;
+  /** 注入启动入口已解析的运行时，避免重复探测和版本漂移。 */
+  runtime?: CodexRuntime;
   cliConfig?: string;
   modelId?: string;
   modelHint?: string;
@@ -88,6 +91,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
   private readonly client: CodexTransport;
   private readonly permissions: InMemoryPermissionGateway;
   private readonly options: CodexAppServerLLMProviderOptions;
+  private readonly runtimeInfo?: LLMRuntimeInfo;
   private initialized = false;
   private initPromise: Promise<void> | null = null;
   private catalogPromise: Promise<void> | null = null;
@@ -104,10 +108,12 @@ export class CodexAppServerLLMProvider implements LLMProvider {
     this.permissions = options.permissions;
     const overrides = parseCodexCliConfigOverrides(options.cliConfig);
     this.configuredEffort = overrides.find(value => /^model_reasoning_effort\s*=/.test(value))?.split('=').slice(1).join('=').trim().replace(/^['"]|['"]$/g, '');
+    let runtime = options.runtime;
     if (options.client) {
       this.client = options.client;
     } else {
-      const binary = resolveCodexBinary(options.codexBin);
+      runtime ??= resolveCodexRuntime();
+      const binary = runtime.binary;
       const command = /\.[cm]?js$/i.test(binary) ? [process.execPath, binary] : [binary];
       command.push('app-server', '--listen', 'stdio://');
       for (const override of overrides) command.push('-c', override);
@@ -115,6 +121,7 @@ export class CodexAppServerLLMProvider implements LLMProvider {
       command.push('-c', 'features.omit_app_server_notification_media=false');
       this.client = new JsonRpcAppServerClient({ command, cwd: options.projectRoot, debug: options.debug });
     }
+    this.runtimeInfo = runtime ? { name: 'Codex', version: runtime.version, source: runtime.source, binary: runtime.binary } : undefined;
     this.client.onDisconnect(() => {
       this.resetConnectionState();
       for (const pending of this.serverRequests.values()) {
@@ -133,6 +140,10 @@ export class CodexAppServerLLMProvider implements LLMProvider {
         this.permissions.resolvePendingPermission(pending.permissionId, { behavior: 'deny', reason: pending.active.abort.signal.aborted || pending.active.epoch !== this.connectionEpoch ? 'cancelled' : 'request_closed', message: '请求已由服务端结束' });
       }
     });
+  }
+
+  getRuntimeInfo(): LLMRuntimeInfo | undefined {
+    return this.runtimeInfo ? { ...this.runtimeInfo } : undefined;
   }
 
   stop(): void {

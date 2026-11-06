@@ -7,7 +7,7 @@
 
 ## 1) 你需要准备什么
 
-1. 本机已安装 `codex`（`codex --version` 能跑通）
+1. 推荐安装本机 Codex CLI 或桌面端；runner 默认跟随本机可用的新版本，没有可用安装时回退项目依赖。
 2. 本机已完成 Codex CLI 登录/鉴权（`codex login`），鉴权信息在 `~/.codex/*`
 3. 已在本仓库执行过 `npm install` 且存在 `dist/`（桥接会 import `dist/lib/bridge/*`；脚本会在发现 dist 过期时自动执行 `npm run build`）
 
@@ -24,6 +24,9 @@ bridge_feishu_domain=feishu   # 或 lark
 
 # 使用 Codex 作为 LLM 后端
 bridge_llm_backend=codex
+
+# 留空自动选择本机较新的 Codex；也可填写可执行文件或官方 codex.js 的绝对路径。
+# bridge_codex_bin=/absolute/path/to/codex
 
 # 你真正要操作的项目根目录（关键）
 bridge_default_work_dir=G:\\RustProject\\push-2-talk
@@ -218,7 +221,18 @@ codex debug app-server send-message-v2 "ping"
 
 根因：Windows 上 Node 不能直接 `spawn` `codex.cmd`（需要 `cmd.exe /c` 包一层）。
 
-当前 runner 默认使用桥接工程固定的 `@openai/codex@0.160.0`，通过 Node 执行包内入口，避免 PATH 上全局版本漂移；`bridge_codex_bin` 显式配置优先。目标项目 `bridge_default_work_dir` 可以是另一仓库，无需在目标仓库安装 Codex。升级后执行 `npm install` 与 `npm run build`，运行中的旧桥接需要在方便时切换到新构建。
+当前 runner 默认跟随本机安装的 Codex，选择规则如下：
+
+1. `bridge_codex_bin` 显式配置优先；指定路径不可用时直接报错。
+2. 自动发现用户 PATH 中的 Codex（Windows 也检查用户 npm 安装目录），跳过项目 `node_modules/.bin` 和本项目的 Codex 入口，避免 npm/tsx 注入的 PATH 抢占本机安装。
+3. 同时检查 `${CODEX_HOME:-~/.codex}/packages/app-server-daemon/current/bin/` 下的桌面端当前运行时；只读取已有的 `current` 入口，不扫描历史版本或自动下载。
+4. 用本地 `--version` 探测结果，在符合最低协议基线 `0.160.0` 的本机正式版中选择版本较新者；同版本优先用户 CLI。没有可用的本机候选时，才回退到桥接工程的 `@openai/codex` 依赖。
+
+Windows 官方 npm 包装脚本会归一到 `codex.js`，通过 Node 和独立参数启动；自定义 `.cmd` / `.bat` 包装脚本需改为配置其实际 `.exe` 或 JS 入口。自动发现最多探测 8 个去重的 PATH 候选，并另保留桌面端和项目依赖的探测机会；每次探测最多 2 秒。预发布版本不参与选择。
+
+启动日志与 `/status` 显示实际使用的运行时版本、来源和路径，包括项目依赖回退。版本检查用于选择可运行入口，不代表已验证所有新版协议或账号模型权限；握手及模型目录仍按真实响应校验。
+
+`bridge_default_work_dir` 只决定任务工作目录，不参与运行时来源选择，无需在目标仓库安装 Codex。本机 CLI 或桌面端更新后，**重启桥接**即可重新选择；运行中的会话不会自动切换运行时。更新桥接代码后执行 `npm run typecheck` 与 `npm run build`，再重启桥接。需要固定运行时的部署可通过 `bridge_codex_bin` 指向指定版本的绝对路径。
 
 ### 4.4 新版模型、卡片与交互
 

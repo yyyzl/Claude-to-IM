@@ -1,8 +1,4 @@
-/** Codex 本地运行时解析与模型目录选择。 */
-import fs from 'node:fs';
-import path from 'node:path';
-import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
+/** Codex 模型目录校验与选择。 */
 import type { ModelCatalogEntry } from '../../src/lib/bridge/types.js';
 
 export interface CodexModelListItem extends ModelCatalogEntry {
@@ -68,22 +64,6 @@ export function parseCodexModelPage(value: unknown): { models: CodexModelListIte
     return { id, model, displayName, isDefault: item.isDefault, defaultReasoningEffort, supportedReasoningEfforts, serviceTiers, defaultServiceTier, hidden: item.hidden === true, inputModalities };
   });
   return { models, nextCursor: page.nextCursor == null ? null : catalogString(page.nextCursor, 'nextCursor') };
-}
-
-/** 显式可执行文件优先，否则只使用项目锁定版本，避免 PATH 版本漂移。 */
-export function resolveCodexBinary(userSpecified?: string, projectRoot = fileURLToPath(new URL('../../', import.meta.url))): string {
-  if (userSpecified?.trim()) return userSpecified.trim();
-  const requireFromProject = createRequire(path.join(projectRoot, 'package.json'));
-  try {
-    const manifestPath = requireFromProject.resolve('@openai/codex/package.json');
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as { bin?: { codex?: string } };
-    if (typeof manifest.bin?.codex !== 'string') throw new Error('缺少 bin.codex');
-    const entry = path.resolve(path.dirname(manifestPath), manifest.bin.codex);
-    if (!fs.existsSync(entry)) throw new Error('入口不存在');
-    return entry;
-  } catch {
-    throw new Error('未找到项目依赖 @openai/codex，请运行 npm install，或显式配置 bridge_codex_bin。');
-  }
 }
 
 export function buildTurnSandboxPolicy(sandboxMode: string): Record<string, unknown> {

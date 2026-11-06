@@ -4,6 +4,8 @@ import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { read, setup } from './codex-test-transport.js';
 import type { ActiveTurnInput } from '../../lib/bridge/host.js';
+import { CodexAppServerLLMProvider } from '../../../scripts/claude-to-im-bridge/codex-llm.ts';
+import { InMemoryPermissionGateway } from '../../../scripts/claude-to-im-bridge/permissions.ts';
 
 const blocked = () => { throw new Error('禁止真实子进程和网络'); };
 for (const key of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork'] as const) mock.method(childProcess, key, blocked);
@@ -17,6 +19,28 @@ function liveSetup() {
   return { ...f, client };
 }
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
+
+test('注入运行时不重新探测，运行信息与输入及返回快照相互隔离', () => {
+  const runtime = { binary: 'G:/codex/codex.exe', version: '0.167.0', source: 'desktop' as const };
+  const provider = new CodexAppServerLLMProvider({ projectRoot: process.cwd(), runtime, permissions: new InMemoryPermissionGateway() });
+  const expected = { name: 'Codex', ...runtime };
+  runtime.binary = 'G:/changed/codex.exe';
+  runtime.version = '0.1.0';
+  const first = provider.getRuntimeInfo();
+  assert.deepEqual(first, expected);
+  assert.ok(first);
+  Object.assign(first, { binary: 'G:/another/codex.exe', source: 'project' });
+  assert.deepEqual(provider.getRuntimeInfo(), expected);
+  provider.stop();
+});
+
+test('纯内存 client 不探测本机运行时，未注入快照时不伪造运行信息', () => {
+  const { provider, client } = setup();
+  assert.equal(provider.getRuntimeInfo(), undefined);
+  assert.deepEqual(client.calls, []);
+  assert.equal(client.isRunning(), false);
+  provider.stop();
+});
 
 test('初始化取消唤醒未提交输入，旧 closure 不进入后来的同 ID 回合', async () => {
   const { client, provider } = liveSetup();

@@ -36,7 +36,7 @@ import { isClaudeToImDistStale } from "../src/lib/bridge/internal/build-freshnes
 import { InMemoryPermissionGateway } from "./claude-to-im-bridge/permissions.ts";
 import { ClaudeCodeLLMProvider } from "./claude-to-im-bridge/llm.ts";
 import { CodexAppServerLLMProvider } from "./claude-to-im-bridge/codex-llm.ts";
-import { resolveCodexBinary } from "./claude-to-im-bridge/codex-utils.ts";
+import { resolveCodexRuntime } from "./claude-to-im-bridge/codex-runtime.js";
 import { JsonFileBridgeStore } from "./claude-to-im-bridge/store.ts";
 import { drainAndFlush } from "./claude-to-im-bridge/shutdown.ts";
 
@@ -370,11 +370,14 @@ async function main() {
 
   let llmFinal: LLMProvider;
   if (backend === "codex") {
+    // 运行目录可以是任意业务项目；项目兜底依赖来自桥接安装目录。
+    const runtime = resolveCodexRuntime(store.getSetting("bridge_codex_bin") || undefined, claudeToImRoot);
+    console.log(`[bridge-runner] Codex ${runtime.version}，来源：${runtime.source}，路径：${runtime.binary}`);
+    if (runtime.source === "project") console.log("[bridge-runner] 未找到可用本机 Codex，回退到项目依赖。");
     llmFinal = new CodexAppServerLLMProvider({
         projectRoot: codexProjectRoot,
         permissions,
-        // 运行目录可以是任意业务项目；CLI 依赖始终来自桥接安装目录。
-        codexBin: resolveCodexBinary(store.getSetting("bridge_codex_bin") || undefined, claudeToImRoot),
+        runtime,
         cliConfig: store.getSetting("bridge_codex_cli_config") || undefined,
         modelId: store.getSetting("bridge_codex_model_id") || undefined,
         modelHint: store.getSetting("bridge_codex_model_hint") || undefined,

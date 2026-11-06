@@ -2009,6 +2009,7 @@ async function handleCommand(
       const session = store.getSession(binding.codepilotSessionId);
       const effectiveModel = (session?.model || binding.model || 'default').trim() || 'default';
       const backend = (store.getSetting('bridge_llm_backend') || '').trim().toLowerCase();
+      const runtime = getBridgeContext().llm.getRuntimeInfo?.();
 
       const st = getState();
       const activeChatTask = getActiveTaskForChat(msg.address);
@@ -2057,6 +2058,11 @@ async function handleCommand(
         ...(backend !== 'codex' ? [`Model: <code>${escapeHtml(effectiveModel)}</code>`] : []),
         ...(backend === 'codex' ? [escapeHtml(describeModelPreferences(binding))] : []),
         `Backend: <code>${escapeHtml(backend || 'default')}</code>`,
+        ...(runtime ? [
+          `Runtime: <code>${escapeHtml(runtime.name)} ${escapeHtml(runtime.version)}</code>`,
+          `Runtime source: <code>${escapeHtml(runtime.source)}</code>${runtime.source === 'project' ? '（回退项目依赖）' : ''}`,
+          `Runtime path: <code>${escapeHtml(runtime.binary)}</code>`,
+        ] : []),
         `Task: ${activeChatTask?.abort.signal.aborted ? '<b>cancelling</b>' : isRunningTask ? '<b>running</b>' : '<b>idle</b>'}${runningForMs != null ? ` (<code>${formatTimeoutMs(runningForMs)}</code>)` : ''}`,
         `Session lock: ${hasSessionLock ? '<b>busy</b>' : '<b>free</b>'}`,
         `Turn timeout: <code>${formatTimeoutMs(effectiveTurnTimeoutMs)}</code>`,

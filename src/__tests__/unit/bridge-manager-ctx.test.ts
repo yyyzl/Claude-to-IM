@@ -200,6 +200,38 @@ describe('bridge-manager ctx footer', () => {
     assert.deepEqual(store.getChannelBinding('feishu', 'chat-model')?.codexModelPreferences, { model: 'model-next', reasoningEffort: 'ultra', speed: 'normal' });
     await _testOnly.handleMessage(adapter, { ...base, text: '/status' });
     assert.match(sent.at(-1)?.text ?? '', /ultra/);
+    assert.doesNotMatch(sent.at(-1)?.text ?? '', /Runtime:/);
+  });
+
+  it('/status 读取运行时快照并转义全部显示字段，不请求模型或目录', async () => {
+    let reads = 0;
+    const store = createStore();
+    initBridgeContext({ store, llm: {
+      getRuntimeInfo: () => { reads++; return { name: 'Codex <local>', version: '0.167.0&test', source: 'desktop<&>', binary: 'G:/Codex <tools>&/codex.exe' }; },
+      getModelCatalog: async () => { throw new Error('状态查询不得读取模型目录'); },
+      streamChat: () => { throw new Error('状态查询不得调用模型'); },
+    }, permissions: { resolvePendingPermission: () => false }, lifecycle: {} });
+    const { adapter, sent } = createAdapter();
+    const { _testOnly } = await import('../../lib/bridge/bridge-manager');
+    await _testOnly.handleMessage(adapter, { messageId: 'status', address: { channelType: 'feishu', chatId: 'chat-runtime', userId: 'user' }, text: '/status', timestamp: Date.now() });
+    const text = sent.at(-1)?.text ?? '';
+    assert.equal(reads, 1);
+    assert.match(text, /Runtime: <code>Codex &lt;local&gt; 0\.167\.0&amp;test<\/code>/);
+    assert.match(text, /Runtime source: <code>desktop&lt;&amp;&gt;<\/code>/);
+    assert.match(text, /Runtime path: <code>G:\/Codex &lt;tools&gt;&amp;\/codex\.exe<\/code>/);
+    assert.match(text, /Backend: <code>codex<\/code>/);
+    assert.match(text, /Task: <b>idle<\/b>/);
+  });
+
+  it('/status 明确显示项目运行时属于回退依赖', async () => {
+    initBridgeContext({ store: createStore(), llm: {
+      getRuntimeInfo: () => ({ name: 'Codex', version: '0.160.0', source: 'project', binary: 'G:/bridge/node_modules/codex.exe' }),
+      streamChat: () => { throw new Error('状态查询不得调用模型'); },
+    }, permissions: { resolvePendingPermission: () => false }, lifecycle: {} });
+    const { adapter, sent } = createAdapter();
+    const { _testOnly } = await import('../../lib/bridge/bridge-manager');
+    await _testOnly.handleMessage(adapter, { messageId: 'status', address: { channelType: 'feishu', chatId: 'chat-runtime', userId: 'user' }, text: '/status', timestamp: Date.now() });
+    assert.match(sent.at(-1)?.text ?? '', /Runtime source: <code>project<\/code>（回退项目依赖）/);
   });
 
   it('模型提问可通过/answer解锁，progress不会被发送成最终正文', async () => {

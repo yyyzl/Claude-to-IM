@@ -114,7 +114,7 @@ test('超时明确标记 timeout，中断等待期间晚到图片也不再产出
 });
 
 test('stdio 子进程最后明确要求保留通知媒体，仅构造命令不启动运行时', () => {
-  const provider = new CodexAppServerLLMProvider({ projectRoot: process.cwd(), codexBin: process.execPath, permissions: new InMemoryPermissionGateway(), cliConfig: 'features.omit_app_server_notification_media=true' });
+  const provider = new CodexAppServerLLMProvider({ projectRoot: process.cwd(), runtime: { binary: process.execPath, version: '0.160.0', source: 'explicit' }, permissions: new InMemoryPermissionGateway(), cliConfig: 'features.omit_app_server_notification_media=true' });
   // 构造器无进程副作用；检查实际 transport 的启动参数，禁止调用其 request/start。
   const transport = Reflect.get(provider, 'client') as { command: string[]; isRunning(): boolean };
   assert.equal(transport.isRunning(), false);

@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict';
-import path from 'node:path';
-import os from 'node:os';
 import test from 'node:test';
-import { buildTurnSandboxPolicy, resolveCodexBinary, selectCodexEffort, selectCodexModel } from '../scripts/claude-to-im-bridge/codex-utils.ts';
+import { buildTurnSandboxPolicy, selectCodexEffort, selectCodexModel } from '../scripts/claude-to-im-bridge/codex-utils.ts';
 import type { CodexModelListItem } from '../scripts/claude-to-im-bridge/codex-utils.ts';
 
 function catalogModel(overrides: Partial<CodexModelListItem> = {}): CodexModelListItem {
@@ -29,18 +27,4 @@ test('effort来自模型能力列表而非固定枚举或型号后缀', () => {
   assert.equal(selectCodexEffort(model), 'high');
   assert.equal(selectCodexEffort(model, 'model ultra'), 'ultra');
   assert.throws(() => selectCodexEffort(model, 'model xhigh'), /不支持/);
-});
-test('显式运行时优先，默认解析项目固定的JS入口而不是PATH全局安装', () => {
-  assert.equal(resolveCodexBinary('C:\\custom\\codex.cmd'), 'C:\\custom\\codex.cmd');
-  const binary = resolveCodexBinary(undefined, process.cwd());
-  assert.equal(path.isAbsolute(binary), true);
-  assert.match(binary.replaceAll('\\', '/'), /node_modules\/@openai\/codex\/bin\/codex\.js$/);
-});
-test('目标cwd没有node_modules仍使用桥接安装目录的固定运行时', () => {
-  const oldCwd = process.cwd();
-  const expected = resolveCodexBinary();
-  try {
-    process.chdir(os.tmpdir());
-    assert.equal(resolveCodexBinary(), expected);
-  } finally { process.chdir(oldCwd); }
 });
